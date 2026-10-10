@@ -1,0 +1,25 @@
+[project]
+name = "chipformer"
+version = "0.1.0"
+description = "A hand-constructed transformer that executes CHIP-8 programs"
+requires-python = ">=3.11"
+dependencies = [
+    "numpy>=1.26",
+    "safetensors>=0.8.0",
+]
+
+[project.optional-dependencies]
+play = ["pygame>=2.5"]
+
+[dependency-groups]
+dev = ["pytest>=8", "ruff>=0.6"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.ruff]
+line-length = 100
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
