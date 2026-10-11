@@ -128,6 +128,48 @@ def load(model_dir: Path) -> tuple[dict[str, np.ndarray], dict]:
         (model_dir / "config.json").read_text())
 
 
+SPARSE_MAGIC = b"CHFM"
+
+
+def save_sparse(w: dict[str, np.ndarray], config: dict, path: Path) -> None:
+    """The same weights as a compact sparse file (for the browser).
+
+    Layout: b"CHFM", u32 version (1), u32 header length, UTF-8 JSON header
+    {"config": ..., "tensors": [{"name", "shape", "nnz"}]}, then for each tensor
+    in header order: nnz u32 rows, nnz u32 cols, nnz f64 values (little-endian,
+    row-major order). Exactly the nonzero entries of the dense tensors.
+    """
+    tensors, blobs = [], []
+    for name, a in w.items():
+        a2 = a.reshape(a.shape[0], -1)
+        rows, cols = np.nonzero(a2)
+        tensors.append({"name": name, "shape": list(a2.shape), "nnz": len(rows)})
+        blobs += [rows.astype("<u4").tobytes(), cols.astype("<u4").tobytes(),
+                  a2[rows, cols].astype("<f8").tobytes()]
+    header = json.dumps({"config": config, "tensors": tensors}).encode()
+    with open(path, "wb") as f:
+        f.write(SPARSE_MAGIC + np.array([1, len(header)], dtype="<u4").tobytes() + header)
+        f.writelines(blobs)
+
+
+def load_sparse(path: Path) -> tuple[dict[str, np.ndarray], dict]:
+    data = path.read_bytes()
+    assert data[:4] == SPARSE_MAGIC, "not a chipformer sparse model"
+    _, hlen = np.frombuffer(data[4:12], dtype="<u4")
+    header = json.loads(data[12:12 + hlen])
+    off, w = 12 + int(hlen), {}
+    for t in header["tensors"]:
+        n = t["nnz"]
+        rows = np.frombuffer(data, "<u4", n, off)
+        cols = np.frombuffer(data, "<u4", n, off + 4 * n)
+        vals = np.frombuffer(data, "<f8", n, off + 8 * n)
+        off += 16 * n
+        a = np.zeros(t["shape"])
+        a[rows, cols] = vals
+        w[t["name"]] = a
+    return w, header["config"]
+
+
 def main() -> None:
     import argparse
 
@@ -138,6 +180,7 @@ def main() -> None:
     args = ap.parse_args()
     w, config = compile_graph(build())
     save(w, config, args.out)
+    save_sparse(w, config, args.out / "model.chipformer")
     print(f"{args.out}: {config['n_layers']} layers, d_model {config['d_model']}, "
           f"{sum(lay['heads'] for lay in config['layers'])} heads, "
           f"{sum(lay['ffn_units'] for lay in config['layers'])} FFN units, "

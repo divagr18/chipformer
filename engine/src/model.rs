@@ -1,7 +1,8 @@
 //! A generic decoder-only transformer with hardmax 2D attention heads.
 //!
-//! Loads model.safetensors + config.json written by chipformer/compile.py and
-//! runs it one position at a time. Nothing here knows about CHIP-8: the
+//! Loads the weights written by chipformer/compile.py (the compact sparse
+//! model.chipformer, or model.safetensors + config.json) and runs them one
+//! position at a time. Nothing here knows about CHIP-8: the
 //! weights are plain matrices, stored sparsely because hand-built weights are
 //! >99% zeros. Attention uses an exact line-max cache per head, which is the
 //! hardmax (BETA -> infinity) limit of softmax attention; with integer scores
@@ -9,9 +10,15 @@
 
 use crate::fast::{FastFfn, LineArgmax, constant_dims};
 use crate::lichao::LiChao;
-use safetensors::{Dtype, SafeTensors};
 use serde_json::Value;
+use std::collections::HashMap;
 use std::path::Path;
+
+/// A sparse tensor as (row, col, value) triplets.
+pub struct Triplets {
+    pub shape: (usize, usize),
+    pub entries: Vec<(u32, u32, f64)>,
+}
 
 /// Rows of a sparse matrix (CSR).
 pub struct Csr {
@@ -36,24 +43,24 @@ impl Csr {
         Csr { ptr, idx, val }
     }
 
-    fn from_dense(data: &[f64], rows: usize, cols: usize) -> Self {
-        let (mut ptr, mut idx, mut val) = (vec![0u32], vec![], vec![]);
-        for r in 0..rows {
-            for c in 0..cols {
-                let v = data[r * cols + c];
-                if v != 0.0 {
-                    idx.push(c as u32);
-                    val.push(v);
-                }
-            }
-            ptr.push(idx.len() as u32);
+    /// Rows of the tensor, or of its transpose.
+    fn from_triplets(t: &Triplets, transpose: bool) -> Self {
+        let mut e: Vec<(u32, u32, f64)> = if transpose {
+            t.entries.iter().map(|&(r, c, v)| (c, r, v)).collect()
+        } else {
+            t.entries.clone()
+        };
+        e.retain(|x| x.2 != 0.0);
+        e.sort_by_key(|&(r, c, _)| (r, c));
+        let rows = if transpose { t.shape.1 } else { t.shape.0 };
+        let mut ptr = vec![0u32; rows + 1];
+        for &(r, _, _) in &e {
+            ptr[r as usize + 1] += 1;
         }
-        Csr { ptr, idx, val }
-    }
-
-    fn transpose_of_dense(data: &[f64], rows: usize, cols: usize) -> Self {
-        let t: Vec<f64> = (0..cols * rows).map(|i| data[(i % rows) * cols + i / rows]).collect();
-        Csr::from_dense(&t, cols, rows)
+        for r in 0..rows {
+            ptr[r + 1] += ptr[r];
+        }
+        Csr { ptr, idx: e.iter().map(|x| x.1).collect(), val: e.iter().map(|x| x.2).collect() }
     }
 
     pub fn rows(&self) -> usize {
@@ -165,31 +172,96 @@ fn assign_caches(layers: &mut [Layer], share: bool) -> (Vec<(i64, i64)>, Vec<usi
     (trees, stores)
 }
 
-fn tensor(st: &SafeTensors, name: &str) -> (Vec<f64>, Vec<usize>) {
-    let t = st.tensor(name).unwrap_or_else(|e| panic!("missing tensor {name}: {e}"));
-    assert_eq!(t.dtype(), Dtype::F64, "{name} must be float64");
-    let data = t.data().chunks_exact(8).map(|b| f64::from_le_bytes(b.try_into().unwrap())).collect();
-    (data, t.shape().to_vec())
+/// Parse a model.chipformer file (see chipformer/compile.py:save_sparse).
+fn read_sparse(bytes: &[u8]) -> Result<(Value, HashMap<String, Triplets>), String> {
+    let u32_at = |o: usize| -> Result<u32, String> {
+        bytes.get(o..o + 4).map(|b| u32::from_le_bytes(b.try_into().unwrap())).ok_or("truncated".into())
+    };
+    if bytes.get(..4) != Some(b"CHFM".as_slice()) || u32_at(4)? != 1 {
+        return Err("not a chipformer v1 sparse model".into());
+    }
+    let hlen = u32_at(8)? as usize;
+    let header: Value = serde_json::from_slice(bytes.get(12..12 + hlen).ok_or("truncated header")?)
+        .map_err(|e| format!("bad header: {e}"))?;
+    let mut off = 12 + hlen;
+    let mut tensors = HashMap::new();
+    for t in header["tensors"].as_array().ok_or("no tensor index")? {
+        let n = t["nnz"].as_u64().ok_or("bad nnz")? as usize;
+        let shape = (t["shape"][0].as_u64().ok_or("bad shape")? as usize,
+                     t["shape"][1].as_u64().ok_or("bad shape")? as usize);
+        let body = bytes.get(off..off + 16 * n).ok_or("truncated tensor data")?;
+        let word = |k: usize| u32::from_le_bytes(body[4 * k..4 * k + 4].try_into().unwrap());
+        let entries = (0..n)
+            .map(|k| {
+                let v = f64::from_le_bytes(body[8 * n + 8 * k..8 * n + 8 * k + 8].try_into().unwrap());
+                (word(k), word(n + k), v)
+            })
+            .collect();
+        off += 16 * n;
+        tensors.insert(t["name"].as_str().ok_or("bad name")?.to_string(), Triplets { shape, entries });
+    }
+    Ok((header["config"].clone(), tensors))
 }
 
-fn csr(st: &SafeTensors, name: &str) -> Csr {
-    let (data, shape) = tensor(st, name);
-    Csr::from_dense(&data, shape[0], shape[1])
-}
-
-fn csr_t(st: &SafeTensors, name: &str) -> Csr {
-    let (data, shape) = tensor(st, name);
-    Csr::transpose_of_dense(&data, shape[0], shape[1])
+#[cfg(feature = "safetensors")]
+fn read_safetensors(dir: &Path) -> Result<(Value, HashMap<String, Triplets>), String> {
+    use safetensors::{Dtype, SafeTensors};
+    let config: Value = serde_json::from_str(
+        &std::fs::read_to_string(dir.join("config.json")).map_err(|e| format!("config.json: {e}"))?,
+    )
+    .map_err(|e| format!("config.json: {e}"))?;
+    let bytes = std::fs::read(dir.join("model.safetensors")).map_err(|e| format!("model.safetensors: {e}"))?;
+    let st = SafeTensors::deserialize(&bytes).map_err(|e| format!("safetensors: {e}"))?;
+    let mut tensors = HashMap::new();
+    for (name, t) in st.tensors() {
+        if t.dtype() != Dtype::F64 {
+            return Err(format!("{name} must be float64"));
+        }
+        let shape = (t.shape()[0], t.shape()[1..].iter().product());
+        let entries = t
+            .data()
+            .chunks_exact(8)
+            .enumerate()
+            .filter_map(|(i, b)| {
+                let v = f64::from_le_bytes(b.try_into().unwrap());
+                (v != 0.0).then_some(((i / shape.1) as u32, (i % shape.1) as u32, v))
+            })
+            .collect();
+        tensors.insert(name, Triplets { shape, entries });
+    }
+    Ok((config, tensors))
 }
 
 impl Model {
+    /// Load model.chipformer from `dir` if present, otherwise model.safetensors + config.json.
     pub fn load(dir: &Path) -> Model {
-        let config: Value = serde_json::from_str(
-            &std::fs::read_to_string(dir.join("config.json")).expect("read config.json"),
-        )
-        .expect("parse config.json");
-        let bytes = std::fs::read(dir.join("model.safetensors")).expect("read model.safetensors");
-        let st = SafeTensors::deserialize(&bytes).expect("parse safetensors");
+        let sparse = dir.join("model.chipformer");
+        let loaded = if sparse.exists() {
+            std::fs::read(&sparse).map_err(|e| e.to_string()).and_then(|b| read_sparse(&b))
+        } else {
+            #[cfg(feature = "safetensors")]
+            {
+                read_safetensors(dir)
+            }
+            #[cfg(not(feature = "safetensors"))]
+            {
+                Err("no model.chipformer (built without safetensors support)".to_string())
+            }
+        };
+        let (config, tensors) = loaded.unwrap_or_else(|e| panic!("loading {}: {e}", dir.display()));
+        Model::build(config, &tensors).unwrap_or_else(|e| panic!("{e}"))
+    }
+
+    /// Load a model.chipformer file from memory (used by the WebAssembly build).
+    pub fn from_sparse_bytes(bytes: &[u8]) -> Result<Model, String> {
+        let (config, tensors) = read_sparse(bytes)?;
+        Model::build(config, &tensors)
+    }
+
+    fn build(config: Value, tensors: &HashMap<String, Triplets>) -> Result<Model, String> {
+        let get = |name: &str| tensors.get(name).ok_or_else(|| format!("missing tensor {name}"));
+        let csr = |name: &str| get(name).map(|t| Csr::from_triplets(t, false));
+        let csr_t = |name: &str| get(name).map(|t| Csr::from_triplets(t, true));
         let d = config["d_model"].as_u64().unwrap() as usize;
         let vocab = config["vocab_size"].as_u64().unwrap() as usize;
         let layers = config["layers"]
@@ -203,34 +275,34 @@ impl Model {
                     .map(|h| {
                         let p = format!("layers.{l}.attn.{h}");
                         let r = &spec["q_ranges"][h];
-                        Head {
-                            wq: csr(&st, &format!("{p}.wq")),
-                            wk: csr(&st, &format!("{p}.wk")),
-                            wv: csr(&st, &format!("{p}.wv")),
-                            wo_t: csr_t(&st, &format!("{p}.wo")),
+                        Ok(Head {
+                            wq: csr(&format!("{p}.wq"))?,
+                            wk: csr(&format!("{p}.wk"))?,
+                            wv: csr(&format!("{p}.wv"))?,
+                            wo_t: csr_t(&format!("{p}.wo"))?,
                             lo: r[0].as_i64().unwrap(),
                             hi: r[1].as_i64().unwrap(),
                             tree: 0,
                             store: 0,
-                        }
+                        })
                     })
-                    .collect();
+                    .collect::<Result<Vec<Head>, String>>()?;
                 let p = format!("layers.{l}.ffn");
-                Layer {
+                Ok(Layer {
                     heads,
-                    gate: csr(&st, &format!("{p}.w_gate")),
-                    up: csr(&st, &format!("{p}.w_up")),
-                    down_t: csr_t(&st, &format!("{p}.w_down")),
+                    gate: csr(&format!("{p}.w_gate"))?,
+                    up: csr(&format!("{p}.w_up"))?,
+                    down_t: csr_t(&format!("{p}.w_down"))?,
                     ffn: None,
-                }
+                })
             })
-            .collect::<Vec<Layer>>();
-        let (embed_dense, _) = tensor(&st, "embed.token");
-        let pos_poly_t = csr_t(&st, "embed.pos_poly");
+            .collect::<Result<Vec<Layer>, String>>()?;
+        let embed = csr("embed.token")?;
+        let pos_poly_t = csr_t("embed.pos_poly")?;
         let written = layers
             .iter()
             .flat_map(|l| l.heads.iter().map(|h| &h.wo_t).chain(std::iter::once(&l.down_t)));
-        let consts = constant_dims(&embed_dense, vocab, d, &pos_poly_t, written);
+        let consts = constant_dims(&embed, d, &pos_poly_t, written);
         // CHIPFORMER_NO_FAST=1 runs the plain sparse matrices (for checking the shortcuts)
         let fast = std::env::var_os("CHIPFORMER_NO_FAST").is_none();
         let mut layers = layers;
@@ -240,12 +312,12 @@ impl Model {
                 l.ffn = Some(FastFfn::build(&l.gate, &l.up, &l.down_t, &consts));
             }
         }
-        let unembed = csr(&st, "unembed");
+        let unembed = csr("unembed")?;
         let unembed_fast = if fast { LineArgmax::build(&unembed, &consts) } else { None };
-        Model {
+        Ok(Model {
             d,
             vocab,
-            embed: Csr::from_dense(&embed_dense, vocab, d),
+            embed,
             pos_poly_t,
             layers,
             unembed,
@@ -253,7 +325,7 @@ impl Model {
             trees,
             stores,
             config,
-        }
+        })
     }
 
     /// (distinct key caches, distinct value stores) after sharing

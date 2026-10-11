@@ -1,12 +1,15 @@
 //! Play a CHIP-8 ROM on the hand-built transformer.
 //!
-//!     play <model_dir> <rom> [--ipf 10] [--scale 12] [--keys pong|classic] [--quirks Q] [--persist 20] [--no-fade]
+//!     play <model_dir> --game <id> [--games games/manifest.json] [options]
+//!     play <model_dir> <rom> [--keys pong|classic] [--quirks Q] [options]
+//!     options: [--ipf N] [--scale 12] [--persist 20] [--no-fade]
 //!
-//! Pong controls (default):  left paddle  A = up, D = down
-//!                           right paddle Left = up, Right = down
-//! The rest of the CHIP-8 keypad stays on the classic layout (1234 / QWER / SDF / ZXCV).
-//! `--keys classic` uses the classic layout for every key (1 2 3 C / 4 5 6 D / 7 8 9 E / A 0 B F
-//! on 1234 / QWER / ASDF / ZXCV). Esc quits.
+//! A manifest game brings its ROM, speed, quirk profile and controls: one-player games take
+//! the arrow keys or WASD plus Space/E; two-player games put player 1 on A/D (or W/S) and
+//! player 2 on Left/Right (or Up/Down). Keys a game doesn't use keep the classic layout
+//! (1 2 3 C / 4 5 6 D / 7 8 9 E / A 0 B F on 1234 / QWER / ASDF / ZXCV).
+//! For a ROM path, `--keys pong` (default) maps classic Pong's paddles to A/D and Left/Right,
+//! and `--keys classic` uses the classic layout only. Esc quits.
 //!
 //! Every frame: key changes are injected as writes, one TICK is injected, and the model
 //! generates `ipf` instructions. A pixel stays on screen for `persist` instructions after it
@@ -14,8 +17,9 @@
 //! makes them blink), followed by a short phosphor fade. If the model is slower than real time the
 //! game slows down rather than skipping instructions.
 
-use engine::host::Session;
-use engine::model::Model;
+use chipformer_engine::games::parse_manifest;
+use chipformer_engine::host::Session;
+use chipformer_engine::model::Model;
 use minifb::{Key, Window, WindowOptions};
 use std::path::Path;
 use std::time::{Duration, Instant};
@@ -26,7 +30,8 @@ const CLASSIC: [(Key, usize); 16] = [
     (Key::A, 0x7), (Key::S, 0x8), (Key::D, 0x9), (Key::F, 0xE),
     (Key::Z, 0xA), (Key::X, 0x0), (Key::C, 0xB), (Key::V, 0xF),
 ];
-/// Pong reads keypad 1/4 for the left paddle and C/D for the right one.
+
+/// `--keys pong` for a ROM given by path: classic Pong reads keypad 1/4 (left paddle) and C/D.
 const PONG: [(Key, usize); 4] = [(Key::A, 0x1), (Key::D, 0x4), (Key::Left, 0xC), (Key::Right, 0xD)];
 
 const ROLLOVER_TOKENS: usize = 250_000; // restart the context from a state dump past this
@@ -38,34 +43,59 @@ fn opt(args: &[String], name: &str, default: &str) -> String {
     args.iter().position(|a| a == name).and_then(|i| args.get(i + 1)).cloned().unwrap_or(default.into())
 }
 
+fn key_named(name: &str) -> Key {
+    match name {
+        "W" => Key::W, "A" => Key::A, "S" => Key::S, "D" => Key::D, "E" => Key::E, "Q" => Key::Q,
+        "Up" => Key::Up, "Down" => Key::Down, "Left" => Key::Left, "Right" => Key::Right,
+        "Space" => Key::Space, "Enter" => Key::Enter,
+        other => panic!("no key named {other}"),
+    }
+}
+
+/// `primary` bindings, plus the classic layout for every keyboard key and CHIP-8 key they leave free.
+fn with_classic(primary: Vec<(Key, usize)>) -> Vec<(Key, usize)> {
+    let mut m: Vec<(Key, usize)> = CLASSIC
+        .iter()
+        .filter(|(k, c)| !primary.iter().any(|p| p.0 == *k || p.1 == *c))
+        .copied()
+        .collect();
+    m.extend(primary);
+    m
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     if args.len() < 3 {
-        eprintln!("usage: play <model_dir> <rom> [--ipf 10] [--scale 12] [--keys pong|classic] [--quirks Q] [--persist 20] [--no-fade]");
+        eprintln!("usage: play <model_dir> (<rom> | --game <id>) [--games games/manifest.json] [--ipf N] \
+                   [--scale 12] [--keys pong|classic] [--quirks Q] [--persist 20] [--no-fade]");
         std::process::exit(2);
     }
-    let ipf: usize = opt(&args, "--ipf", "10").parse().expect("--ipf");
     let scale: usize = opt(&args, "--scale", "12").parse().expect("--scale");
     let fade = !args.iter().any(|a| a == "--no-fade");
     let persist: u64 = opt(&args, "--persist", "20").parse().expect("--persist");
-    let keymap: Vec<(Key, usize)> = match opt(&args, "--keys", "pong").as_str() {
-        "classic" => CLASSIC.to_vec(),
-        "pong" => {
-            let taken: Vec<usize> = PONG.iter().map(|p| p.1).collect();
-            let mut m: Vec<(Key, usize)> = CLASSIC
-                .iter()
-                .filter(|(k, c)| !taken.contains(c) && !PONG.iter().any(|p| p.0 == *k))
-                .copied()
-                .collect();
-            m.extend(PONG);
-            m
-        }
-        other => panic!("--keys must be pong or classic, not {other}"),
+
+    // a manifest game brings its ROM, speed, quirks and controls; flags override them
+    let (rom, mut ipf, mut quirks, keymap, title) = if args.iter().any(|a| a == "--game") {
+        let path = opt(&args, "--games", "games/manifest.json");
+        let games = parse_manifest(&std::fs::read_to_string(&path).expect("read manifest")).unwrap();
+        let id = opt(&args, "--game", "");
+        let g = games.iter().find(|g| g.id == id).unwrap_or_else(|| panic!("no game {id:?} in {path}"));
+        let rom = std::fs::read(Path::new(&path).parent().unwrap().join(&g.file)).expect("read rom");
+        let keys = g.bindings().into_iter().map(|(k, c)| (key_named(k), c)).collect();
+        eprintln!("{}: {}", g.title, g.controls);
+        (rom, g.ipf, g.quirks.clone(), with_classic(keys), g.title.clone())
+    } else {
+        let keymap = match opt(&args, "--keys", "pong").as_str() {
+            "classic" => CLASSIC.to_vec(),
+            "pong" => with_classic(PONG.to_vec()),
+            other => panic!("--keys must be pong or classic, not {other}"),
+        };
+        (std::fs::read(&args[2]).expect("read rom"), 10, String::new(), keymap, args[2].clone())
     };
+    ipf = opt(&args, "--ipf", &ipf.to_string()).parse().expect("--ipf");
+    quirks = opt(&args, "--quirks", &quirks);
 
     let model = Model::load(Path::new(&args[1]));
-    let rom = std::fs::read(&args[2]).expect("read rom");
-    let quirks = opt(&args, "--quirks", "");
     let mut s = Session::new(&model, &rom, &quirks, false).unwrap_or_else(|e| panic!("{e}"));
     let (w, h) = (s.spec.width, s.spec.height);
 
@@ -115,7 +145,7 @@ fn main() {
             let secs = clock.elapsed().as_secs_f64();
             let tps = (s.state.pos.saturating_sub(tokens_at)) as f64 / secs;
             window.set_title(&format!(
-                "chipformer - {:.0} fps (60 = real time), {:.0} tok/s, context {} tokens, {} rollovers",
+                "chipformer: {title} - {:.0} fps (60 = real time), {:.0} tok/s, context {} tokens, {} rollovers",
                 frames as f64 / secs, tps, s.state.pos, rollovers
             ));
             (frames, tokens_at, clock) = (0, s.state.pos, Instant::now());

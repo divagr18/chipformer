@@ -7,3 +7,5 @@ __pycache__/
 /engine/target/
 *.safetensors
 /model/
+/games/sources/
+/games/shots/

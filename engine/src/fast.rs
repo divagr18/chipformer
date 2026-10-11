@@ -20,16 +20,31 @@ use std::collections::HashMap;
 
 /// Value of each residual dim that is constant at every position (None otherwise).
 pub fn constant_dims<'a>(
-    embed: &[f64],
-    vocab: usize,
+    embed: &Csr,
     d: usize,
     pos_poly_t: &Csr,
     written: impl Iterator<Item = &'a Csr>,
 ) -> Vec<Option<f64>> {
+    // a column of the token embedding is constant if every token has the same value there
+    let vocab = embed.rows();
+    let (mut count, mut first, mut same) = (vec![0usize; d], vec![0.0f64; d], vec![true; d]);
+    for t in 0..vocab {
+        let (idx, val) = embed.row(t);
+        for (&i, &v) in idx.iter().zip(val) {
+            let i = i as usize;
+            if count[i] == 0 {
+                first[i] = v;
+            } else if v != first[i] {
+                same[i] = false;
+            }
+            count[i] += 1;
+        }
+    }
     let mut consts: Vec<Option<f64>> = (0..d)
-        .map(|c| {
-            let v = embed[c];
-            (0..vocab).all(|t| embed[t * d + c] == v).then_some(v)
+        .map(|c| match count[c] {
+            0 => Some(0.0),
+            n if n == vocab && same[c] => Some(first[c]),
+            _ => None,
         })
         .collect();
     for &i in &pos_poly_t.idx {

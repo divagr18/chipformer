@@ -1,0 +1,3818 @@
+{
+ "games": [
+  {
+   "id": "octojam-1-title",
+   "title": "Octojam 1 Title",
+   "authors": [
+    "JohnEarnest"
+   ],
+   "year": "2014",
+   "description": "Greeting program for the Octo-ber 2014 Chip8 Game Jam.",
+   "source": "https://github.com/JohnEarnest/chip8Archive/master/roms/octojam1title.ch8",
+   "license": "CC0",
+   "platform": "octo",
+   "quirks": [],
+   "ipf": 7,
+   "keys": {
+    "up": 5,
+    "left": 7,
+    "down": 8,
+    "right": 9,
+    "a": 6
+   },
+   "notes": [],
+   "file": "roms/octojam-1-title.ch8",
+   "sha1": "f26993a4afd5cda2fea19935773fd3db54866623",
+   "status": "unsupported",
+   "result": {
+    "verified_records": 23302,
+    "error": null,
+    "foreign_opcodes": {
+     "DXY0 (SCHIP 16x16 sprite)": 4
+    },
+    "tokens_per_instruction": 5.56,
+    "realtime_tok_per_s": 2335
+   }
+  },
+  {
+   "id": "octojam-2-title",
+   "title": "Octojam 2 Title",
+   "authors": [
+    "JohnEarnest"
+   ],
+   "year": "2015",
+   "description": "This title card draws a nearly full screen 64x30 animation with very low flicker.",
+   "source": "https://github.com/JohnEarnest/chip8Archive/master/roms/octojam2title.ch8",
+   "license": "CC0",
+   "platform": "octo",
+   "quirks": [],
+   "ipf": 7,
+   "keys": {
+    "up": 5,
+    "left": 7,
+    "down": 8,
+    "right": 9,
+    "a": 6
+   },
+   "notes": [],
+   "file": "roms/octojam-2-title.ch8",
+   "sha1": "11c68038d64a09be549a6c1e50724808914d8991",
+   "status": "ok",
+   "result": {
+    "verified_records": 23303,
+    "error": null,
+    "foreign_opcodes": {},
+    "tokens_per_instruction": 21.82,
+    "realtime_tok_per_s": 9165
+   }
+  },
+  {
+   "id": "octojam-3-title",
+   "title": "Octojam 3 Title",
+   "authors": [
+    "JohnEarnest"
+   ],
+   "year": "2016",
+   "description": "This title card disambiguates at runtime between a COSMAC VIP, SCHIP, and Octo.",
+   "source": "https://github.com/JohnEarnest/chip8Archive/master/roms/octojam3title.ch8",
+   "license": "CC0",
+   "platform": "octo",
+   "quirks": [],
+   "ipf": 7,
+   "keys": {
+    "up": 5,
+    "left": 7,
+    "down": 8,
+    "right": 9,
+    "a": 6
+   },
+   "notes": [],
+   "file": "roms/octojam-3-title.ch8",
+   "sha1": "493c76b9d9252e1d349d408d341daff5267f35fa",
+   "status": "ok",
+   "result": {
+    "verified_records": 23302,
+    "error": null,
+    "foreign_opcodes": {},
+    "tokens_per_instruction": 6.83,
+    "realtime_tok_per_s": 2870
+   }
+  },
+  {
+   "id": "octojam-4-title",
+   "title": "Octojam 4 Title",
+   "authors": [
+    "JohnEarnest"
+   ],
+   "year": "2017",
+   "description": "This title card demonstrates the new :macro and :calc directives.",
+   "source": "https://github.com/JohnEarnest/chip8Archive/master/roms/octojam4title.ch8",
+   "license": "CC0",
+   "platform": "octo",
+   "quirks": [],
+   "ipf": 30,
+   "keys": {
+    "up": 5,
+    "left": 7,
+    "down": 8,
+    "right": 9,
+    "a": 6
+   },
+   "notes": [],
+   "file": "roms/octojam-4-title.ch8",
+   "sha1": "9f55f7abc8f2bc4b59a01515f1d887a6568a8ab4",
+   "status": "ok",
+   "result": {
+    "verified_records": 20772,
+    "error": null,
+    "foreign_opcodes": {},
+    "tokens_per_instruction": 8.04,
+    "realtime_tok_per_s": 14475
+   }
+  },
+  {
+   "id": "octojam-5-title",
+   "title": "Octojam 5 Title",
+   "authors": [
+    "JohnEarnest"
+   ],
+   "year": "2018",
+   "description": "Greeting program for the fifth annual 2018 Octojam.",
+   "source": "https://github.com/JohnEarnest/chip8Archive/master/roms/octojam5title.ch8",
+   "license": "CC0",
+   "platform": "octo",
+   "quirks": [],
+   "ipf": 7,
+   "keys": {
+    "up": 5,
+    "left": 7,
+    "down": 8,
+    "right": 9,
+    "a": 6
+   },
+   "notes": [],
+   "file": "roms/octojam-5-title.ch8",
+   "sha1": "d6d8efef811350e7fba6197024c4973b360749b8",
+   "status": "ok",
+   "result": {
+    "verified_records": 23302,
+    "error": null,
+    "foreign_opcodes": {},
+    "tokens_per_instruction": 8.2,
+    "realtime_tok_per_s": 3443
+   }
+  },
+  {
+   "id": "octojam-6-title",
+   "title": "Octojam 6 Title",
+   "authors": [
+    "JohnEarnest"
+   ],
+   "year": "2019",
+   "description": "Greeting program for the sixth annual 2019 Octojam.",
+   "source": "https://github.com/JohnEarnest/chip8Archive/master/roms/octojam6title.ch8",
+   "license": "CC0",
+   "platform": "octo",
+   "quirks": [],
+   "ipf": 7,
+   "keys": {
+    "up": 5,
+    "left": 7,
+    "down": 8,
+    "right": 9,
+    "a": 6
+   },
+   "notes": [],
+   "file": "roms/octojam-6-title.ch8",
+   "sha1": "18aef6d2d3b560681038d0dda2273d780dc1daa5",
+   "status": "ok",
+   "result": {
+    "verified_records": 23304,
+    "error": null,
+    "foreign_opcodes": {},
+    "tokens_per_instruction": 25.22,
+    "realtime_tok_per_s": 10592
+   }
+  },
+  {
+   "id": "octojam-7-title",
+   "title": "Octojam 7 Title",
+   "authors": [
+    "JohnEarnest"
+   ],
+   "year": "2020",
+   "description": "Greeting program for the seventh annual 2020 Octojam.",
+   "source": "https://github.com/JohnEarnest/chip8Archive/master/roms/octojam7title.ch8",
+   "license": "CC0",
+   "platform": "octo",
+   "quirks": [],
+   "ipf": 30,
+   "keys": {
+    "up": 5,
+    "left": 7,
+    "down": 8,
+    "right": 9,
+    "a": 6
+   },
+   "notes": [],
+   "file": "roms/octojam-7-title.ch8",
+   "sha1": "9a9c341571ace516c9789b1eb92590833af13239",
+   "status": "ok",
+   "result": {
+    "verified_records": 20772,
+    "error": null,
+    "foreign_opcodes": {},
+    "tokens_per_instruction": 9.83,
+    "realtime_tok_per_s": 17694
+   }
+  },
+  {
+   "id": "octojam-8-title",
+   "title": "Octojam 8 Title",
+   "authors": [
+    "JohnEarnest"
+   ],
+   "year": "2021",
+   "description": "Greeting program for the eighth annual 2021 Octojam.",
+   "source": "https://github.com/JohnEarnest/chip8Archive/master/roms/octojam8title.ch8",
+   "license": "CC0",
+   "platform": "octo",
+   "quirks": [],
+   "ipf": 7,
+   "keys": {
+    "up": 5,
+    "left": 7,
+    "down": 8,
+    "right": 9,
+    "a": 6
+   },
+   "notes": [],
+   "file": "roms/octojam-8-title.ch8",
+   "sha1": "959ed7d6b61e667bb59d1b497401258463f88454",
+   "status": "ok",
+   "result": {
+    "verified_records": 23302,
+    "error": null,
+    "foreign_opcodes": {},
+    "tokens_per_instruction": 9.49,
+    "realtime_tok_per_s": 3986
+   }
+  },
+  {
+   "id": "octojam-9-title",
+   "title": "Octojam 9 Title",
+   "authors": [
+    "JohnEarnest"
+   ],
+   "year": "2022",
+   "description": "Greetings program for the ninth annual 2022 Octojam.",
+   "source": "https://github.com/JohnEarnest/chip8Archive/master/roms/octojam9title.ch8",
+   "license": "CC0",
+   "platform": "octo",
+   "quirks": [],
+   "ipf": 15,
+   "keys": {
+    "up": 5,
+    "left": 7,
+    "down": 8,
+    "right": 9,
+    "a": 6
+   },
+   "notes": [],
+   "file": "roms/octojam-9-title.ch8",
+   "sha1": "5a6366decb08df66da8bd685b497ccce0884c307",
+   "status": "ok",
+   "result": {
+    "verified_records": 21543,
+    "error": null,
+    "foreign_opcodes": {},
+    "tokens_per_instruction": 5.47,
+    "realtime_tok_per_s": 4925
+   }
+  },
+  {
+   "id": "octojam-10-title",
+   "title": "Octojam 10 Title",
+   "authors": [
+    "JohnEarnest"
+   ],
+   "year": "2023",
+   "description": "Greetings program for the tenth annual 2023 Octojam.",
+   "source": "https://github.com/JohnEarnest/chip8Archive/master/roms/octojam10title.ch8",
+   "license": "CC0",
+   "platform": "octo",
+   "quirks": [],
+   "ipf": 7,
+   "keys": {
+    "up": 5,
+    "left": 7,
+    "down": 8,
+    "right": 9,
+    "a": 6
+   },
+   "notes": [],
+   "file": "roms/octojam-10-title.ch8",
+   "sha1": "1dda7d92450c8eee2753a9350a1a0d524b1019b4",
+   "status": "ok",
+   "result": {
+    "verified_records": 23302,
+    "error": null,
+    "foreign_opcodes": {},
+    "tokens_per_instruction": 10.96,
+    "realtime_tok_per_s": 4602
+   }
+  },
+  {
+   "id": "fuse",
+   "title": "Fuse",
+   "authors": [
+    "JohnEarnest"
+   ],
+   "year": "2016",
+   "description": "A minimalist reinterpretation of the classic Pipe Dream.",
+   "source": "https://github.com/JohnEarnest/chip8Archive/master/roms/fuse.ch8",
+   "license": "CC0",
+   "platform": "octo",
+   "quirks": [],
+   "ipf": 15,
+   "keys": {
+    "up": 5,
+    "left": 7,
+    "down": 8,
+    "right": 9,
+    "a": 6
+   },
+   "notes": [],
+   "file": "roms/fuse.ch8",
+   "sha1": "0cd895dc3d489d0e40656218900a04310e95f560",
+   "status": "ok",
+   "result": {
+    "verified_records": 21543,
+    "error": null,
+    "foreign_opcodes": {},
+    "tokens_per_instruction": 4.69,
+    "realtime_tok_per_s": 4225
+   }
+  },
+  {
+   "id": "slippery-slope",
+   "title": "Slippery Slope",
+   "authors": [
+    "JohnEarnest"
+   ],
+   "year": "2018",
+   "description": "The ice we skate is getting pretty thin. The water's getting warm so you might as well swim.",
+   "source": "https://github.com/JohnEarnest/chip8Archive/master/roms/slipperyslope.ch8",
+   "license": "CC0",
+   "platform": "octo",
+   "quirks": [],
+   "ipf": 30,
+   "keys": {
+    "up": 5,
+    "left": 7,
+    "down": 8,
+    "right": 9,
+    "a": 6
+   },
+   "notes": [],
+   "file": "roms/slippery-slope.ch8",
+   "sha1": "9d834860f455aec7e95fb886984497e5be501610",
+   "status": "ok",
+   "result": {
+    "verified_records": 20772,
+    "error": null,
+    "foreign_opcodes": {},
+    "tokens_per_instruction": 6.25,
+    "realtime_tok_per_s": 11256
+   }
+  },
+  {
+   "id": "chipwar",
+   "title": "ChipWar",
+   "authors": [
+    "JohnEarnest"
+   ],
+   "year": "2014",
+   "description": "A (loose) adaptation of the classic DiceWars.",
+   "source": "https://github.com/JohnEarnest/chip8Archive/master/roms/chipwar.ch8",
+   "license": "CC0",
+   "platform": "octo",
+   "quirks": [],
+   "ipf": 15,
+   "keys": {
+    "up": 5,
+    "left": 7,
+    "down": 8,
+    "right": 9,
+    "a": 6
+   },
+   "notes": [],
+   "file": "roms/chipwar.ch8",
+   "sha1": "ab5cbf267d74c168e174041b9594ae856cbd671d",
+   "status": "ok",
+   "result": {
+    "verified_records": 21543,
+    "error": null,
+    "foreign_opcodes": {},
+    "tokens_per_instruction": 7.24,
+    "realtime_tok_per_s": 6514
+   }
+  },
+  {
+   "id": "cave-explorer",
+   "title": "Cave Explorer",
+   "authors": [
+    "JohnEarnest"
+   ],
+   "year": "2014",
+   "description": "Do you have what it takes to be a Cave Explorer?",
+   "source": "https://github.com/JohnEarnest/chip8Archive/master/roms/caveexplorer.ch8",
+   "license": "CC0",
+   "platform": "octo",
+   "quirks": [],
+   "ipf": 20,
+   "keys": {
+    "up": 5,
+    "left": 7,
+    "down": 8,
+    "right": 9,
+    "a": 6
+   },
+   "notes": [],
+   "file": "roms/cave-explorer.ch8",
+   "sha1": "400dbd1aa2b79b9b8546bc615bfb735c1bd1d268",
+   "status": "ok",
+   "result": {
+    "verified_records": 21155,
+    "error": null,
+    "foreign_opcodes": {},
+    "tokens_per_instruction": 5.19,
+    "realtime_tok_per_s": 6226
+   },
+   "controls": "Arrow keys move",
+   "featured": 9
+  },
+  {
+   "id": "outlaw",
+   "title": "Outlaw",
+   "authors": [
+    "JohnEarnest"
+   ],
+   "year": "2014",
+   "description": "An adaptation of the Atari 2600 game \"Outlaw\" for the Chip8.",
+   "source": "https://github.com/JohnEarnest/chip8Archive/master/roms/outlaw.ch8",
+   "license": "CC0",
+   "platform": "octo",
+   "quirks": [],
+   "ipf": 15,
+   "keys": {
+    "up": 5,
+    "left": 7,
+    "down": 8,
+    "right": 9,
+    "a": 6
+   },
+   "notes": [],
+   "file": "roms/outlaw.ch8",
+   "sha1": "a9d3c975a5e733646a04f6e61deebcd0ad50f700",
+   "status": "ok",
+   "result": {
+    "verified_records": 21543,
+    "error": null,
+    "foreign_opcodes": {},
+    "tokens_per_instruction": 7.06,
+    "realtime_tok_per_s": 6352
+   },
+   "controls": "Arrow keys move, Space shoots",
+   "featured": 10
+  },
+  {
+   "id": "rps",
+   "title": "RPS",
+   "authors": [
+    "SystemLogoff"
+   ],
+   "year": "2015",
+   "description": "Classic \"Rock Paper Scissors\" game for the Chip8.",
+   "source": "https://github.com/JohnEarnest/chip8Archive/master/roms/RPS.ch8",
+   "license": "CC0",
+   "platform": "octo",
+   "quirks": [],
+   "ipf": 7,
+   "keys": {
+    "up": 5,
+    "left": 7,
+    "down": 8,
+    "right": 9,
+    "a": 6
+   },
+   "notes": [],
+   "file": "roms/rps.ch8",
+   "sha1": "a6f3ac2d89cdc1d7b22013301863bad6a4fb7318",
+   "status": "ok",
+   "result": {
+    "verified_records": 23302,
+    "error": null,
+    "foreign_opcodes": {},
+    "tokens_per_instruction": 5.13,
+    "realtime_tok_per_s": 2156
+   }
+  },
+  {
+   "id": "octo-a-chip-8-story",
+   "title": "Octo: a Chip 8 Story",
+   "authors": [
+    "SystemLogoff"
+   ],
+   "year": "2015",
+   "description": "A visual novel game for the Chip8.",
+   "source": "https://github.com/JohnEarnest/chip8Archive/master/roms/octoachip8story.ch8",
+   "license": "CC0",
+   "platform": "octo",
+   "quirks": [],
+   "ipf": 7,
+   "keys": {
+    "up": 5,
+    "left": 7,
+    "down": 8,
+    "right": 9,
+    "a": 6
+   },
+   "notes": [],
+   "file": "roms/octo-a-chip-8-story.ch8",
+   "sha1": "39970ccfd3a3f00180d53464d4fd7862193eaf0f",
+   "status": "ok",
+   "result": {
+    "verified_records": 23302,
+    "error": null,
+    "foreign_opcodes": {},
+    "tokens_per_instruction": 7.59,
+    "realtime_tok_per_s": 3187
+   }
+  },
+  {
+   "id": "pumpkin-dreess-up",
+   "title": "Pumpkin \"Dreess\" Up",
+   "authors": [
+    "SystemLogoff"
+   ],
+   "year": "2015",
+   "description": "Classic Adobe Flash games, now in Chip8.",
+   "source": "https://github.com/JohnEarnest/chip8Archive/master/roms/pumpkindressup.ch8",
+   "license": "CC0",
+   "platform": "octo",
+   "quirks": [],
+   "ipf": 7,
+   "keys": {
+    "up": 5,
+    "left": 7,
+    "down": 8,
+    "right": 9,
+    "a": 6
+   },
+   "notes": [],
+   "file": "roms/pumpkin-dreess-up.ch8",
+   "sha1": "b2abb5312f0ad28421c1190a65a73d98d4ebf401",
+   "status": "ok",
+   "result": {
+    "verified_records": 23302,
+    "error": null,
+    "foreign_opcodes": {},
+    "tokens_per_instruction": 7.19,
+    "realtime_tok_per_s": 3018
+   }
+  },
+  {
+   "id": "pet-dog",
+   "title": "Pet Dog",
+   "authors": [
+    "SystemLogoff"
+   ],
+   "year": "2015",
+   "description": "Undertale fangame made in Chip8.",
+   "source": "https://github.com/JohnEarnest/chip8Archive/master/roms/petdog.ch8",
+   "license": "CC0",
+   "platform": "octo",
+   "quirks": [],
+   "ipf": 7,
+   "keys": {
+    "up": 5,
+    "left": 7,
+    "down": 8,
+    "right": 9,
+    "a": 6
+   },
+   "notes": [],
+   "file": "roms/pet-dog.ch8",
+   "sha1": "3be683d1ac0b27ae47a09984e420853fff0b7e0d",
+   "status": "ok",
+   "result": {
+    "verified_records": 23303,
+    "error": null,
+    "foreign_opcodes": {},
+    "tokens_per_instruction": 12.86,
+    "realtime_tok_per_s": 5403
+   }
+  },
+  {
+   "id": "8ce-attourny--disc-1",
+   "title": "8CE Attourny - Disc 1",
+   "authors": [
+    "SystemLogoff"
+   ],
+   "year": "2016",
+   "description": "Exciting court battles in Chip8! Disc 1/3 of an exciting multi-tape game.",
+   "source": "https://github.com/JohnEarnest/chip8Archive/master/roms/8ceattourny_d1.ch8",
+   "license": "CC0",
+   "platform": "octo",
+   "quirks": [],
+   "ipf": 7,
+   "keys": {
+    "up": 5,
+    "left": 7,
+    "down": 8,
+    "right": 9,
+    "a": 6
+   },
+   "notes": [],
+   "file": "roms/8ce-attourny--disc-1.ch8",
+   "sha1": "3ddf7b76b8f63d0089e00e3b518f78c213b74b1e",
+   "status": "ok",
+   "result": {
+    "verified_records": 23302,
+    "error": null,
+    "foreign_opcodes": {},
+    "tokens_per_instruction": 7.05,
+    "realtime_tok_per_s": 2961
+   }
+  },
+  {
+   "id": "8ce-attourny--disc-2",
+   "title": "8CE Attourny - Disc 2",
+   "authors": [
+    "SystemLogoff"
+   ],
+   "year": "2016",
+   "description": "Exciting court battles in Chip8! Disc 2/3 of an exciting multi-tape game.",
+   "source": "https://github.com/JohnEarnest/chip8Archive/master/roms/8ceattourny_d2.ch8",
+   "license": "CC0",
+   "platform": "octo",
+   "quirks": [],
+   "ipf": 7,
+   "keys": {
+    "up": 5,
+    "left": 7,
+    "down": 8,
+    "right": 9,
+    "a": 6
+   },
+   "notes": [],
+   "file": "roms/8ce-attourny--disc-2.ch8",
+   "sha1": "82fd0d202a068bedfb869fc303fdeae0c814024f",
+   "status": "ok",
+   "result": {
+    "verified_records": 23302,
+    "error": null,
+    "foreign_opcodes": {},
+    "tokens_per_instruction": 6.15,
+    "realtime_tok_per_s": 2582
+   }
+  },
+  {
+   "id": "8ce-attourny--disc-3",
+   "title": "8CE Attourny - Disc 3",
+   "authors": [
+    "SystemLogoff"
+   ],
+   "year": "2016",
+   "description": "Exciting court battles in Chip8! Disc 3/3 of an exciting multi-tape game.",
+   "source": "https://github.com/JohnEarnest/chip8Archive/master/roms/8ceattourny_d3.ch8",
+   "license": "CC0",
+   "platform": "octo",
+   "quirks": [],
+   "ipf": 7,
+   "keys": {
+    "up": 5,
+    "left": 7,
+    "down": 8,
+    "right": 9,
+    "a": 6
+   },
+   "notes": [],
+   "file": "roms/8ce-attourny--disc-3.ch8",
+   "sha1": "419a0110d41332457c15ae09fff62cbd7ad197fc",
+   "status": "ok",
+   "result": {
+    "verified_records": 23302,
+    "error": null,
+    "foreign_opcodes": {},
+    "tokens_per_instruction": 7.04,
+    "realtime_tok_per_s": 2956
+   }
+  },
+  {
+   "id": "octo-rancher",
+   "title": "Octo Rancher",
+   "authors": [
+    "SystemLogoff"
+   ],
+   "year": "2018",
+   "description": "Train monsters and become a real ranching champion. Read the manual at https://systemlogoff.com/share/Octo-Rancher-Manual.pdf",
+   "source": "https://github.com/JohnEarnest/chip8Archive/master/roms/octorancher.ch8",
+   "license": "CC0",
+   "platform": "octo",
+   "quirks": [],
+   "ipf": 7,
+   "keys": {
+    "up": 5,
+    "left": 7,
+    "down": 8,
+    "right": 9,
+    "a": 6
+   },
+   "notes": [],
+   "file": "roms/octo-rancher.ch8",
+   "sha1": "8263bac7d98d94097171f0a5dc6f210f77543080",
+   "status": "ok",
+   "result": {
+    "verified_records": 23302,
+    "error": null,
+    "foreign_opcodes": {},
+    "tokens_per_instruction": 5.75,
+    "realtime_tok_per_s": 2413
+   }
+  },
+  {
+   "id": "tank",
+   "title": "Tank!",
+   "authors": [
+    "Rectus"
+   ],
+   "year": "2018",
+   "description": "A two player artillery game.",
+   "source": "https://github.com/JohnEarnest/chip8Archive/master/roms/tank.ch8",
+   "license": "CC0",
+   "platform": "octo",
+   "quirks": [],
+   "ipf": 200,
+   "keys": {
+    "up": 5,
+    "left": 7,
+    "down": 8,
+    "right": 9,
+    "a": 6
+   },
+   "notes": [],
+   "file": "roms/tank.ch8",
+   "sha1": "3f9ef8dec999574a188ec3b9615cff9888283c85",
+   "status": "ok",
+   "result": {
+    "verified_records": 20116,
+    "error": null,
+    "foreign_opcodes": {},
+    "tokens_per_instruction": 3.73,
+    "realtime_tok_per_s": 44816
+   }
+  },
+  {
+   "id": "flight-runner",
+   "title": "Flight Runner",
+   "authors": [
+    "TodPunk"
+   ],
+   "year": "2014",
+   "description": "A simple flight runner for the Chip8.",
+   "source": "https://github.com/JohnEarnest/chip8Archive/master/roms/flightrunner.ch8",
+   "license": "CC0",
+   "platform": "octo",
+   "quirks": [],
+   "ipf": 15,
+   "keys": {
+    "up": 5,
+    "left": 7,
+    "down": 8,
+    "right": 9,
+    "a": 6
+   },
+   "notes": [],
+   "file": "roms/flight-runner.ch8",
+   "sha1": "821751787374cc362f4c58759961f0aa7a2fd410",
+   "status": "ok",
+   "result": {
+    "verified_records": 21543,
+    "error": null,
+    "foreign_opcodes": {},
+    "tokens_per_instruction": 4.63,
+    "realtime_tok_per_s": 4168
+   },
+   "controls": "Up/Down steer",
+   "featured": 11
+  },
+  {
+   "id": "masquer8",
+   "title": "Masquer8",
+   "authors": [
+    "Chromatophore"
+   ],
+   "year": "2015",
+   "description": "Cuttlefish pattern matching game for chip8.",
+   "source": "https://github.com/JohnEarnest/chip8Archive/master/roms/masquer8.ch8",
+   "license": "CC0",
+   "platform": "octo",
+   "quirks": [],
+   "ipf": 15,
+   "keys": {
+    "up": 5,
+    "left": 7,
+    "down": 8,
+    "right": 9,
+    "a": 6
+   },
+   "notes": [],
+   "file": "roms/masquer8.ch8",
+   "sha1": "fb48e162c7f2e8853909acc5534b55fb55030f9f",
+   "status": "ok",
+   "result": {
+    "verified_records": 21543,
+    "error": null,
+    "foreign_opcodes": {},
+    "tokens_per_instruction": 6.53,
+    "realtime_tok_per_s": 5879
+   }
+  },
+  {
+   "id": "carbon8",
+   "title": "Carbon8",
+   "authors": [
+    "Chromatophore"
+   ],
+   "year": "2018",
+   "description": "A period correct movie tie in game for a popular 1980s franchise.",
+   "source": "https://github.com/JohnEarnest/chip8Archive/master/roms/carbon8.ch8",
+   "license": "CC0",
+   "platform": "octo",
+   "quirks": [],
+   "ipf": 15,
+   "keys": {
+    "up": 5,
+    "left": 7,
+    "down": 8,
+    "right": 9,
+    "a": 6
+   },
+   "notes": [],
+   "file": "roms/carbon8.ch8",
+   "sha1": "2e0f2268c9a3be0fbb839f918336f161815bb80a",
+   "status": "ok",
+   "result": {
+    "verified_records": 21543,
+    "error": null,
+    "foreign_opcodes": {},
+    "tokens_per_instruction": 5.32,
+    "realtime_tok_per_s": 4791
+   }
+  },
+  {
+   "id": "bad-kaiju-ju",
+   "title": "Bad Kaiju Ju",
+   "authors": [
+    "MattBooth"
+   ],
+   "year": "2015",
+   "description": "The year is 1977. 90% of the world's landmass is now underwater and the world is at war...",
+   "source": "https://github.com/JohnEarnest/chip8Archive/master/roms/BadKaiJuJu.ch8",
+   "license": "CC0",
+   "platform": "octo",
+   "quirks": [],
+   "ipf": 7,
+   "keys": {
+    "up": 5,
+    "left": 7,
+    "down": 8,
+    "right": 9,
+    "a": 6
+   },
+   "notes": [],
+   "file": "roms/bad-kaiju-ju.ch8",
+   "sha1": "0f479a10fec51d159866e5760069cd18bdfd293f",
+   "status": "ok",
+   "result": {
+    "verified_records": 23302,
+    "error": null,
+    "foreign_opcodes": {},
+    "tokens_per_instruction": 6.35,
+    "realtime_tok_per_s": 2667
+   }
+  },
+  {
+   "id": "piper",
+   "title": "Piper",
+   "authors": [
+    "Aeris",
+    "JordanMecom",
+    "LillianWang"
+   ],
+   "year": "2017",
+   "description": "Play as a small bird to collect goodies and avoid waves.",
+   "source": "https://github.com/JohnEarnest/chip8Archive/master/roms/piper.ch8",
+   "license": "CC0",
+   "platform": "octo",
+   "quirks": [],
+   "ipf": 200,
+   "keys": {
+    "up": 5,
+    "left": 7,
+    "down": 8,
+    "right": 9,
+    "a": 6
+   },
+   "notes": [],
+   "file": "roms/piper.ch8",
+   "sha1": "7da3eba52a8d8025ddf14ee40d28f151585529a0",
+   "status": "ok",
+   "result": {
+    "verified_records": 20116,
+    "error": null,
+    "foreign_opcodes": {},
+    "tokens_per_instruction": 4.54,
+    "realtime_tok_per_s": 54516
+   }
+  },
+  {
+   "id": "mini-lights-out",
+   "title": "Mini Lights Out",
+   "authors": [
+    "tobiasvl"
+   ],
+   "year": "2019",
+   "description": "Turn the lights out",
+   "source": "https://github.com/JohnEarnest/chip8Archive/master/roms/mini-lights-out.ch8",
+   "license": "CC0",
+   "platform": "octo",
+   "quirks": [],
+   "ipf": 7,
+   "keys": {
+    "up": 5,
+    "left": 7,
+    "down": 8,
+    "right": 9,
+    "a": 6
+   },
+   "notes": [],
+   "file": "roms/mini-lights-out.ch8",
+   "sha1": "a3f0eae99964b873eb1adbd3e8bcb90d15f762c3",
+   "status": "ok",
+   "result": {
+    "verified_records": 23302,
+    "error": null,
+    "foreign_opcodes": {},
+    "tokens_per_instruction": 6.5,
+    "realtime_tok_per_s": 2729
+   }
+  },
+  {
+   "id": "horse-world-online",
+   "title": "Horse World Online",
+   "authors": [
+    "TomRintjema"
+   ],
+   "year": "2014",
+   "description": "An online horse breeding game.",
+   "source": "https://github.com/JohnEarnest/chip8Archive/master/roms/horseWorldOnline.ch8",
+   "license": "CC0",
+   "platform": "octo",
+   "quirks": [],
+   "ipf": 30,
+   "keys": {
+    "up": 5,
+    "left": 7,
+    "down": 8,
+    "right": 9,
+    "a": 6
+   },
+   "notes": [],
+   "file": "roms/horse-world-online.ch8",
+   "sha1": "28ac3467fbb4544a3e3a1ec3cd27d9e819ac7323",
+   "status": "ok",
+   "result": {
+    "verified_records": 20772,
+    "error": null,
+    "foreign_opcodes": {},
+    "tokens_per_instruction": 4.18,
+    "realtime_tok_per_s": 7515
+   }
+  },
+  {
+   "id": "ghost-escape",
+   "title": "Ghost Escape",
+   "authors": [
+    "TomRintjema"
+   ],
+   "year": "2016",
+   "description": "Seek revenge on mortal men in this exciting adventure!",
+   "source": "https://github.com/JohnEarnest/chip8Archive/master/roms/ghostEscape.ch8",
+   "license": "CC0",
+   "platform": "octo",
+   "quirks": [],
+   "ipf": 7,
+   "keys": {
+    "up": 5,
+    "left": 7,
+    "down": 8,
+    "right": 9,
+    "a": 6
+   },
+   "notes": [],
+   "file": "roms/ghost-escape.ch8",
+   "sha1": "1e3be162480380b6276d0848e1c71576b4c041f2",
+   "status": "ok",
+   "result": {
+    "verified_records": 23302,
+    "error": null,
+    "foreign_opcodes": {},
+    "tokens_per_instruction": 5.79,
+    "realtime_tok_per_s": 2432
+   }
+  },
+  {
+   "id": "tomb-ston-tipp",
+   "title": "TOMB STON TIPP",
+   "authors": [
+    "TomRintjema"
+   ],
+   "year": "2018",
+   "description": "Take turns pressing buttons to see who wins.",
+   "source": "https://github.com/JohnEarnest/chip8Archive/master/roms/tombstontipp.ch8",
+   "license": "CC0",
+   "platform": "octo",
+   "quirks": [],
+   "ipf": 7,
+   "keys": {
+    "up": 5,
+    "left": 7,
+    "down": 8,
+    "right": 9,
+    "a": 6
+   },
+   "notes": [],
+   "file": "roms/tomb-ston-tipp.ch8",
+   "sha1": "6e7cb52ec99e10f934b76eaf3fddeb8f2e2e14e1",
+   "status": "ok",
+   "result": {
+    "verified_records": 23302,
+    "error": null,
+    "foreign_opcodes": {},
+    "tokens_per_instruction": 5.75,
+    "realtime_tok_per_s": 2415
+   }
+  },
+  {
+   "id": "br8kout",
+   "title": "Br8kout",
+   "authors": [
+    "SharpenedSpoon"
+   ],
+   "year": "2014",
+   "description": "You can't even imagine how amazing this breakout clone is!",
+   "source": "https://github.com/JohnEarnest/chip8Archive/master/roms/br8kout.ch8",
+   "license": "CC0",
+   "platform": "octo",
+   "quirks": [],
+   "ipf": 7,
+   "keys": {
+    "up": 5,
+    "left": 7,
+    "down": 8,
+    "right": 9,
+    "a": 6
+   },
+   "notes": [],
+   "file": "roms/br8kout.ch8",
+   "sha1": "31fc1c53cc610a9f4b9c5705c5a0f33fc028d123",
+   "status": "ok",
+   "result": {
+    "verified_records": 23302,
+    "error": null,
+    "foreign_opcodes": {},
+    "tokens_per_instruction": 6.09,
+    "realtime_tok_per_s": 2560
+   },
+   "controls": "Left/Right move the paddle",
+   "featured": 8
+  },
+  {
+   "id": "1d-cellular-automata",
+   "title": "1D Cellular Automata",
+   "authors": [
+    "SharpenedSpoon"
+   ],
+   "year": "2014",
+   "description": "An implementation of 1D Cellular Automata.",
+   "source": "https://github.com/JohnEarnest/chip8Archive/master/roms/1dcell.ch8",
+   "license": "CC0",
+   "platform": "octo",
+   "quirks": [],
+   "ipf": 1000,
+   "keys": {
+    "up": 5,
+    "left": 7,
+    "down": 8,
+    "right": 9,
+    "a": 6
+   },
+   "notes": [],
+   "file": "roms/1d-cellular-automata.ch8",
+   "sha1": "018442698067c95d67e27a94e6642c11f049f108",
+   "status": "ok",
+   "result": {
+    "verified_records": 20024,
+    "error": null,
+    "foreign_opcodes": {},
+    "tokens_per_instruction": 5.38,
+    "realtime_tok_per_s": 322707
+   }
+  },
+  {
+   "id": "spacejam",
+   "title": "Spacejam!",
+   "authors": [
+    "WilliamDonnelly"
+   ],
+   "year": "2015",
+   "description": "An extended and enhanced version loosely based on ShipTunnel from the 2014 OctoJam.",
+   "source": "https://github.com/JohnEarnest/chip8Archive/master/roms/spacejam.ch8",
+   "license": "CC0",
+   "platform": "octo",
+   "quirks": [],
+   "ipf": 100,
+   "keys": {
+    "up": 5,
+    "left": 7,
+    "down": 8,
+    "right": 9,
+    "a": 6
+   },
+   "notes": [],
+   "file": "roms/spacejam.ch8",
+   "sha1": "9f9a4affbf7afd70bb594fb321e16579318c0164",
+   "status": "ok",
+   "result": {
+    "verified_records": 20235,
+    "error": null,
+    "foreign_opcodes": {},
+    "tokens_per_instruction": 3.86,
+    "realtime_tok_per_s": 23140
+   }
+  },
+  {
+   "id": "mastermind",
+   "title": "Mastermind",
+   "authors": [
+    "WilliamDonnelly"
+   ],
+   "year": "2015",
+   "description": "The classic puzzle game of deduction.",
+   "source": "https://github.com/JohnEarnest/chip8Archive/master/roms/mastermind.ch8",
+   "license": "CC0",
+   "platform": "octo",
+   "quirks": [],
+   "ipf": 20,
+   "keys": {
+    "up": 5,
+    "left": 7,
+    "down": 8,
+    "right": 9,
+    "a": 6
+   },
+   "notes": [],
+   "file": "roms/mastermind.ch8",
+   "sha1": "898ef1505c874065697ffc6cba688367e143d82e",
+   "status": "ok",
+   "result": {
+    "verified_records": 21155,
+    "error": null,
+    "foreign_opcodes": {},
+    "tokens_per_instruction": 5.83,
+    "realtime_tok_per_s": 6997
+   }
+  },
+  {
+   "id": "space-racer",
+   "title": "Space Racer",
+   "authors": [
+    "WilliamDonnelly"
+   ],
+   "year": "2017",
+   "description": "Based on the classic 2-player 'Space Race' video game.",
+   "source": "https://github.com/JohnEarnest/chip8Archive/master/roms/spaceracer.ch8",
+   "license": "CC0",
+   "platform": "octo",
+   "quirks": [],
+   "ipf": 20,
+   "keys": {
+    "up": 5,
+    "left": 7,
+    "down": 8,
+    "right": 9
+   },
+   "notes": [],
+   "file": "roms/space-racer.ch8",
+   "sha1": "659cb966e976fcbcae76f6a8a07c65be4d18aae8",
+   "status": "ok",
+   "result": {
+    "verified_records": 21155,
+    "error": null,
+    "foreign_opcodes": {},
+    "tokens_per_instruction": 8.99,
+    "realtime_tok_per_s": 10782
+   }
+  },
+  {
+   "id": "down8",
+   "title": "down8",
+   "authors": [
+    "tinaun"
+   ],
+   "year": "2015",
+   "description": "you fall down an endless hole and then you die!",
+   "source": "https://github.com/JohnEarnest/chip8Archive/master/roms/down8.ch8",
+   "license": "CC0",
+   "platform": "octo",
+   "quirks": [],
+   "ipf": 15,
+   "keys": {
+    "up": 5,
+    "left": 7,
+    "down": 8,
+    "right": 9,
+    "a": 6
+   },
+   "notes": [],
+   "file": "roms/down8.ch8",
+   "sha1": "1368d7eae124661aacaf3411819ca9c113c0c10c",
+   "status": "ok",
+   "result": {
+    "verified_records": 21543,
+    "error": null,
+    "foreign_opcodes": {},
+    "tokens_per_instruction": 4.88,
+    "realtime_tok_per_s": 4395
+   },
+   "controls": "Left/Right move",
+   "featured": 12
+  },
+  {
+   "id": "danm8ku",
+   "title": "Danm8ku",
+   "authors": [
+    "buffi"
+   ],
+   "year": "2015",
+   "description": "Bullet hell for the Chip-8! Survive 8 waves of exciting bullet patterns!",
+   "source": "https://github.com/JohnEarnest/chip8Archive/master/roms/danm8ku.ch8",
+   "license": "CC0",
+   "platform": "octo",
+   "quirks": [],
+   "ipf": 1000,
+   "keys": {
+    "up": 5,
+    "down": 8,
+    "left": 7,
+    "right": 9
+   },
+   "notes": [],
+   "file": "roms/danm8ku.ch8",
+   "sha1": "ff6b8ac59bf281cd4b5ab6e161600b00f85a0265",
+   "status": "ok",
+   "result": {
+    "verified_records": 20024,
+    "error": null,
+    "foreign_opcodes": {},
+    "tokens_per_instruction": 5.23,
+    "realtime_tok_per_s": 313647
+   }
+  },
+  {
+   "id": "chipquarium",
+   "title": "Chipquarium",
+   "authors": [
+    "mattmik"
+   ],
+   "year": "2016",
+   "description": "A CHIP-8 fish tank simulator.",
+   "source": "https://github.com/JohnEarnest/chip8Archive/master/roms/chipquarium.ch8",
+   "license": "CC0",
+   "platform": "octo",
+   "quirks": [
+    "clip",
+    "logic"
+   ],
+   "ipf": 15,
+   "keys": {
+    "up": 5,
+    "left": 7,
+    "down": 8,
+    "right": 9,
+    "a": 6
+   },
+   "notes": [],
+   "file": "roms/chipquarium.ch8",
+   "sha1": "f4392681b1fa38d7ad0a7d7a59cecf247ac1457a",
+   "status": "ok",
+   "result": {
+    "verified_records": 21543,
+    "error": null,
+    "foreign_opcodes": {},
+    "tokens_per_instruction": 5.65,
+    "realtime_tok_per_s": 5089
+   }
+  },
+  {
+   "id": "glitch-ghost",
+   "title": "Glitch Ghost",
+   "authors": [
+    "JackieKircher"
+   ],
+   "year": "2014",
+   "description": "glitch ghost is all alone in the cemetery, please help them make some friends by turning the trespassing humans into new ghosts!",
+   "source": "https://github.com/JohnEarnest/chip8Archive/master/roms/glitchGhost.ch8",
+   "license": "CC0",
+   "platform": "octo",
+   "quirks": [],
+   "ipf": 200,
+   "keys": {
+    "up": 5,
+    "left": 7,
+    "down": 8,
+    "right": 9,
+    "a": 6
+   },
+   "notes": [],
+   "file": "roms/glitch-ghost.ch8",
+   "sha1": "2cdcb3c29a5f013a991db5909ca8e18e27b3c42b",
+   "status": "ok",
+   "result": {
+    "verified_records": 20116,
+    "error": null,
+    "foreign_opcodes": {},
+    "tokens_per_instruction": 3.95,
+    "realtime_tok_per_s": 47360
+   }
+  },
+  {
+   "id": "spock-paper-scissors",
+   "title": "Spock Paper Scissors",
+   "authors": [
+    "fontz"
+   ],
+   "year": "2020",
+   "description": "Intergalactic Rock Paper Scissors.",
+   "source": "https://github.com/JohnEarnest/chip8Archive/master/roms/spockpaperscissors.ch8",
+   "license": "CC0",
+   "platform": "octo",
+   "quirks": [],
+   "ipf": 15,
+   "keys": {
+    "up": 5,
+    "left": 7,
+    "down": 8,
+    "right": 9,
+    "a": 6
+   },
+   "notes": [],
+   "file": "roms/spock-paper-scissors.ch8",
+   "sha1": "b66f55f83eb264d2b73c0b4ac81ea5044bf73138",
+   "status": "ok",
+   "result": {
+    "verified_records": 21543,
+    "error": null,
+    "foreign_opcodes": {},
+    "tokens_per_instruction": 4.49,
+    "realtime_tok_per_s": 4042
+   }
+  },
+  {
+   "id": "snek",
+   "title": "Snek",
+   "authors": [
+    "JohnEarnest"
+   ],
+   "year": "2021",
+   "description": "Minimalist Snake in 65 bytes.",
+   "source": "https://github.com/JohnEarnest/chip8Archive/master/roms/snek.ch8",
+   "license": "CC0",
+   "platform": "octo",
+   "quirks": [],
+   "ipf": 1000,
+   "keys": {
+    "up": 5,
+    "left": 7,
+    "down": 8,
+    "right": 9,
+    "a": 6
+   },
+   "notes": [],
+   "file": "roms/snek.ch8",
+   "sha1": "bb5740042385cae10724b051208bb95e5341f56d",
+   "status": "ok",
+   "result": {
+    "verified_records": 20024,
+    "error": null,
+    "foreign_opcodes": {},
+    "tokens_per_instruction": 3.68,
+    "realtime_tok_per_s": 220539
+   }
+  },
+  {
+   "id": "super-pong",
+   "title": "Super Pong",
+   "authors": [
+    "offstatic"
+   ],
+   "year": "2021",
+   "description": "A fast pong-like.",
+   "source": "https://github.com/JohnEarnest/chip8Archive/master/roms/superpong.ch8",
+   "license": "CC0",
+   "platform": "octo",
+   "quirks": [],
+   "ipf": 30,
+   "keys": {
+    "up": 5,
+    "left": 7,
+    "down": 8,
+    "right": 9,
+    "a": 6
+   },
+   "notes": [],
+   "file": "roms/super-pong.ch8",
+   "sha1": "2c761f70a44e521ee848834cfdd2bd1646157d29",
+   "status": "ok",
+   "result": {
+    "verified_records": 20772,
+    "error": null,
+    "foreign_opcodes": {},
+    "tokens_per_instruction": 3.95,
+    "realtime_tok_per_s": 7110
+   },
+   "controls": "WASD moves the paddles, Space (E) resets",
+   "featured": 5
+  },
+  {
+   "id": "wdl",
+   "title": "WDL",
+   "authors": [
+    "JohnEarnest"
+   ],
+   "year": "2022",
+   "description": "That word game, but shorter.",
+   "source": "https://github.com/JohnEarnest/chip8Archive/master/roms/wdl.ch8",
+   "license": "CC0",
+   "platform": "octo",
+   "quirks": [
+    "clip",
+    "logic"
+   ],
+   "ipf": 15,
+   "keys": {
+    "up": 5,
+    "left": 7,
+    "down": 8,
+    "right": 9,
+    "a": 6
+   },
+   "notes": [],
+   "file": "roms/wdl.ch8",
+   "sha1": "a8d6e9b1976c99ddc0c4818828a6d3cb3ae6f348",
+   "status": "ok",
+   "result": {
+    "verified_records": 21543,
+    "error": null,
+    "foreign_opcodes": {},
+    "tokens_per_instruction": 3.95,
+    "realtime_tok_per_s": 3555
+   }
+  },
+  {
+   "id": "knumber-knower",
+   "title": "Knumber Knower",
+   "authors": [
+    "JohnEarnest"
+   ],
+   "year": "2023",
+   "description": "A game of bad typography.",
+   "source": "https://github.com/JohnEarnest/chip8Archive/master/roms/knumberknower.ch8",
+   "license": "CC0",
+   "platform": "octo",
+   "quirks": [
+    "clip",
+    "logic"
+   ],
+   "ipf": 15,
+   "keys": {
+    "up": 5,
+    "left": 7,
+    "right": 9
+   },
+   "notes": [],
+   "file": "roms/knumber-knower.ch8",
+   "sha1": "95f4af2d410c1acfd1b0657721a870a57c55b49b",
+   "status": "ok",
+   "result": {
+    "verified_records": 21543,
+    "error": null,
+    "foreign_opcodes": {},
+    "tokens_per_instruction": 6.05,
+    "realtime_tok_per_s": 5445
+   }
+  },
+  {
+   "id": "dino-run",
+   "title": "Dino Run",
+   "authors": [
+    "Andrezinrc"
+   ],
+   "year": "2026",
+   "description": "An endless runner game for Chip-8.",
+   "source": "https://github.com/JohnEarnest/chip8Archive/master/roms/dinorun.ch8",
+   "license": "CC0",
+   "platform": "octo",
+   "quirks": [
+    "clip",
+    "logic"
+   ],
+   "ipf": 15,
+   "keys": {
+    "up": 5,
+    "left": 7,
+    "down": 8,
+    "right": 9,
+    "a": 6
+   },
+   "notes": [],
+   "file": "roms/dino-run.ch8",
+   "sha1": "1a7a2138161b06e083722f978f8cbaaa1ad5344d",
+   "status": "ok",
+   "result": {
+    "verified_records": 21543,
+    "error": null,
+    "foreign_opcodes": {},
+    "tokens_per_instruction": 4.65,
+    "realtime_tok_per_s": 4189
+   },
+   "controls": "Up or Space jumps",
+   "featured": 13
+  },
+  {
+   "id": "tick",
+   "title": "Tick",
+   "authors": [
+    "StanislavDidus"
+   ],
+   "year": "2026",
+   "description": "Rhythm one button game for Chip-8",
+   "source": "https://github.com/JohnEarnest/chip8Archive/master/roms/tick.ch8",
+   "license": "CC0",
+   "platform": "octo",
+   "quirks": [
+    "logic"
+   ],
+   "ipf": 12,
+   "keys": {
+    "up": 5,
+    "left": 7,
+    "down": 8,
+    "right": 9,
+    "a": 6
+   },
+   "notes": [],
+   "file": "roms/tick.ch8",
+   "sha1": "3d81c0462c722c2d8a79f6e1b571e9aa21d36b1f",
+   "status": "ok",
+   "result": {
+    "verified_records": 21916,
+    "error": null,
+    "foreign_opcodes": {},
+    "tokens_per_instruction": 7.26,
+    "realtime_tok_per_s": 5227
+   }
+  },
+  {
+   "id": "mato8",
+   "title": "Mato8",
+   "authors": [
+    "nortti"
+   ],
+   "year": "2023",
+   "description": "Snake game (matopeli in Finnish)",
+   "source": "https://github.com/JohnEarnest/chip8Archive/master/roms/mato8.ch8",
+   "license": "CC0",
+   "platform": "octo",
+   "quirks": [],
+   "ipf": 20,
+   "keys": {
+    "up": 5,
+    "left": 7,
+    "down": 8,
+    "right": 9,
+    "a": 6
+   },
+   "notes": [],
+   "file": "roms/mato8.ch8",
+   "sha1": "673f98c66168190aa5b1e5dda5d0d80da7826dd1",
+   "status": "ok",
+   "result": {
+    "verified_records": 21155,
+    "error": null,
+    "foreign_opcodes": {},
+    "tokens_per_instruction": 5.18,
+    "realtime_tok_per_s": 6215
+   }
+  },
+  {
+   "id": "15-puzzle",
+   "title": "15 Puzzle",
+   "authors": [
+    "Roger Ivie"
+   ],
+   "year": "19xx",
+   "description": "15 Puzzle, by Roger Ivie Rearrange the tiles into the sequence 0-F. Moves tile by it associated key.",
+   "source": "https://github.com/kripod/chip8-roms/blob/master/games/15%20Puzzle%20%5BRoger%20Ivie%5D.ch8",
+   "license": "freely distributable (Revival Studios CHIP-8 pack)",
+   "platform": "originalChip8",
+   "quirks": [
+    "clip",
+    "logic"
+   ],
+   "ipf": 15,
+   "keys": {},
+   "notes": [
+    "platform waits for vblank on draw; not modelled"
+   ],
+   "file": "roms/15-puzzle.ch8",
+   "sha1": "ea9af3c09b0d9e265fcd92bcc5d51a2939fdf27a",
+   "status": "ok",
+   "result": {
+    "verified_records": 21543,
+    "error": null,
+    "foreign_opcodes": {},
+    "tokens_per_instruction": 4.2,
+    "realtime_tok_per_s": 3777
+   }
+  },
+  {
+   "id": "addition-problems",
+   "title": "Addition Problems",
+   "authors": [
+    "Paul C. Moews"
+   ],
+   "year": "1979",
+   "description": "Addition Problems, by Paul C. Moews Do simple math.",
+   "source": "https://github.com/kripod/chip8-roms/blob/master/games/Addition%20Problems%20%5BPaul%20C.%20Moews%5D.ch8",
+   "license": "freely distributable (Revival Studios CHIP-8 pack)",
+   "platform": "originalChip8",
+   "quirks": [
+    "clip",
+    "logic"
+   ],
+   "ipf": 15,
+   "keys": {},
+   "notes": [
+    "platform waits for vblank on draw; not modelled"
+   ],
+   "file": "roms/addition-problems.ch8",
+   "sha1": "feaa2b999737630a6402e990df4d0558f79ba43e",
+   "status": "ok",
+   "result": {
+    "verified_records": 21543,
+    "error": null,
+    "foreign_opcodes": {},
+    "tokens_per_instruction": 10.73,
+    "realtime_tok_per_s": 9657
+   }
+  },
+  {
+   "id": "airplane",
+   "title": "Airplane",
+   "authors": [],
+   "year": "19xx",
+   "description": "Airplane - Blitz type of bombing game. Hit \"8\" to drop a bomb.",
+   "source": "https://github.com/kripod/chip8-roms/blob/master/games/Airplane.ch8",
+   "license": "freely distributable (Revival Studios CHIP-8 pack)",
+   "platform": "originalChip8",
+   "quirks": [
+    "clip",
+    "logic"
+   ],
+   "ipf": 15,
+   "keys": {},
+   "notes": [
+    "platform waits for vblank on draw; not modelled"
+   ],
+   "file": "roms/airplane.ch8",
+   "sha1": "fca71182a8838b686573e69b22aff945d79fe1d0",
+   "status": "ok",
+   "result": {
+    "verified_records": 21543,
+    "error": null,
+    "foreign_opcodes": {},
+    "tokens_per_instruction": 5.78,
+    "realtime_tok_per_s": 5204
+   }
+  },
+  {
+   "id": "animal-race",
+   "title": "Animal Race",
+   "authors": [
+    "Brian Astle"
+   ],
+   "year": null,
+   "description": "This version does not have the Fx55/Fx65 (load_store_quirk) issue (where score won't increment and rendered garbage). I believe this is the original version.",
+   "source": "https://github.com/kripod/chip8-roms/blob/master/games/Animal%20Race%20%5BBrian%20Astle%5D.ch8",
+   "license": "freely distributable (Revival Studios CHIP-8 pack)",
+   "platform": "originalChip8",
+   "quirks": [
+    "clip",
+    "logic"
+   ],
+   "ipf": 15,
+   "keys": {},
+   "notes": [
+    "platform waits for vblank on draw; not modelled"
+   ],
+   "file": "roms/animal-race.ch8",
+   "sha1": "a27dcf88a931f70c3ccf3c01a5410b263bac48bc",
+   "status": "ok",
+   "result": {
+    "verified_records": 21543,
+    "error": null,
+    "foreign_opcodes": {},
+    "tokens_per_instruction": 6.67,
+    "realtime_tok_per_s": 6005
+   }
+  },
+  {
+   "id": "astro-dodge",
+   "title": "Astro Dodge",
+   "authors": [
+    "Revival Studios",
+    "Martijn Wenting"
+   ],
+   "year": "2008",
+   "description": "----------------------------------------------------------------------------- ///////////////// ////////////////// //// //// //// /////////// //// /////////// //// //// //// /////////// //// ////////// www.revival-studios.com\u2026",
+   "source": "https://github.com/kripod/chip8-roms/blob/master/games/Astro%20Dodge%20%5BRevival%20Studios%2C%202008%5D.ch8",
+   "license": "freely distributable (Revival Studios CHIP-8 pack)",
+   "platform": "originalChip8",
+   "quirks": [
+    "clip",
+    "logic"
+   ],
+   "ipf": 15,
+   "keys": {},
+   "notes": [
+    "platform waits for vblank on draw; not modelled",
+    "not in the CHIP-8 database as a lores CHIP-8 game; COSMAC quirks assumed"
+   ],
+   "file": "roms/astro-dodge.ch8",
+   "sha1": "ac621d9fcada302ba6965768229ef130630bc525",
+   "status": "ok",
+   "result": {
+    "verified_records": 21543,
+    "error": null,
+    "foreign_opcodes": {},
+    "tokens_per_instruction": 7.24,
+    "realtime_tok_per_s": 6514
+   }
+  },
+  {
+   "id": "biorhythm",
+   "title": "Biorhythm",
+   "authors": [
+    "Jef Winsor"
+   ],
+   "year": null,
+   "description": "13. VIP Biorhythm The theory of Biorhythm states that there are thre predominant cycles that can influence human behavior. These include a 23-day physical cycle, a 28-day emotional cycle and a 33-day intellectual cycle. All three cycles start at birth and continue throughout\u2026",
+   "source": "https://github.com/kripod/chip8-roms/blob/master/games/Biorhythm%20%5BJef%20Winsor%5D.ch8",
+   "license": "freely distributable (Revival Studios CHIP-8 pack)",
+   "platform": "originalChip8",
+   "quirks": [
+    "clip",
+    "logic"
+   ],
+   "ipf": 15,
+   "keys": {},
+   "notes": [
+    "platform waits for vblank on draw; not modelled"
+   ],
+   "file": "roms/biorhythm.ch8",
+   "sha1": "3368d56efeb584c509bafb548f1ee5e71ac1bc70",
+   "status": "ok",
+   "result": {
+    "verified_records": 21543,
+    "error": null,
+    "foreign_opcodes": {},
+    "tokens_per_instruction": 6.66,
+    "realtime_tok_per_s": 5995
+   }
+  },
+  {
+   "id": "blinky",
+   "title": "Blinky",
+   "authors": [
+    "Hans Christian Egeberg"
+   ],
+   "year": "1991",
+   "description": "Blinky (1991), by Hans Christian Egeberg Pacman clone. 3, 6 - down/up. 7, 8 - left/right",
+   "source": "https://github.com/kripod/chip8-roms/blob/master/games/Blinky%20%5BHans%20Christian%20Egeberg%2C%201991%5D.ch8",
+   "license": "freely distributable (Revival Studios CHIP-8 pack)",
+   "platform": "superchip",
+   "quirks": [
+    "shift",
+    "loadstore",
+    "clip",
+    "jump"
+   ],
+   "ipf": 30,
+   "keys": {
+    "up": 6,
+    "down": 3,
+    "left": 7,
+    "right": 8
+   },
+   "notes": [],
+   "file": "roms/blinky.ch8",
+   "sha1": "d40abc54374e4343639f993e897e00904ddf85d9",
+   "status": "ok",
+   "result": {
+    "verified_records": 20772,
+    "error": null,
+    "foreign_opcodes": {},
+    "tokens_per_instruction": 5.41,
+    "realtime_tok_per_s": 9732
+   },
+   "controls": "Arrow keys steer through the maze",
+   "featured": 3
+  },
+  {
+   "id": "blitz",
+   "title": "Blitz",
+   "authors": [
+    "David Winter"
+   ],
+   "year": "1996",
+   "description": "Blitz, by David Winter This game is a BOMBER clone. You are in a plane, and you must destroy the towers of a town. Your plane is flying left to right, and goes down. Use 5 to drop a bomb. The game ends when you crash yourself on a tower...",
+   "source": "https://github.com/kripod/chip8-roms/blob/master/games/Blitz%20%5BDavid%20Winter%5D.ch8",
+   "license": "freely distributable (Revival Studios CHIP-8 pack)",
+   "platform": "originalChip8",
+   "quirks": [
+    "clip",
+    "logic"
+   ],
+   "ipf": 15,
+   "keys": {
+    "a": 5
+   },
+   "notes": [
+    "platform waits for vblank on draw; not modelled"
+   ],
+   "file": "roms/blitz.ch8",
+   "sha1": "6f6509f38220e057a7e32ebb22dd353c1078e3e7",
+   "status": "ok",
+   "result": {
+    "verified_records": 21543,
+    "error": null,
+    "foreign_opcodes": {},
+    "tokens_per_instruction": 4.52,
+    "realtime_tok_per_s": 4071
+   }
+  },
+  {
+   "id": "bowling",
+   "title": "Bowling",
+   "authors": [
+    "Gooitzen van der Wal"
+   ],
+   "year": null,
+   "description": "7. VIP Bowling Bowling is a great game for recreation and competion requiring skill and a little bit of luck. This program simulates bowling closely with regular scoring and the option of using three different spins on the ball. How to play VIP Bowling 1. Load the CHIP-8\u2026",
+   "source": "https://github.com/kripod/chip8-roms/blob/master/games/Bowling%20%5BGooitzen%20van%20der%20Wal%5D.ch8",
+   "license": "freely distributable (Revival Studios CHIP-8 pack)",
+   "platform": "originalChip8",
+   "quirks": [
+    "clip",
+    "logic"
+   ],
+   "ipf": 15,
+   "keys": {},
+   "notes": [
+    "platform waits for vblank on draw; not modelled"
+   ],
+   "file": "roms/bowling.ch8",
+   "sha1": "b3fed4ed1eb0ed693c9731dbe53b29a76236c781",
+   "status": "ok",
+   "result": {
+    "verified_records": 21543,
+    "error": null,
+    "foreign_opcodes": {},
+    "tokens_per_instruction": 5.43,
+    "realtime_tok_per_s": 4884
+   }
+  },
+  {
+   "id": "breakout",
+   "title": "Breakout",
+   "authors": [
+    "David Winter"
+   ],
+   "year": "1997",
+   "description": "Breakout (Brix hack) 1997, by David Winter This game is an \"arkanoid\" precursor. You have 5 lives, and your goal is the destruction of all the brixs. Use 4 and 6 to move your paddle. The game ends when all the brixs are destroyed. This game is the same than BRIX, but has\u2026",
+   "source": "https://github.com/kripod/chip8-roms/blob/master/games/Breakout%20%28Brix%20hack%29%20%5BDavid%20Winter%2C%201997%5D.ch8",
+   "license": "freely distributable (Revival Studios CHIP-8 pack)",
+   "platform": "originalChip8",
+   "quirks": [
+    "clip",
+    "logic"
+   ],
+   "ipf": 15,
+   "keys": {
+    "left": 4,
+    "right": 6
+   },
+   "notes": [
+    "platform waits for vblank on draw; not modelled"
+   ],
+   "file": "roms/breakout.ch8",
+   "sha1": "237756a4014fb3aa82a29246a7cdd534f8dc2dbb",
+   "status": "ok",
+   "result": {
+    "verified_records": 21543,
+    "error": null,
+    "foreign_opcodes": {},
+    "tokens_per_instruction": 4.71,
+    "realtime_tok_per_s": 4237
+   }
+  },
+  {
+   "id": "breakout-2",
+   "title": "Breakout",
+   "authors": [
+    "Carmelo Cortez"
+   ],
+   "year": "1979",
+   "description": "Breakout, by: Carmelo Cortez The game, Breakout, is a variation of the Wipe-Off game. You have six walls and 20 balls to start. To win you must get through all walls to the top of the screen. At the end of the game the program will show the number of times you hit the walls and\u2026",
+   "source": "https://github.com/kripod/chip8-roms/blob/master/games/Breakout%20%5BCarmelo%20Cortez%2C%201979%5D.ch8",
+   "license": "freely distributable (Revival Studios CHIP-8 pack)",
+   "platform": "originalChip8",
+   "quirks": [
+    "clip",
+    "logic"
+   ],
+   "ipf": 15,
+   "keys": {},
+   "notes": [
+    "platform waits for vblank on draw; not modelled"
+   ],
+   "file": "roms/breakout-2.ch8",
+   "sha1": "193915dcde1365ae054c4eaa21a35baa27cd3356",
+   "status": "ok",
+   "result": {
+    "verified_records": 21543,
+    "error": null,
+    "foreign_opcodes": {},
+    "tokens_per_instruction": 5.55,
+    "realtime_tok_per_s": 4993
+   }
+  },
+  {
+   "id": "brick",
+   "title": "Brick",
+   "authors": [],
+   "year": "1990",
+   "description": "BRICK (Brix hack), 1990 A modified version of BRIX, a CHIP-8 game. Original BRIX by Andreas Gustafsson. This one is a solid wall; no air between bricks! 4, 6 - left/right",
+   "source": "https://github.com/kripod/chip8-roms/blob/master/games/Brick%20%28Brix%20hack%2C%201990%29.ch8",
+   "license": "freely distributable (Revival Studios CHIP-8 pack)",
+   "platform": "originalChip8",
+   "quirks": [
+    "clip",
+    "logic"
+   ],
+   "ipf": 15,
+   "keys": {},
+   "notes": [
+    "platform waits for vblank on draw; not modelled"
+   ],
+   "file": "roms/brick.ch8",
+   "sha1": "91442577a6bbf8c3267f2df95fdfc50baebe176d",
+   "status": "ok",
+   "result": {
+    "verified_records": 21543,
+    "error": null,
+    "foreign_opcodes": {},
+    "tokens_per_instruction": 5.12,
+    "realtime_tok_per_s": 4605
+   }
+  },
+  {
+   "id": "brix",
+   "title": "Brix",
+   "authors": [
+    "Andreas Gustafsson"
+   ],
+   "year": "1990",
+   "description": "Brix - by Andreas Gustafsson (1990) ----------------------------------- This game is an \"arkanoid\" precursor. You have 5 lives, and your goal is the destruction of all the brixs. Use 4 and 6 to move your paddle. The game ends when all the brixs are destroyed.",
+   "source": "https://github.com/kripod/chip8-roms/blob/master/games/Brix%20%5BAndreas%20Gustafsson%2C%201990%5D.ch8",
+   "license": "freely distributable (Revival Studios CHIP-8 pack)",
+   "platform": "originalChip8",
+   "quirks": [
+    "clip",
+    "logic"
+   ],
+   "ipf": 15,
+   "keys": {
+    "left": 4,
+    "right": 6
+   },
+   "notes": [
+    "platform waits for vblank on draw; not modelled"
+   ],
+   "file": "roms/brix.ch8",
+   "sha1": "f13766c14aeb02ad8d4d103cb5eadd282d20cddc",
+   "status": "ok",
+   "result": {
+    "verified_records": 21543,
+    "error": null,
+    "foreign_opcodes": {},
+    "tokens_per_instruction": 4.48,
+    "realtime_tok_per_s": 4033
+   },
+   "controls": "Left/Right move the paddle",
+   "featured": 2
+  },
+  {
+   "id": "cave",
+   "title": "Cave",
+   "authors": [],
+   "year": "19xx",
+   "description": "Cave (199x) Guide the dot to end of the cave maze without bumping into a wall. Navigation: 4, 6, 2, 8.",
+   "source": "https://github.com/kripod/chip8-roms/blob/master/games/Cave.ch8",
+   "license": "freely distributable (Revival Studios CHIP-8 pack)",
+   "platform": "originalChip8",
+   "quirks": [
+    "clip",
+    "logic"
+   ],
+   "ipf": 15,
+   "keys": {},
+   "notes": [
+    "platform waits for vblank on draw; not modelled"
+   ],
+   "file": "roms/cave.ch8",
+   "sha1": "5c82520906073287a3ef781746c67207ca084d93",
+   "status": "ok",
+   "result": {
+    "verified_records": 21543,
+    "error": null,
+    "foreign_opcodes": {},
+    "tokens_per_instruction": 4.7,
+    "realtime_tok_per_s": 4226
+   }
+  },
+  {
+   "id": "coin-flipping",
+   "title": "Coin Flipping",
+   "authors": [
+    "Carmelo Cortez"
+   ],
+   "year": "1978",
+   "description": "Coin Flipping (1978), by Carmelo Cortez The game is a Coin FlLpping program. Flip run up and the computer starts to flip a coin, and at the same tine shosing heads and tails on the screen, stopping at the value set in VC.",
+   "source": "https://github.com/kripod/chip8-roms/blob/master/games/Coin%20Flipping%20%5BCarmelo%20Cortez%2C%201978%5D.ch8",
+   "license": "freely distributable (Revival Studios CHIP-8 pack)",
+   "platform": "originalChip8",
+   "quirks": [
+    "clip",
+    "logic"
+   ],
+   "ipf": 15,
+   "keys": {},
+   "notes": [
+    "platform waits for vblank on draw; not modelled"
+   ],
+   "file": "roms/coin-flipping.ch8",
+   "sha1": "614a2b3d0bb5d62a16d963ac2d3a79eb3dd22742",
+   "status": "ok",
+   "result": {
+    "verified_records": 21543,
+    "error": null,
+    "foreign_opcodes": {},
+    "tokens_per_instruction": 4.52,
+    "realtime_tok_per_s": 4068
+   }
+  },
+  {
+   "id": "connect-4",
+   "title": "Connect 4",
+   "authors": [
+    "David Winter"
+   ],
+   "year": "1996",
+   "description": "Connect 4, by David Winter This game is for two players. The goal is to align 4 coins in the game area. Each player's coins are colored. When you drop a coin, it is paced on the latest dropped coin in the same column, or at the bottom if the column is empty. Once the column is\u2026",
+   "source": "https://github.com/kripod/chip8-roms/blob/master/games/Connect%204%20%5BDavid%20Winter%5D.ch8",
+   "license": "freely distributable (Revival Studios CHIP-8 pack)",
+   "platform": "superchip",
+   "quirks": [
+    "shift",
+    "loadstore",
+    "clip",
+    "jump"
+   ],
+   "ipf": 30,
+   "keys": {
+    "left": 4,
+    "right": 6,
+    "a": 5
+   },
+   "notes": [],
+   "file": "roms/connect-4.ch8",
+   "sha1": "2d10c07b532f4fa7c07a07324ba26ca39fe484fd",
+   "status": "ok",
+   "result": {
+    "verified_records": 20772,
+    "error": null,
+    "foreign_opcodes": {},
+    "tokens_per_instruction": 4.85,
+    "realtime_tok_per_s": 8727
+   }
+  },
+  {
+   "id": "craps",
+   "title": "Craps",
+   "authors": [
+    "Camerlo Cortez"
+   ],
+   "year": "1978",
+   "description": "Craps (1978) by: Camerlo Cortez To use the Craps program, press any key to roll dice. 7 or 11 wins, 12, 2 or 3 loses on first roll. The second roll must match the first to win, but if you roll a seven you lose. This program could be expanded to include on-the-screen scoring of\u2026",
+   "source": "https://github.com/kripod/chip8-roms/blob/master/games/Craps%20%5BCamerlo%20Cortez%2C%201978%5D.ch8",
+   "license": "freely distributable (Revival Studios CHIP-8 pack)",
+   "platform": "originalChip8",
+   "quirks": [
+    "clip",
+    "logic"
+   ],
+   "ipf": 15,
+   "keys": {},
+   "notes": [
+    "platform waits for vblank on draw; not modelled"
+   ],
+   "file": "roms/craps.ch8",
+   "sha1": "35158696bd94ea22ef34e899fff1f15f7154d4fd",
+   "status": "ok",
+   "result": {
+    "verified_records": 21543,
+    "error": null,
+    "foreign_opcodes": {},
+    "tokens_per_instruction": 3.62,
+    "realtime_tok_per_s": 3258
+   }
+  },
+  {
+   "id": "deflection",
+   "title": "Deflection",
+   "authors": [
+    "John Fort"
+   ],
+   "year": null,
+   "description": "8. VIP DEFLECTION In the VIP Deflection game you position mirrors anywhere on the display screen. The object of the game is to deflect a ball of the mirrors a maximum number of times before hitting the target. The number of deflections times the target number gives you\u2026",
+   "source": "https://github.com/kripod/chip8-roms/blob/master/games/Deflection%20%5BJohn%20Fort%5D.ch8",
+   "license": "freely distributable (Revival Studios CHIP-8 pack)",
+   "platform": "originalChip8",
+   "quirks": [
+    "clip",
+    "logic"
+   ],
+   "ipf": 15,
+   "keys": {},
+   "notes": [
+    "platform waits for vblank on draw; not modelled"
+   ],
+   "file": "roms/deflection.ch8",
+   "sha1": "8e5f19d8ae9f3346779613359610967a5ed95fa8",
+   "status": "ok",
+   "result": {
+    "verified_records": 21543,
+    "error": null,
+    "foreign_opcodes": {},
+    "tokens_per_instruction": 4.2,
+    "realtime_tok_per_s": 3780
+   }
+  },
+  {
+   "id": "figures",
+   "title": "Figures",
+   "authors": [],
+   "year": null,
+   "description": "Figures - by ??? (unknown author)(xxxx) --------------------------------------- Kind of Tetris with numbers. Controls: --------- 4 and 6 to move 2 to do something (?)",
+   "source": "https://github.com/kripod/chip8-roms/blob/master/games/Figures.ch8",
+   "license": "freely distributable (Revival Studios CHIP-8 pack)",
+   "platform": "originalChip8",
+   "quirks": [
+    "clip",
+    "logic"
+   ],
+   "ipf": 15,
+   "keys": {},
+   "notes": [
+    "platform waits for vblank on draw; not modelled"
+   ],
+   "file": "roms/figures.ch8",
+   "sha1": "3b2bf5dc7ffb5f3fbe168e802079f79730535ca8",
+   "status": "ok",
+   "result": {
+    "verified_records": 21543,
+    "error": null,
+    "foreign_opcodes": {},
+    "tokens_per_instruction": 5.19,
+    "realtime_tok_per_s": 4669
+   }
+  },
+  {
+   "id": "filter",
+   "title": "Filter",
+   "authors": [],
+   "year": null,
+   "description": "Filter Catch the drop coming from the pipe at the top of the screen with your paddle.",
+   "source": "https://github.com/kripod/chip8-roms/blob/master/games/Filter.ch8",
+   "license": "freely distributable (Revival Studios CHIP-8 pack)",
+   "platform": "originalChip8",
+   "quirks": [
+    "clip",
+    "logic"
+   ],
+   "ipf": 15,
+   "keys": {},
+   "notes": [
+    "platform waits for vblank on draw; not modelled"
+   ],
+   "file": "roms/filter.ch8",
+   "sha1": "ae71a7b081a947f1760cdc147759803aea45e751",
+   "status": "ok",
+   "result": {
+    "verified_records": 21543,
+    "error": null,
+    "foreign_opcodes": {},
+    "tokens_per_instruction": 4.02,
+    "realtime_tok_per_s": 3619
+   }
+  },
+  {
+   "id": "guess-the-number",
+   "title": "Guess the Number",
+   "authors": [
+    "David Winter"
+   ],
+   "year": "1996",
+   "description": "Guess, by David Winter Think to a number between 1 and 63. CHIP8 shows you several boards and you have to tell if you see your number in them. Press 5 if so, or another key if not. CHIP8 gives you the number...",
+   "source": "https://github.com/kripod/chip8-roms/blob/master/games/Guess%20%5BDavid%20Winter%5D.ch8",
+   "license": "freely distributable (Revival Studios CHIP-8 pack)",
+   "platform": "originalChip8",
+   "quirks": [
+    "clip",
+    "logic"
+   ],
+   "ipf": 15,
+   "keys": {
+    "a": 5,
+    "b": 6
+   },
+   "notes": [
+    "platform waits for vblank on draw; not modelled"
+   ],
+   "file": "roms/guess-the-number.ch8",
+   "sha1": "137cb8397456f53fcab216124458238bc18c0965",
+   "status": "ok",
+   "result": {
+    "verified_records": 21543,
+    "error": null,
+    "foreign_opcodes": {},
+    "tokens_per_instruction": 4.72,
+    "realtime_tok_per_s": 4248
+   }
+  },
+  {
+   "id": "hi-lo",
+   "title": "Hi-Lo",
+   "authors": [
+    "Jef Winsor"
+   ],
+   "year": "1978",
+   "description": "Hi-Lo, by Jef Winsor You have 10 chances to guess the value of a random number between 00 and 99 selected by the program. The number at the right of the screen shows the number of the guess you are using. Enter a two digit number and the computer tells you if you are high or\u2026",
+   "source": "https://github.com/kripod/chip8-roms/blob/master/games/Hi-Lo%20%5BJef%20Winsor%2C%201978%5D.ch8",
+   "license": "freely distributable (Revival Studios CHIP-8 pack)",
+   "platform": "originalChip8",
+   "quirks": [
+    "clip",
+    "logic"
+   ],
+   "ipf": 15,
+   "keys": {},
+   "notes": [
+    "platform waits for vblank on draw; not modelled"
+   ],
+   "file": "roms/hi-lo.ch8",
+   "sha1": "dbb52193db4063149c3d8768ab47dd740d90955c",
+   "status": "ok",
+   "result": {
+    "verified_records": 21543,
+    "error": null,
+    "foreign_opcodes": {},
+    "tokens_per_instruction": 3.56,
+    "realtime_tok_per_s": 3207
+   }
+  },
+  {
+   "id": "hidden",
+   "title": "Hidden",
+   "authors": [
+    "David Winter"
+   ],
+   "year": "1996",
+   "description": "HIDDEN is a \"memory\" game. It is very simple to play. The rules are as follow: your goal is to find all the identical cards in a minimum time. You are playing in a 4*4 card grid. You can see only two cards at the same time. Once this time passed, these two cards will remain\u2026",
+   "source": "https://github.com/kripod/chip8-roms/blob/master/games/Hidden%20%5BDavid%20Winter%2C%201996%5D.ch8",
+   "license": "freely distributable (Revival Studios CHIP-8 pack)",
+   "platform": "originalChip8",
+   "quirks": [
+    "clip",
+    "logic"
+   ],
+   "ipf": 15,
+   "keys": {
+    "up": 2,
+    "left": 4,
+    "right": 6,
+    "down": 8,
+    "a": 5
+   },
+   "notes": [
+    "platform waits for vblank on draw; not modelled"
+   ],
+   "file": "roms/hidden.ch8",
+   "sha1": "050f07a54371da79f924dd0227b89d07b4f2aed0",
+   "status": "ok",
+   "result": {
+    "verified_records": 21543,
+    "error": null,
+    "foreign_opcodes": {},
+    "tokens_per_instruction": 7.94,
+    "realtime_tok_per_s": 7143
+   }
+  },
+  {
+   "id": "kaleidoscope",
+   "title": "Kaleidoscope",
+   "authors": [
+    "Joseph Weisbecker"
+   ],
+   "year": "1978",
+   "description": "Kaleidoscope (1978), by Joseph Weisbecker Four spots appear in a group at the center of the screen. Press keys 2, 4, 6, or 8 to create a pattern. Keep your pattern smaller than 138 key depressions. Push key 0 to terminate pattern entry. Pushing key 0 causes your pattern to be\u2026",
+   "source": "https://github.com/kripod/chip8-roms/blob/master/games/Kaleidoscope%20%5BJoseph%20Weisbecker%2C%201978%5D.ch8",
+   "license": "freely distributable (Revival Studios CHIP-8 pack)",
+   "platform": "originalChip8",
+   "quirks": [
+    "clip",
+    "logic"
+   ],
+   "ipf": 15,
+   "keys": {
+    "up": 2,
+    "left": 4,
+    "right": 6,
+    "down": 8,
+    "a": 5,
+    "b": 0
+   },
+   "notes": [
+    "platform waits for vblank on draw; not modelled"
+   ],
+   "file": "roms/kaleidoscope.ch8",
+   "sha1": "fc724ae0125f5f1ac94a79fe3afc6318b1f57556",
+   "status": "ok",
+   "result": {
+    "verified_records": 21543,
+    "error": null,
+    "foreign_opcodes": {},
+    "tokens_per_instruction": 5.82,
+    "realtime_tok_per_s": 5236
+   }
+  },
+  {
+   "id": "landing",
+   "title": "Landing",
+   "authors": [],
+   "year": null,
+   "description": "Landing - by ??? (unknown author)(xxxx) --------------------------------------- Try to flatten the field for landing (?). Controls: --------- Key 9 drops a bomb.",
+   "source": "https://github.com/kripod/chip8-roms/blob/master/games/Landing.ch8",
+   "license": "freely distributable (Revival Studios CHIP-8 pack)",
+   "platform": "originalChip8",
+   "quirks": [
+    "clip",
+    "logic"
+   ],
+   "ipf": 15,
+   "keys": {},
+   "notes": [
+    "platform waits for vblank on draw; not modelled"
+   ],
+   "file": "roms/landing.ch8",
+   "sha1": "72fb3e0a4572bdb81f484df7948a8bc736fe78d0",
+   "status": "ok",
+   "result": {
+    "verified_records": 21543,
+    "error": null,
+    "foreign_opcodes": {},
+    "tokens_per_instruction": 4.92,
+    "realtime_tok_per_s": 4431
+   }
+  },
+  {
+   "id": "lunar-lander",
+   "title": "Lunar Lander",
+   "authors": [],
+   "year": null,
+   "description": "15. Lunar Lander You are descending to the floor of a 250-foot crater. The right side of the TV display shows amount of fuel, feet from bottom and fall rate per cycle. Lenght of fall rate cycle changes from about 1/4 second to one second. The fall rate increases by one foot per\u2026",
+   "source": "https://github.com/kripod/chip8-roms/blob/master/games/Lunar%20Lander%20%28Udo%20Pernisz%2C%201979%29.ch8",
+   "license": "freely distributable (Revival Studios CHIP-8 pack)",
+   "platform": "originalChip8",
+   "quirks": [
+    "clip",
+    "logic"
+   ],
+   "ipf": 15,
+   "keys": {},
+   "notes": [
+    "platform waits for vblank on draw; not modelled"
+   ],
+   "file": "roms/lunar-lander.ch8",
+   "sha1": "72e8f3a10a32bd7fb91322ecab87249f95e81e57",
+   "status": "ok",
+   "result": {
+    "verified_records": 21543,
+    "error": null,
+    "foreign_opcodes": {},
+    "tokens_per_instruction": 6.77,
+    "realtime_tok_per_s": 6091
+   }
+  },
+  {
+   "id": "mastermind-fourrow",
+   "title": "Mastermind FourRow",
+   "authors": [
+    "Robert Lindley"
+   ],
+   "year": "1978",
+   "description": "MASTERMIND by Robert Lindley I have progranmed two versLons of the game Mastermind. This game is distributed by Invicta Plastics, Suite 940, 200 - 5th Ave., New York, NY 10010, and is available most pLaces where toys and games are sold. For complete details of the game, please\u2026",
+   "source": "https://github.com/kripod/chip8-roms/blob/master/games/Mastermind%20FourRow%20%28Robert%20Lindley%2C%201978%29.ch8",
+   "license": "freely distributable (Revival Studios CHIP-8 pack)",
+   "platform": "originalChip8",
+   "quirks": [
+    "clip",
+    "logic"
+   ],
+   "ipf": 15,
+   "keys": {},
+   "notes": [
+    "platform waits for vblank on draw; not modelled"
+   ],
+   "file": "roms/mastermind-fourrow.ch8",
+   "sha1": "669e32b6f42f52da658e428f501aabcdfa37fb2e",
+   "status": "ok",
+   "result": {
+    "verified_records": 21543,
+    "error": null,
+    "foreign_opcodes": {},
+    "tokens_per_instruction": 4.69,
+    "realtime_tok_per_s": 4223
+   }
+  },
+  {
+   "id": "merlin",
+   "title": "Merlin",
+   "authors": [
+    "David Winter"
+   ],
+   "year": null,
+   "description": "Merlin, by David Winter This is the SIMON game. The goal is to remember in which order the squares are lighted. The game begins by lighting 4 random squares, and then asks you to light the squares in the correct order. You win a level when you give the exact order, and each\u2026",
+   "source": "https://github.com/kripod/chip8-roms/blob/master/games/Merlin%20%5BDavid%20Winter%5D.ch8",
+   "license": "freely distributable (Revival Studios CHIP-8 pack)",
+   "platform": "originalChip8",
+   "quirks": [
+    "clip",
+    "logic"
+   ],
+   "ipf": 15,
+   "keys": {},
+   "notes": [
+    "platform waits for vblank on draw; not modelled"
+   ],
+   "file": "roms/merlin.ch8",
+   "sha1": "d979858bb9ffd07b48f52f92a8bcac0199f3623e",
+   "status": "ok",
+   "result": {
+    "verified_records": 21543,
+    "error": null,
+    "foreign_opcodes": {},
+    "tokens_per_instruction": 3.97,
+    "realtime_tok_per_s": 3577
+   }
+  },
+  {
+   "id": "missile-command",
+   "title": "Missile Command",
+   "authors": [
+    "David Winter"
+   ],
+   "year": "1996",
+   "description": "Missile Command - by David Winter (19xx) ---------------------------------------- You must shoot the 8 targets on the screen using key 8. Your shooter moves a little bit faster each time you shoot. You have 12 missiles to shoot all the targets, and you win 5 points per target\u2026",
+   "source": "https://github.com/kripod/chip8-roms/blob/master/games/Missile%20%5BDavid%20Winter%5D.ch8",
+   "license": "freely distributable (Revival Studios CHIP-8 pack)",
+   "platform": "originalChip8",
+   "quirks": [
+    "clip",
+    "logic"
+   ],
+   "ipf": 15,
+   "keys": {
+    "a": 8
+   },
+   "notes": [
+    "platform waits for vblank on draw; not modelled"
+   ],
+   "file": "roms/missile-command.ch8",
+   "sha1": "0d0cc129dad3c45ba672f85fec71a668232212cc",
+   "status": "ok",
+   "result": {
+    "verified_records": 21543,
+    "error": null,
+    "foreign_opcodes": {},
+    "tokens_per_instruction": 3.78,
+    "realtime_tok_per_s": 3399
+   },
+   "controls": "Space fires",
+   "featured": 7
+  },
+  {
+   "id": "most-dangerous-game",
+   "title": "Most Dangerous Game",
+   "authors": [
+    "Peter Maruhnic"
+   ],
+   "year": null,
+   "description": "10. VIP Most Dangerous Game VIP Most Dangerous Game pits a hunter against a hunted in a maze. The hunter must shoot the hunted before either time runs out or the hunted escapes the maze. However, neither the hunted nor the hunter can see a wall in the maze until he runs into\u2026",
+   "source": "https://github.com/kripod/chip8-roms/blob/master/games/Most%20Dangerous%20Game%20%5BPeter%20Maruhnic%5D.ch8",
+   "license": "freely distributable (Revival Studios CHIP-8 pack)",
+   "platform": "originalChip8",
+   "quirks": [
+    "clip",
+    "logic"
+   ],
+   "ipf": 15,
+   "keys": {},
+   "notes": [
+    "platform waits for vblank on draw; not modelled"
+   ],
+   "file": "roms/most-dangerous-game.ch8",
+   "sha1": "fa7c04f68d78e0faf6d136a3babe3943fc2e02f1",
+   "status": "ok",
+   "result": {
+    "verified_records": 21543,
+    "error": null,
+    "foreign_opcodes": {},
+    "tokens_per_instruction": 3.79,
+    "realtime_tok_per_s": 3409
+   }
+  },
+  {
+   "id": "nim",
+   "title": "Nim",
+   "authors": [
+    "Carmelo Cortez"
+   ],
+   "year": null,
+   "description": "Nim (1978), by Carmelo Cortez The Nim Game is a little less graphic than most games. The player may go first by pressing. \"F\" key, any other let the computer go first. You subtract 1, 2 or 3 fron the score. The one who ends up with the last number loses!",
+   "source": "https://github.com/kripod/chip8-roms/blob/master/games/Nim%20%5BCarmelo%20Cortez%2C%201978%5D.ch8",
+   "license": "freely distributable (Revival Studios CHIP-8 pack)",
+   "platform": "originalChip8",
+   "quirks": [
+    "clip",
+    "logic"
+   ],
+   "ipf": 15,
+   "keys": {},
+   "notes": [
+    "platform waits for vblank on draw; not modelled"
+   ],
+   "file": "roms/nim.ch8",
+   "sha1": "4031dae5c7545a1adc160a661be36f19fc1d47b2",
+   "status": "ok",
+   "result": {
+    "verified_records": 21543,
+    "error": null,
+    "foreign_opcodes": {},
+    "tokens_per_instruction": 4.13,
+    "realtime_tok_per_s": 3717
+   }
+  },
+  {
+   "id": "paddles",
+   "title": "Paddles",
+   "authors": [],
+   "year": null,
+   "description": "Paddles - Simple Pong game --------------------------------------- Controls: --------- F = 1P game E = 2P game 7/9 = P1 left/right 4/6 = P2 left/right",
+   "source": "https://github.com/kripod/chip8-roms/blob/master/games/Paddles.ch8",
+   "license": "freely distributable (Revival Studios CHIP-8 pack)",
+   "platform": "originalChip8",
+   "quirks": [
+    "clip",
+    "logic"
+   ],
+   "ipf": 15,
+   "keys": {},
+   "notes": [
+    "platform waits for vblank on draw; not modelled"
+   ],
+   "file": "roms/paddles.ch8",
+   "sha1": "a18f1e3897416180b32e47ddc82cba9aca2c8d52",
+   "status": "ok",
+   "result": {
+    "verified_records": 21543,
+    "error": null,
+    "foreign_opcodes": {},
+    "tokens_per_instruction": 5.51,
+    "realtime_tok_per_s": 4962
+   }
+  },
+  {
+   "id": "pong",
+   "title": "Pong",
+   "authors": [
+    "1 player"
+   ],
+   "year": null,
+   "description": "Single player pong game",
+   "source": "https://github.com/kripod/chip8-roms/blob/master/games/Pong%20%281%20player%29.ch8",
+   "license": "freely distributable (Revival Studios CHIP-8 pack)",
+   "platform": "originalChip8",
+   "quirks": [
+    "clip",
+    "logic"
+   ],
+   "ipf": 15,
+   "keys": {
+    "up": 1,
+    "down": 4,
+    "player2Up": 12,
+    "player2Down": 13
+   },
+   "notes": [
+    "platform waits for vblank on draw; not modelled"
+   ],
+   "file": "roms/pong.ch8",
+   "sha1": "607c4f7f4e4dce9f99d96b3182bfe7e88bb090ee",
+   "status": "ok",
+   "result": {
+    "verified_records": 21543,
+    "error": null,
+    "foreign_opcodes": {},
+    "tokens_per_instruction": 5.96,
+    "realtime_tok_per_s": 5366
+   },
+   "controls": "Left paddle A/D (or W/S), right paddle Left/Right (or Up/Down)",
+   "featured": 4
+  },
+  {
+   "id": "pong-2",
+   "title": "Pong 2",
+   "authors": [
+    "David Winter"
+   ],
+   "year": "1997",
+   "description": "Pong 2 (Pong hack) - by David Winter (1997) ------------------------------------------- Here is the well known pong game. Two versions are available. The only difference is that PONG2 is mostly like the original game. Player 1 uses 1 and 4, player 2 uses C and D.",
+   "source": "https://github.com/kripod/chip8-roms/blob/master/games/Pong%202%20%28Pong%20hack%29%20%5BDavid%20Winter%2C%201997%5D.ch8",
+   "license": "freely distributable (Revival Studios CHIP-8 pack)",
+   "platform": "originalChip8",
+   "quirks": [
+    "clip",
+    "logic"
+   ],
+   "ipf": 15,
+   "keys": {
+    "up": 1,
+    "down": 4,
+    "player2Up": 12,
+    "player2Down": 13
+   },
+   "notes": [
+    "platform waits for vblank on draw; not modelled"
+   ],
+   "file": "roms/pong-2.ch8",
+   "sha1": "1830eb401ba8789a477dfcf294873a5479ebcfe8",
+   "status": "ok",
+   "result": {
+    "verified_records": 21543,
+    "error": null,
+    "foreign_opcodes": {},
+    "tokens_per_instruction": 6.1,
+    "realtime_tok_per_s": 5488
+   }
+  },
+  {
+   "id": "pong-3",
+   "title": "Pong",
+   "authors": [
+    "Paul Vervalin"
+   ],
+   "year": "1990",
+   "description": "OK. here is PONG version 1.1. The ball is a little faster in this version making play a little more realistic. I know PONG 1.0 was just posted yesterday, but I think this version is significantly better, so here it is. Use keys 7 and 4 move left player and / and * move right\u2026",
+   "source": "https://github.com/kripod/chip8-roms/blob/master/games/Pong%20%5BPaul%20Vervalin%2C%201990%5D.ch8",
+   "license": "freely distributable (Revival Studios CHIP-8 pack)",
+   "platform": "originalChip8",
+   "quirks": [
+    "clip",
+    "logic"
+   ],
+   "ipf": 15,
+   "keys": {},
+   "notes": [
+    "platform waits for vblank on draw; not modelled"
+   ],
+   "file": "roms/pong-3.ch8",
+   "sha1": "b232ef880bd6060fb45fa6effed7edf0ae95670e",
+   "status": "ok",
+   "result": {
+    "verified_records": 21543,
+    "error": null,
+    "foreign_opcodes": {},
+    "tokens_per_instruction": 5.93,
+    "realtime_tok_per_s": 5335
+   }
+  },
+  {
+   "id": "programmable-spacefighters",
+   "title": "Programmable Spacefighters",
+   "authors": [
+    "Jef Winsor"
+   ],
+   "year": null,
+   "description": "14. VIP Programmable Spacefighters Programmable Spacefighters is a combat game involving 2 to 8 spaceships competing for the domination of a contained field in space. The field of play is a two-dimensional representation of an oblong spheroid. The movement and fire of each\u2026",
+   "source": "https://github.com/kripod/chip8-roms/blob/master/games/Programmable%20Spacefighters%20%5BJef%20Winsor%5D.ch8",
+   "license": "freely distributable (Revival Studios CHIP-8 pack)",
+   "platform": "originalChip8",
+   "quirks": [
+    "clip",
+    "logic"
+   ],
+   "ipf": 15,
+   "keys": {},
+   "notes": [
+    "platform waits for vblank on draw; not modelled"
+   ],
+   "file": "roms/programmable-spacefighters.ch8",
+   "sha1": "726cb39afa7e17725af7fab37d153277d86bff77",
+   "status": "ok",
+   "result": {
+    "verified_records": 21543,
+    "error": null,
+    "foreign_opcodes": {},
+    "tokens_per_instruction": 4.69,
+    "realtime_tok_per_s": 4219
+   }
+  },
+  {
+   "id": "puzzle",
+   "title": "Puzzle",
+   "authors": [],
+   "year": "199x",
+   "description": "Puzzle - 4x4 tile puzzle - rearrange them into the order 0-F -------------------------------------- Wait for randomization... Instead of moving the item by pressing his associated key, move it UP DOWN LEFT RIGHT with respectively 2 8 4 6. Up and Down are inverted as the game\u2026",
+   "source": "https://github.com/kripod/chip8-roms/blob/master/games/Puzzle.ch8",
+   "license": "freely distributable (Revival Studios CHIP-8 pack)",
+   "platform": "originalChip8",
+   "quirks": [
+    "clip",
+    "logic"
+   ],
+   "ipf": 15,
+   "keys": {},
+   "notes": [
+    "platform waits for vblank on draw; not modelled"
+   ],
+   "file": "roms/puzzle.ch8",
+   "sha1": "1293db0ccccbe7dd3fc5a09a2abc5d7b175e18e0",
+   "status": "ok",
+   "result": {
+    "verified_records": 21543,
+    "error": null,
+    "foreign_opcodes": {},
+    "tokens_per_instruction": 6.26,
+    "realtime_tok_per_s": 5634
+   }
+  },
+  {
+   "id": "reversi",
+   "title": "Reversi",
+   "authors": [],
+   "year": null,
+   "description": "6. VIP REVERSI Reversi is a game over 100 years old, which has become popular recently under the name Othello. The game is played on a 8x8 square, using two kinds of markers. In VIP Reversi one player has the open markers and the other player the solid markers. The score for\u2026",
+   "source": "https://github.com/kripod/chip8-roms/blob/master/games/Reversi%20%5BPhilip%20Baltzer%5D.ch8",
+   "license": "freely distributable (Revival Studios CHIP-8 pack)",
+   "platform": "originalChip8",
+   "quirks": [
+    "clip",
+    "logic"
+   ],
+   "ipf": 15,
+   "keys": {},
+   "notes": [
+    "platform waits for vblank on draw; not modelled"
+   ],
+   "file": "roms/reversi.ch8",
+   "sha1": "ff639eceaf221ae66151a03779b41fae7118d2d8",
+   "status": "ok",
+   "result": {
+    "verified_records": 21543,
+    "error": null,
+    "foreign_opcodes": {},
+    "tokens_per_instruction": 4.6,
+    "realtime_tok_per_s": 4138
+   }
+  },
+  {
+   "id": "rocket",
+   "title": "Rocket",
+   "authors": [
+    "Joseph Weisbecker"
+   ],
+   "year": "1978-12",
+   "description": "Rocket - by Joseph Weisbecker (1978) ------------------------------------ from Byte Magazine Dec.1978 An enemy UFO will be constantly moving from left to right across the top of the screen. A single digit score will be displayed at the lower right. A rocket ship will appear at\u2026",
+   "source": "https://github.com/kripod/chip8-roms/blob/master/games/Rocket%20%5BJoseph%20Weisbecker%2C%201978%5D.ch8",
+   "license": "freely distributable (Revival Studios CHIP-8 pack)",
+   "platform": "originalChip8",
+   "quirks": [
+    "clip",
+    "logic"
+   ],
+   "ipf": 15,
+   "keys": {},
+   "notes": [
+    "platform waits for vblank on draw; not modelled"
+   ],
+   "file": "roms/rocket.ch8",
+   "sha1": "3d1d029d6e31206d245c0ba881c0d1f003953bad",
+   "status": "ok",
+   "result": {
+    "verified_records": 21543,
+    "error": null,
+    "foreign_opcodes": {},
+    "tokens_per_instruction": 7.06,
+    "realtime_tok_per_s": 6356
+   }
+  },
+  {
+   "id": "rocket-launch",
+   "title": "Rocket Launch",
+   "authors": [
+    "Jonas Lindstedt"
+   ],
+   "year": "19xx",
+   "description": "Another Rocket launcher game by Jonas Lindstedt. Press \"B\" to start. Press \"4\" to go LEFT and \"6\" to go RIGHT.",
+   "source": "https://github.com/kripod/chip8-roms/blob/master/games/Rocket%20Launch%20%5BJonas%20Lindstedt%5D.ch8",
+   "license": "freely distributable (Revival Studios CHIP-8 pack)",
+   "platform": "superchip",
+   "quirks": [
+    "shift",
+    "loadstore",
+    "clip",
+    "jump"
+   ],
+   "ipf": 30,
+   "keys": {},
+   "notes": [],
+   "file": "roms/rocket-launch.ch8",
+   "sha1": "5e70f91ca08e9b9e9de61670492e3db2d7f7d57a",
+   "status": "ok",
+   "result": {
+    "verified_records": 20772,
+    "error": null,
+    "foreign_opcodes": {},
+    "tokens_per_instruction": 5.54,
+    "realtime_tok_per_s": 9979
+   }
+  },
+  {
+   "id": "rocket-launcher",
+   "title": "Rocket Launcher",
+   "authors": [],
+   "year": null,
+   "description": "",
+   "source": "https://github.com/kripod/chip8-roms/blob/master/games/Rocket%20Launcher.ch8",
+   "license": "freely distributable (Revival Studios CHIP-8 pack)",
+   "platform": "originalChip8",
+   "quirks": [
+    "clip",
+    "logic"
+   ],
+   "ipf": 15,
+   "keys": {},
+   "notes": [
+    "platform waits for vblank on draw; not modelled"
+   ],
+   "file": "roms/rocket-launcher.ch8",
+   "sha1": "e2005db6391f589534dd2d63a95b429338bd667c",
+   "status": "ok",
+   "result": {
+    "verified_records": 21543,
+    "error": null,
+    "foreign_opcodes": {},
+    "tokens_per_instruction": 5.57,
+    "realtime_tok_per_s": 5016
+   }
+  },
+  {
+   "id": "rush-hour",
+   "title": "Rush Hour",
+   "authors": [
+    "Hap"
+   ],
+   "year": "2006-12-17",
+   "description": "Rush Hour (v1.1) for CHIP-8 by hap 08-02-08, http://hap.samor.nl/ Originally released on 17-12-06. Version 1.1 improves a few things. Based on a boardgame by Nobuyuki Yoshigahara \"Nob\" and ThinkFun, http://www.thinkfun.com/ This game contains 170 puzzles. Most were taken from\u2026",
+   "source": "https://github.com/kripod/chip8-roms/blob/master/games/Rush%20Hour%20%5BHap%2C%202006%5D.ch8",
+   "license": "freely distributable (Revival Studios CHIP-8 pack)",
+   "platform": "originalChip8",
+   "quirks": [
+    "clip",
+    "logic"
+   ],
+   "ipf": 15,
+   "keys": {},
+   "notes": [
+    "platform waits for vblank on draw; not modelled"
+   ],
+   "file": "roms/rush-hour.ch8",
+   "sha1": "4639f86beb0a203ae512b85d3b56d813b2dea7b4",
+   "status": "ok",
+   "result": {
+    "verified_records": 21543,
+    "error": null,
+    "foreign_opcodes": {},
+    "tokens_per_instruction": 4.2,
+    "realtime_tok_per_s": 3782
+   }
+  },
+  {
+   "id": "russian-roulette",
+   "title": "Russian Roulette",
+   "authors": [
+    "Carmelo Cortez"
+   ],
+   "year": null,
+   "description": "Russian Roulette (1978), by Carmelo Cortez This game is called Russian RouLette. Press any key to Spin and pull the Trigger. A \"Click\" or \"Bang\" will show, get ten \"clicks\" in a row and you win.",
+   "source": "https://github.com/kripod/chip8-roms/blob/master/games/Russian%20Roulette%20%5BCarmelo%20Cortez%2C%201978%5D.ch8",
+   "license": "freely distributable (Revival Studios CHIP-8 pack)",
+   "platform": "originalChip8",
+   "quirks": [
+    "clip",
+    "logic"
+   ],
+   "ipf": 15,
+   "keys": {},
+   "notes": [
+    "platform waits for vblank on draw; not modelled"
+   ],
+   "file": "roms/russian-roulette.ch8",
+   "sha1": "24960090b2afc9de2a4cb3ee7daf6a21456bb49b",
+   "status": "ok",
+   "result": {
+    "verified_records": 21543,
+    "error": null,
+    "foreign_opcodes": {},
+    "tokens_per_instruction": 3.59,
+    "realtime_tok_per_s": 3227
+   }
+  },
+  {
+   "id": "sequence-shoot",
+   "title": "Sequence Shoot",
+   "authors": [
+    "Joyce Weisbecker"
+   ],
+   "year": null,
+   "description": "12. VIP Sequence Shoot You score points by having the sharp-shooter hit the targets in the proper sequence. How to Play VIP Sequence Shoot 1. Load the CHIP-8 interpreter at 0000-01FF and the game starting at 0200. 2. Turn RUN switch on. 3. Pressing the Key C causes the little\u2026",
+   "source": "https://github.com/kripod/chip8-roms/blob/master/games/Sequence%20Shoot%20%5BJoyce%20Weisbecker%5D.ch8",
+   "license": "freely distributable (Revival Studios CHIP-8 pack)",
+   "platform": "originalChip8",
+   "quirks": [
+    "clip",
+    "logic"
+   ],
+   "ipf": 15,
+   "keys": {},
+   "notes": [
+    "platform waits for vblank on draw; not modelled"
+   ],
+   "file": "roms/sequence-shoot.ch8",
+   "sha1": "448f9d30d2157ab42679b809d4fb0b43d145f74f",
+   "status": "ok",
+   "result": {
+    "verified_records": 21543,
+    "error": null,
+    "foreign_opcodes": {},
+    "tokens_per_instruction": 3.66,
+    "realtime_tok_per_s": 3294
+   }
+  },
+  {
+   "id": "shooting-stars",
+   "title": "Shooting Stars",
+   "authors": [
+    "Philip Baltzer"
+   ],
+   "year": "1978",
+   "description": "Shooting Stars (1978), by Philip Baltzer",
+   "source": "https://github.com/kripod/chip8-roms/blob/master/games/Shooting%20Stars%20%5BPhilip%20Baltzer%2C%201978%5D.ch8",
+   "license": "freely distributable (Revival Studios CHIP-8 pack)",
+   "platform": "originalChip8",
+   "quirks": [
+    "clip",
+    "logic"
+   ],
+   "ipf": 15,
+   "keys": {},
+   "notes": [
+    "platform waits for vblank on draw; not modelled"
+   ],
+   "file": "roms/shooting-stars.ch8",
+   "sha1": "443550abf646bc7f475ef0466f8e1232ec7474f3",
+   "status": "ok",
+   "result": {
+    "verified_records": 21543,
+    "error": null,
+    "foreign_opcodes": {},
+    "tokens_per_instruction": 5.06,
+    "realtime_tok_per_s": 4552
+   }
+  },
+  {
+   "id": "slide",
+   "title": "Slide",
+   "authors": [
+    "Joyce Weisbecker"
+   ],
+   "year": null,
+   "description": "5. VIP SLIDE Slide is a two-person game. Each player tries to slide a \"puck\" over the high-scoring \"spots\" without hitting the back wall. How To Play VIP Slide 1. Load the CHIP-8 interpretor at 0000-01FF and the game starting at 0200. 2. Turn RUN switch on. 3. The puck moves up\u2026",
+   "source": "https://github.com/kripod/chip8-roms/blob/master/games/Slide%20%5BJoyce%20Weisbecker%5D.ch8",
+   "license": "freely distributable (Revival Studios CHIP-8 pack)",
+   "platform": "originalChip8",
+   "quirks": [
+    "clip",
+    "logic"
+   ],
+   "ipf": 15,
+   "keys": {},
+   "notes": [
+    "platform waits for vblank on draw; not modelled"
+   ],
+   "file": "roms/slide.ch8",
+   "sha1": "7623fa0fa915979226566b24107360e7537735f4",
+   "status": "ok",
+   "result": {
+    "verified_records": 21543,
+    "error": null,
+    "foreign_opcodes": {},
+    "tokens_per_instruction": 4.33,
+    "realtime_tok_per_s": 3896
+   }
+  },
+  {
+   "id": "soccer",
+   "title": "Soccer",
+   "authors": [],
+   "year": "19xx",
+   "description": "Soccer - by ??? (unknown author)(19xx) -------------------------------------- Pong-like. 1/4 = P1 up/down C/D = P2 up/down",
+   "source": "https://github.com/kripod/chip8-roms/blob/master/games/Soccer.ch8",
+   "license": "freely distributable (Revival Studios CHIP-8 pack)",
+   "platform": "originalChip8",
+   "quirks": [
+    "clip",
+    "logic"
+   ],
+   "ipf": 15,
+   "keys": {},
+   "notes": [
+    "platform waits for vblank on draw; not modelled"
+   ],
+   "file": "roms/soccer.ch8",
+   "sha1": "6df358d77961a0bf21e98876f9f616791cba31e3",
+   "status": "ok",
+   "result": {
+    "verified_records": 21543,
+    "error": null,
+    "foreign_opcodes": {},
+    "tokens_per_instruction": 5.41,
+    "realtime_tok_per_s": 4872
+   }
+  },
+  {
+   "id": "space-flight",
+   "title": "Space Flight",
+   "authors": [],
+   "year": "19xx",
+   "description": "Space flight game </br>Fly through the asteroid field. Use 1 and 4 key to navigate space ship and E/F to start the game.",
+   "source": "https://github.com/kripod/chip8-roms/blob/master/games/Space%20Flight.ch8",
+   "license": "freely distributable (Revival Studios CHIP-8 pack)",
+   "platform": "originalChip8",
+   "quirks": [
+    "clip",
+    "logic"
+   ],
+   "ipf": 15,
+   "keys": {},
+   "notes": [
+    "platform waits for vblank on draw; not modelled"
+   ],
+   "file": "roms/space-flight.ch8",
+   "sha1": "aa4f1a282bd64a2364102abf5737a4205365a2b4",
+   "status": "ok",
+   "result": {
+    "verified_records": 21543,
+    "error": null,
+    "foreign_opcodes": {},
+    "tokens_per_instruction": 3.96,
+    "realtime_tok_per_s": 3563
+   }
+  },
+  {
+   "id": "space-intercept",
+   "title": "Space Intercept",
+   "authors": [],
+   "year": null,
+   "description": "Space Intercept (1978), by Joseph Weisbecker At startup, Press 1 to select the large UFO which counts 5 points when hit or 2 to select the small UFO which counts 15 points when hit. Launch your rocket by pressing key 4,5 or 6. You get 15 rockets as shown in the lower right\u2026",
+   "source": "https://github.com/kripod/chip8-roms/blob/master/games/Space%20Intercept%20%5BJoseph%20Weisbecker%2C%201978%5D.ch8",
+   "license": "freely distributable (Revival Studios CHIP-8 pack)",
+   "platform": "originalChip8",
+   "quirks": [
+    "clip",
+    "logic"
+   ],
+   "ipf": 15,
+   "keys": {},
+   "notes": [
+    "platform waits for vblank on draw; not modelled"
+   ],
+   "file": "roms/space-intercept.ch8",
+   "sha1": "ed829190e37815771e7a8c675ba0074996a2ddb0",
+   "status": "ok",
+   "result": {
+    "verified_records": 21543,
+    "error": null,
+    "foreign_opcodes": {},
+    "tokens_per_instruction": 5.5,
+    "realtime_tok_per_s": 4952
+   }
+  },
+  {
+   "id": "space-invaders",
+   "title": "Space Invaders",
+   "authors": [
+    "David Winter"
+   ],
+   "year": "1996",
+   "description": "Space Invaders (1978), by David Winter The well known game. Destroy the invaders with your ship. Shoot with 5, move with 4 and 6. Press 5 to begin a game.",
+   "source": "https://github.com/kripod/chip8-roms/blob/master/games/Space%20Invaders%20%5BDavid%20Winter%5D.ch8",
+   "license": "freely distributable (Revival Studios CHIP-8 pack)",
+   "platform": "superchip",
+   "quirks": [
+    "shift",
+    "loadstore",
+    "clip",
+    "jump"
+   ],
+   "ipf": 30,
+   "keys": {
+    "left": 4,
+    "right": 6,
+    "a": 5
+   },
+   "notes": [],
+   "file": "roms/space-invaders.ch8",
+   "sha1": "5c28a5f85289c9d859f95fd5eadbdcb1c30bb08b",
+   "status": "ok",
+   "result": {
+    "verified_records": 20772,
+    "error": null,
+    "foreign_opcodes": {},
+    "tokens_per_instruction": 4.81,
+    "realtime_tok_per_s": 8659
+   },
+   "controls": "Left/Right move, Space fires (press Space to start)",
+   "featured": 1
+  },
+  {
+   "id": "spooky-spot",
+   "title": "Spooky Spot",
+   "authors": [
+    "Joseph Weisbecker"
+   ],
+   "year": null,
+   "description": "Spooky Spot (1978), by Joseph Weisbecker Now you can let the computer make your big decisions or predict the future just like governmentt or industry leaders do. You will see the words YES and NO at the right of the screen. Ask the computer any question that can be answered\u2026",
+   "source": "https://github.com/kripod/chip8-roms/blob/master/games/Spooky%20Spot%20%5BJoseph%20Weisbecker%2C%201978%5D.ch8",
+   "license": "freely distributable (Revival Studios CHIP-8 pack)",
+   "platform": "originalChip8",
+   "quirks": [
+    "clip",
+    "logic"
+   ],
+   "ipf": 15,
+   "keys": {},
+   "notes": [
+    "platform waits for vblank on draw; not modelled"
+   ],
+   "file": "roms/spooky-spot.ch8",
+   "sha1": "1bd92042717c3bc4f7f34cab34be2887145a6704",
+   "status": "ok",
+   "result": {
+    "verified_records": 21543,
+    "error": null,
+    "foreign_opcodes": {},
+    "tokens_per_instruction": 3.8,
+    "realtime_tok_per_s": 3421
+   }
+  },
+  {
+   "id": "squash",
+   "title": "Squash",
+   "authors": [
+    "David Winter"
+   ],
+   "year": "1997",
+   "description": "Squash, by David Winter Bounce a ball around a squash court with your paddle",
+   "source": "https://github.com/kripod/chip8-roms/blob/master/games/Squash%20%5BDavid%20Winter%5D.ch8",
+   "license": "freely distributable (Revival Studios CHIP-8 pack)",
+   "platform": "originalChip8",
+   "quirks": [
+    "clip",
+    "logic"
+   ],
+   "ipf": 15,
+   "keys": {
+    "up": 1,
+    "down": 4
+   },
+   "notes": [
+    "platform waits for vblank on draw; not modelled"
+   ],
+   "file": "roms/squash.ch8",
+   "sha1": "a58ec7cc63707f9e7274026de27c15ec1d9945bd",
+   "status": "ok",
+   "result": {
+    "verified_records": 21543,
+    "error": null,
+    "foreign_opcodes": {},
+    "tokens_per_instruction": 4.77,
+    "realtime_tok_per_s": 4292
+   }
+  },
+  {
+   "id": "submarine",
+   "title": "Submarine",
+   "authors": [
+    "Carmelo Cortez"
+   ],
+   "year": null,
+   "description": "Submarine (1978), by Carmelo Cortez The Sub Game is my favorite. Press \"5\" key to fire depth charges at the subs below. You score 15 points for a small sub and 5 points for the larger. You get 25 depth charges to start.",
+   "source": "https://github.com/kripod/chip8-roms/blob/master/games/Submarine%20%5BCarmelo%20Cortez%2C%201978%5D.ch8",
+   "license": "freely distributable (Revival Studios CHIP-8 pack)",
+   "platform": "originalChip8",
+   "quirks": [
+    "clip",
+    "logic"
+   ],
+   "ipf": 15,
+   "keys": {},
+   "notes": [
+    "platform waits for vblank on draw; not modelled"
+   ],
+   "file": "roms/submarine.ch8",
+   "sha1": "89aadf7c28bcd1c11e71ad9bd6eeaf0e7be474f3",
+   "status": "ok",
+   "result": {
+    "verified_records": 21543,
+    "error": null,
+    "foreign_opcodes": {},
+    "tokens_per_instruction": 7.27,
+    "realtime_tok_per_s": 6547
+   }
+  },
+  {
+   "id": "sum-fun",
+   "title": "Sum Fun",
+   "authors": [
+    "Joyce Weisbecker"
+   ],
+   "year": null,
+   "description": "11. VIP Sum Fun The object of this game is to add up the three digits which appear in the middle of the screen and then hit the key representing the total as fast as you can. How to Play VIP Sum FUn 1. Load the CHIP-8 interpreter at 0000-01FF and the game starting at 0200. 2.\u2026",
+   "source": "https://github.com/kripod/chip8-roms/blob/master/games/Sum%20Fun%20%5BJoyce%20Weisbecker%5D.ch8",
+   "license": "freely distributable (Revival Studios CHIP-8 pack)",
+   "platform": "originalChip8",
+   "quirks": [
+    "clip",
+    "logic"
+   ],
+   "ipf": 15,
+   "keys": {},
+   "notes": [
+    "platform waits for vblank on draw; not modelled"
+   ],
+   "file": "roms/sum-fun.ch8",
+   "sha1": "83a2f9c8153be955c28e788bd803aa1d25131330",
+   "status": "ok",
+   "result": {
+    "verified_records": 21543,
+    "error": null,
+    "foreign_opcodes": {},
+    "tokens_per_instruction": 4.14,
+    "realtime_tok_per_s": 3729
+   }
+  },
+  {
+   "id": "syzygy",
+   "title": "Syzygy",
+   "authors": [
+    "Roy Trevino"
+   ],
+   "year": "1990",
+   "description": "SYZYGY v0.1 One of the first games I remember playing on a computer was called \"syzygy\" on a now ancient TRS-80 Model 1. It has since appeared on other computers under various names. Why it was called syzygy, I have no idea (consult Websters). However, since the HP48SX has\u2026",
+   "source": "https://github.com/kripod/chip8-roms/blob/master/games/Syzygy%20%5BRoy%20Trevino%2C%201990%5D.ch8",
+   "license": "freely distributable (Revival Studios CHIP-8 pack)",
+   "platform": "chip48",
+   "quirks": [
+    "shift",
+    "loadstore",
+    "clip",
+    "jump"
+   ],
+   "ipf": 30,
+   "keys": {},
+   "notes": [
+    "platform increments I by X after FX55/FX65; run with I unchanged"
+   ],
+   "file": "roms/syzygy.ch8",
+   "sha1": "1bdb4ddaa7049266fa3226851f28855a365cfd12",
+   "status": "ok",
+   "result": {
+    "verified_records": 20772,
+    "error": null,
+    "foreign_opcodes": {},
+    "tokens_per_instruction": 4.42,
+    "realtime_tok_per_s": 7954
+   }
+  },
+  {
+   "id": "tank-battle",
+   "title": "Tank Battle",
+   "authors": [],
+   "year": "197x",
+   "description": "You are in a tank which has 25 bombs. Your goal is to hit 25 times a mobile target. The game ends when all your bombs are shot. If your tank hits the target, you lose 5 bombs. Use 2 4 6 and 8 to move. This game uses the original CHIP8 keyboard, so directions 2 and 8 are swapped.",
+   "source": "https://github.com/kripod/chip8-roms/blob/master/games/Tank.ch8",
+   "license": "freely distributable (Revival Studios CHIP-8 pack)",
+   "platform": "originalChip8",
+   "quirks": [
+    "clip",
+    "logic"
+   ],
+   "ipf": 15,
+   "keys": {},
+   "notes": [
+    "platform waits for vblank on draw; not modelled"
+   ],
+   "file": "roms/tank-battle.ch8",
+   "sha1": "18b9d15f4c159e1f0ed58c2d8ec1d89325d3a3b6",
+   "status": "ok",
+   "result": {
+    "verified_records": 21543,
+    "error": null,
+    "foreign_opcodes": {},
+    "tokens_per_instruction": 6.42,
+    "realtime_tok_per_s": 5780
+   }
+  },
+  {
+   "id": "tapeworm",
+   "title": "Tapeworm",
+   "authors": [
+    "JDR"
+   ],
+   "year": "1999",
+   "description": "Tapeworm (1999) Tron clone; guide the snake around and around.",
+   "source": "https://github.com/kripod/chip8-roms/blob/master/games/Tapeworm%20%5BJDR%2C%201999%5D.ch8",
+   "license": "freely distributable (Revival Studios CHIP-8 pack)",
+   "platform": "originalChip8",
+   "quirks": [
+    "clip",
+    "logic"
+   ],
+   "ipf": 15,
+   "keys": {},
+   "notes": [
+    "platform waits for vblank on draw; not modelled"
+   ],
+   "file": "roms/tapeworm.ch8",
+   "sha1": "775e82a36c93f1b41b42eca94b55acbc4a48cebe",
+   "status": "ok",
+   "result": {
+    "verified_records": 21543,
+    "error": null,
+    "foreign_opcodes": {},
+    "tokens_per_instruction": 3.9,
+    "realtime_tok_per_s": 3513
+   }
+  },
+  {
+   "id": "tetris",
+   "title": "Tetris",
+   "authors": [
+    "Fran Dachille"
+   ],
+   "year": "1991",
+   "description": "TETRIS by Fran Dachille This is my first release of the famous Tetris game on the HP48S. I was inspired by the lack enjoyable games for our favorite handheld. [Not since the Goodies Disks have been available! -jkh-] This game, though it lacks some of the whistles and bangs of\u2026",
+   "source": "https://github.com/kripod/chip8-roms/blob/master/games/Tetris%20%5BFran%20Dachille%2C%201991%5D.ch8",
+   "license": "freely distributable (Revival Studios CHIP-8 pack)",
+   "platform": "chip48",
+   "quirks": [
+    "shift",
+    "loadstore",
+    "clip",
+    "jump"
+   ],
+   "ipf": 30,
+   "keys": {
+    "left": 5,
+    "right": 6,
+    "down": 7,
+    "a": 4
+   },
+   "notes": [
+    "platform increments I by X after FX55/FX65; run with I unchanged"
+   ],
+   "file": "roms/tetris.ch8",
+   "sha1": "5f518084744bf3cb8733f6e5454dfd1634320563",
+   "status": "ok",
+   "result": {
+    "verified_records": 20772,
+    "error": null,
+    "foreign_opcodes": {},
+    "tokens_per_instruction": 4.27,
+    "realtime_tok_per_s": 7684
+   },
+   "controls": "Left/Right move, Down drops faster, Space rotates",
+   "featured": 0
+  },
+  {
+   "id": "tic-tac-toe",
+   "title": "TIC-TAC-TOE",
+   "authors": [],
+   "year": "1996",
+   "description": "Tic-Tac-Toe, by David Winter 2-player noughts and crosses board.",
+   "source": "https://github.com/kripod/chip8-roms/blob/master/games/Tic-Tac-Toe%20%5BDavid%20Winter%5D.ch8",
+   "license": "freely distributable (Revival Studios CHIP-8 pack)",
+   "platform": "superchip",
+   "quirks": [
+    "shift",
+    "loadstore",
+    "clip",
+    "jump"
+   ],
+   "ipf": 30,
+   "keys": {},
+   "notes": [],
+   "file": "roms/tic-tac-toe.ch8",
+   "sha1": "429d455a4bc53167942bf6fd934d72b0f648dce3",
+   "status": "ok",
+   "result": {
+    "verified_records": 20772,
+    "error": null,
+    "foreign_opcodes": {},
+    "tokens_per_instruction": 4.07,
+    "realtime_tok_per_s": 7326
+   }
+  },
+  {
+   "id": "timebomb",
+   "title": "Timebomb",
+   "authors": [],
+   "year": "19xx",
+   "description": "Timebomb - by ??? (unknown author)(19xx) ---------------------------------------- Chronometer. 2/8: Set time. 5: Start.",
+   "source": "https://github.com/kripod/chip8-roms/blob/master/games/Timebomb.ch8",
+   "license": "freely distributable (Revival Studios CHIP-8 pack)",
+   "platform": "originalChip8",
+   "quirks": [
+    "clip",
+    "logic"
+   ],
+   "ipf": 15,
+   "keys": {},
+   "notes": [
+    "platform waits for vblank on draw; not modelled"
+   ],
+   "file": "roms/timebomb.ch8",
+   "sha1": "67996195539c0ddcd98533a01dffeec6a53a6da1",
+   "status": "ok",
+   "result": {
+    "verified_records": 21543,
+    "error": null,
+    "foreign_opcodes": {},
+    "tokens_per_instruction": 7.47,
+    "realtime_tok_per_s": 6724
+   }
+  },
+  {
+   "id": "tron",
+   "title": "Tron",
+   "authors": [],
+   "year": "19xx",
+   "description": "Tron - by ??? (unknown)(19xx) ----------------------------- Controls: --------- B=with borders. F=without borders. 0=start. Player 1: 1/4 3/C. Player 2: 7/A 9/E.",
+   "source": "https://github.com/kripod/chip8-roms/blob/master/games/Tron.ch8",
+   "license": "freely distributable (Revival Studios CHIP-8 pack)",
+   "platform": "originalChip8",
+   "quirks": [
+    "clip",
+    "logic"
+   ],
+   "ipf": 15,
+   "keys": {},
+   "notes": [
+    "platform waits for vblank on draw; not modelled"
+   ],
+   "file": "roms/tron.ch8",
+   "sha1": "a6a6cb2351c20b8f904da07c0ce91bd8161e9317",
+   "status": "ok",
+   "result": {
+    "verified_records": 21543,
+    "error": null,
+    "foreign_opcodes": {},
+    "tokens_per_instruction": 4.66,
+    "realtime_tok_per_s": 4193
+   }
+  },
+  {
+   "id": "ufo",
+   "title": "UFO",
+   "authors": [
+    "Lutz V"
+   ],
+   "year": "1992",
+   "description": "Here's how to play UFO: You have a stationary missle launcher at the bottom of the screen. You can shoot in three directions; left diagonal, straight up, and right diagonal.. using the keys 4, 5, and 6 respectively.. You try to hit one of two objects flying by.. at apparently\u2026",
+   "source": "https://github.com/kripod/chip8-roms/blob/master/games/UFO%20%5BLutz%20V%2C%201992%5D.ch8",
+   "license": "freely distributable (Revival Studios CHIP-8 pack)",
+   "platform": "originalChip8",
+   "quirks": [
+    "clip",
+    "logic"
+   ],
+   "ipf": 15,
+   "keys": {
+    "left": 4,
+    "a": 5,
+    "right": 6
+   },
+   "notes": [
+    "platform waits for vblank on draw; not modelled"
+   ],
+   "file": "roms/ufo.ch8",
+   "sha1": "bdb92475acfe11bc7814a2f5eade13fcd09b756a",
+   "status": "ok",
+   "result": {
+    "verified_records": 21543,
+    "error": null,
+    "foreign_opcodes": {},
+    "tokens_per_instruction": 6.24,
+    "realtime_tok_per_s": 5612
+   },
+   "controls": "Left/Space/Right fire left, up, right",
+   "featured": 6
+  },
+  {
+   "id": "vers",
+   "title": "Vers",
+   "authors": [
+    "JMN"
+   ],
+   "year": "1991",
+   "description": "Vers - by JMN (1991) -------------------- Another Tron clone. Keys Left Pl. Right Pl. ------------------------------ UP 7 C DOWN A D LEFT 1 B RIGHT 2 F ------------------------------",
+   "source": "https://github.com/kripod/chip8-roms/blob/master/games/Vers%20%5BJMN%2C%201991%5D.ch8",
+   "license": "freely distributable (Revival Studios CHIP-8 pack)",
+   "platform": "originalChip8",
+   "quirks": [
+    "clip",
+    "logic"
+   ],
+   "ipf": 15,
+   "keys": {},
+   "notes": [
+    "platform waits for vblank on draw; not modelled"
+   ],
+   "file": "roms/vers.ch8",
+   "sha1": "ade839585ddeb0e3633177df03c1d91589e629eb",
+   "status": "ok",
+   "result": {
+    "verified_records": 21543,
+    "error": null,
+    "foreign_opcodes": {},
+    "tokens_per_instruction": 4.43,
+    "realtime_tok_per_s": 3987
+   }
+  },
+  {
+   "id": "vertical-brix",
+   "title": "Vertical Brix",
+   "authors": [
+    "Paul Robson"
+   ],
+   "year": "1996",
+   "description": "Vertical Brix - by Paul Robson (1996) ------------------------------------- Like BRIX, but the brix are put vertically, and the pad also moves vertically. Start by pressing 7, and move using 4 and 1. *NOTE: 7->5 1->2 4->6",
+   "source": "https://github.com/kripod/chip8-roms/blob/master/games/Vertical%20Brix%20%5BPaul%20Robson%2C%201996%5D.ch8",
+   "license": "freely distributable (Revival Studios CHIP-8 pack)",
+   "platform": "originalChip8",
+   "quirks": [
+    "clip",
+    "logic"
+   ],
+   "ipf": 15,
+   "keys": {},
+   "notes": [
+    "platform waits for vblank on draw; not modelled"
+   ],
+   "file": "roms/vertical-brix.ch8",
+   "sha1": "da710f631f8e35534d0b9170bcf892a60f49c43d",
+   "status": "ok",
+   "result": {
+    "verified_records": 21543,
+    "error": null,
+    "foreign_opcodes": {},
+    "tokens_per_instruction": 5.15,
+    "realtime_tok_per_s": 4633
+   }
+  },
+  {
+   "id": "wall",
+   "title": "Wall",
+   "authors": [
+    "David Winter"
+   ],
+   "year": "1997",
+   "description": "Wall - by David Winter (19xx) ----------------------------- One of these PONG variations. Move using 1 and 4. As said in the early seventies: \"AVOID MISSING BALL FOR HIGH SCORE\" !!! *NOTE: 1->2 4->6",
+   "source": "https://github.com/kripod/chip8-roms/blob/master/games/Wall%20%5BDavid%20Winter%5D.ch8",
+   "license": "freely distributable (Revival Studios CHIP-8 pack)",
+   "platform": "originalChip8",
+   "quirks": [
+    "clip",
+    "logic"
+   ],
+   "ipf": 15,
+   "keys": {
+    "up": 1,
+    "down": 4
+   },
+   "notes": [
+    "platform waits for vblank on draw; not modelled"
+   ],
+   "file": "roms/wall.ch8",
+   "sha1": "09ce01c54ddddda42ca5cd171f1ffcfd47355d12",
+   "status": "ok",
+   "result": {
+    "verified_records": 21543,
+    "error": null,
+    "foreign_opcodes": {},
+    "tokens_per_instruction": 5.27,
+    "realtime_tok_per_s": 4744
+   }
+  },
+  {
+   "id": "wipe-off",
+   "title": "Wipe Off",
+   "authors": [
+    "Joseph Weisbecker"
+   ],
+   "year": "19xx",
+   "description": "Wipe Off - by Joseph Weisbecker (19xx) -------------------------------------- Cosmac VIP CDP18S711 Book - Page 42 (VIP-311) This program uses the CHIP-8 INTERPRETER at 0000-01FF Serve the ball by pressing any key. Move the paddle left or right by pressing key 4 or 6. Try to\u2026",
+   "source": "https://github.com/kripod/chip8-roms/blob/master/games/Wipe%20Off%20%5BJoseph%20Weisbecker%5D.ch8",
+   "license": "freely distributable (Revival Studios CHIP-8 pack)",
+   "platform": "originalChip8",
+   "quirks": [
+    "clip",
+    "logic"
+   ],
+   "ipf": 15,
+   "keys": {},
+   "notes": [
+    "platform waits for vblank on draw; not modelled"
+   ],
+   "file": "roms/wipe-off.ch8",
+   "sha1": "d666688a8fce468a7d88b536bc1ef5f35ba12031",
+   "status": "ok",
+   "result": {
+    "verified_records": 21543,
+    "error": null,
+    "foreign_opcodes": {},
+    "tokens_per_instruction": 5.6,
+    "realtime_tok_per_s": 5036
+   }
+  },
+  {
+   "id": "superworm-v4",
+   "title": "SuperWorm V4",
+   "authors": [
+    "RB-Revival Studios",
+    "Martijn Wenting"
+   ],
+   "year": "2007",
+   "description": "----------------------------------------------------------------------------- ///////////////// ////////////////// //// //// //// /////////// //// /////////// //// //// //// /////////// //// ////////// www.revival-studios.com\u2026",
+   "source": "https://github.com/kripod/chip8-roms/blob/master/games/Worm%20V4%20%5BRB-Revival%20Studios%2C%202007%5D.ch8",
+   "license": "freely distributable (Revival Studios CHIP-8 pack)",
+   "platform": "originalChip8",
+   "quirks": [
+    "clip",
+    "logic"
+   ],
+   "ipf": 15,
+   "keys": {},
+   "notes": [
+    "platform waits for vblank on draw; not modelled"
+   ],
+   "file": "roms/superworm-v4.ch8",
+   "sha1": "a1c1e0e7b01004be3ee77c69030e6b536cb316e6",
+   "status": "ok",
+   "result": {
+    "verified_records": 21543,
+    "error": null,
+    "foreign_opcodes": {},
+    "tokens_per_instruction": 3.72,
+    "realtime_tok_per_s": 3351
+   }
+  },
+  {
+   "id": "x-mirror",
+   "title": "X-Mirror",
+   "authors": [],
+   "year": null,
+   "description": "X-Mirror - by ??? (unknown author)(19xx) ---------------------------------------- A Kaleidoscope variant. Draws symmetric patterns using 2/4/6/8.",
+   "source": "https://github.com/kripod/chip8-roms/blob/master/games/X-Mirror.ch8",
+   "license": "freely distributable (Revival Studios CHIP-8 pack)",
+   "platform": "originalChip8",
+   "quirks": [
+    "clip",
+    "logic"
+   ],
+   "ipf": 15,
+   "keys": {},
+   "notes": [
+    "platform waits for vblank on draw; not modelled"
+   ],
+   "file": "roms/x-mirror.ch8",
+   "sha1": "bc158d819890f16f105b8a316eeeefe4a0bad875",
+   "status": "ok",
+   "result": {
+    "verified_records": 21543,
+    "error": null,
+    "foreign_opcodes": {},
+    "tokens_per_instruction": 6.03,
+    "realtime_tok_per_s": 5422
+   }
+  },
+  {
+   "id": "zeropong",
+   "title": "ZeroPong",
+   "authors": [
+    "zeroZshadow"
+   ],
+   "year": "2007",
+   "description": "ZeroPong - by zeroZshadow (2007) -------------------------------- Player 1: Press \"B\" to move up and \"A\" to move down. Player 2: Press \"2\" to move up and \"8\" to move down. Press \"F\" to start moving the ball.",
+   "source": "https://github.com/kripod/chip8-roms/blob/master/games/ZeroPong%20%5BzeroZshadow%2C%202007%5D.ch8",
+   "license": "freely distributable (Revival Studios CHIP-8 pack)",
+   "platform": "originalChip8",
+   "quirks": [
+    "clip",
+    "logic"
+   ],
+   "ipf": 15,
+   "keys": {},
+   "notes": [
+    "platform waits for vblank on draw; not modelled"
+   ],
+   "file": "roms/zeropong.ch8",
+   "sha1": "f2e9c480af31a4039af02dd7a2b8d5d1f859704d",
+   "status": "ok",
+   "result": {
+    "verified_records": 21543,
+    "error": null,
+    "foreign_opcodes": {},
+    "tokens_per_instruction": 4.46,
+    "realtime_tok_per_s": 4011
+   }
+  }
+ ]
+}

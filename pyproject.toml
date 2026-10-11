@@ -12,7 +12,11 @@ dependencies = [
 play = ["pygame>=2.5"]
 
 [dependency-groups]
-dev = ["pytest>=8", "ruff>=0.6"]
+dev = [
+    "pillow>=12.3.0",
+    "pytest>=8",
+    "ruff>=0.6",
+]
 
 [build-system]
 requires = ["hatchling"]

@@ -4,8 +4,8 @@
 //!     Free-running CHIP-8 with a timer tick every K instructions and random key presses;
 //!     reports throughput and optionally dumps the token trace for verification.
 
-use engine::host::Session;
-use engine::model::{Model, State};
+use chipformer_engine::host::Session;
+use chipformer_engine::model::{Model, State};
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
