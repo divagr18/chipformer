@@ -13,10 +13,10 @@ from chipformer.trace import Machine
 
 
 def run_machine(rom: bytes, steps: int, ipf: int = 10, seed: int = 0,
-                key_rate: float = 0.1) -> Machine:
+                key_rate: float = 0.1, quirks: "str | tuple[str, ...] | None" = None) -> Machine:
     """Reference run with a timer tick every ``ipf`` instructions and random key changes."""
     rng = random.Random(seed)
-    m = Machine(rom)
+    m = Machine(rom, quirks)
     m.ops = []  # opcode class of each executed instruction, for diagnostics
     for i in range(steps):
         if i % ipf == 0:

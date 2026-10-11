@@ -13,7 +13,7 @@ import pytest
 from chipformer.check import run_machine, verify_trace
 from chipformer.chip8 import build
 from chipformer.dsl.batch import evaluate_batch, output_batch
-from chipformer.fuzz import random_program
+from chipformer.fuzz import random_program, random_quirks
 
 ROOT = Path(__file__).resolve().parent.parent
 EXE = ROOT / "engine" / "target" / "release" / ("engine.exe" if (ROOT / "engine" / "target" / "release" / "engine.exe").exists() else "engine")
@@ -35,13 +35,14 @@ def test_predict_matches_circuit(tmp_path):
 
 @pytest.mark.parametrize("rom", ["fuzz", "pong"])
 def test_free_running_with_rollover(tmp_path, rom):
-    path = ROOT / "roms" / "pong.ch8"
+    path, quirks = ROOT / "roms" / "pong.ch8", "chip48"
     if rom == "fuzz":
-        path = tmp_path / "fuzz.ch8"
+        path, quirks = tmp_path / "fuzz.ch8", ",".join(random_quirks(5))
         path.write_bytes(random_program(5))
     elif not path.exists():
         pytest.skip("roms/pong.ch8 not provided")
     subprocess.run([str(EXE), "run", str(MODEL), str(path), "--instr", "4000", "--seed", "9",
+                    "--quirks", quirks,
                     "--rollover", "8000", "--dump", str(tmp_path / "run.u32")],
                    check=True, capture_output=True)
     n, err = verify_trace(np.fromfile(tmp_path / "run.u32", dtype="<u4").tolist())

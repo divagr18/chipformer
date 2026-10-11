@@ -5,18 +5,39 @@ from the state *before* the instruction, then applied. The trace format is
 therefore exactly the emulator's semantics: replaying the writes reproduces
 the state.
 
-Quirks (CHIP-48 / "modern" profile, see docs/quirks.md):
-  - 8XY1/2/3 leave VF alone (no vF reset)
-  - 8XY6/8XYE shift VX in place, VY is ignored
-  - FX55/FX65 leave I unchanged
-  - BNNN jumps to NNN + V0
-  - sprites start at (VX % 64, VY % 32) and clip at the screen edges
-  - FX0A completes as soon as any key is held (lowest key wins)
-  - the stack pointer wraps modulo 16
+Quirks are machine state: six flag cells (spec.QUIRKS) with the meaning of
+Octo's flags of the same name, set when the ROM is loaded (docs/quirks.md):
+  - shift:     8XY6/8XYE shift VX in place (off: VX = VY shifted)
+  - loadstore: FX55/FX65 leave I unchanged (off: I += X + 1)
+  - clip:      sprites clip at the screen edges (off: they wrap around)
+  - logic:     8XY1/2/3 reset VF to 0
+  - jump:      BXNN jumps to XNN + VX (off: BNNN jumps to NNN + V0)
+  - vforder:   for 8XY4-E the result is written after VF (wins when X = F)
+Fixed behaviour: sprites start at (VX % 64, VY % 32); FX0A completes as soon
+as any key is held (lowest key wins); the stack pointer wraps modulo 16.
 """
 
 from chipformer import spec
-from chipformer.spec import CLS, DISPLAY, DT, KEYS, NULL, PC, RNG, SP, ST, STACK, I, V
+from chipformer.spec import (
+    CLS,
+    DISPLAY,
+    DT,
+    KEYS,
+    NULL,
+    PC,
+    Q_CLIP,
+    Q_JUMP,
+    Q_LOADSTORE,
+    Q_LOGIC,
+    Q_SHIFT,
+    Q_VFORDER,
+    RNG,
+    SP,
+    ST,
+    STACK,
+    I,
+    V,
+)
 
 Writes = list[tuple[int, int]]
 
@@ -44,7 +65,7 @@ def opcode_class(op: int) -> str:
 
 
 class Chip8:
-    def __init__(self, rom: bytes):
+    def __init__(self, rom: bytes, quirks: "str | tuple[str, ...] | None" = None):
         if len(rom) > spec.RAM_SIZE - spec.PROGRAM_START:
             raise ValueError(f"ROM too large: {len(rom)} bytes")
         self.cells = [0] * spec.NUM_CELLS
@@ -52,6 +73,8 @@ class Chip8:
         self.cells[spec.PROGRAM_START:spec.PROGRAM_START + len(rom)] = rom
         self.cells[PC] = spec.PROGRAM_START
         self.cells[RNG] = spec.RNG_SEED
+        for a, v in spec.quirk_cells(quirks).items():
+            self.cells[a] = v
 
     # --- state transitions --------------------------------------------------
 
@@ -159,11 +182,11 @@ def instruction_writes(c: list[int]) -> Writes:
     elif hi == 0x7:
         w = [(V + x, (vx + nn) & 0xFF)]
     elif hi == 0x8:
-        w = alu_writes(x, n, vx, vy)
+        w = alu_writes(c, x, n, vx, vy)
     elif hi == 0xA:
         w = [(I, nnn)]
     elif hi == 0xB:
-        nxt = (nnn + c[V]) & 0xFFF
+        nxt = (nnn + (vx if c[Q_JUMP] else c[V])) & 0xFFF
     elif hi == 0xC:
         s = spec.lfsr_step(c[RNG])
         w = [(V + x, s & nn & 0xFF), (RNG, s)]
@@ -198,42 +221,48 @@ def instruction_writes(c: list[int]) -> Writes:
             w = [((ix + j) & 0xFFF, c[V + j]) for j in range(x + 1)]
         elif nn == 0x65:
             w = [(V + j, c[(ix + j) & 0xFFF]) for j in range(x + 1)]
+        if nn in (0x55, 0x65) and not c[Q_LOADSTORE]:
+            w.append((I, (ix + x + 1) & 0xFFF))
 
     w.append((PC, nxt))
     return w
 
 
-def alu_writes(x: int, n: int, vx: int, vy: int) -> Writes:
+def alu_writes(c: list[int], x: int, n: int, vx: int, vy: int) -> Writes:
     vf = V + 0xF
+    if n in (0x1, 0x2, 0x3):
+        result = {0x1: vx | vy, 0x2: vx & vy, 0x3: vx ^ vy}[n]
+        return [(V + x, result)] + ([(vf, 0)] if c[Q_LOGIC] else [])
+    src = vx if c[Q_SHIFT] else vy
     if n == 0x0:
         return [(V + x, vy)]
-    if n == 0x1:
-        return [(V + x, vx | vy)]
-    if n == 0x2:
-        return [(V + x, vx & vy)]
-    if n == 0x3:
-        return [(V + x, vx ^ vy)]
     if n == 0x4:
         s = vx + vy
-        return [(V + x, s & 0xFF), (vf, s >> 8)]
-    if n == 0x5:
-        return [(V + x, (vx - vy) & 0xFF), (vf, int(vx >= vy))]
-    if n == 0x6:
-        return [(V + x, vx >> 1), (vf, vx & 1)]
-    if n == 0x7:
-        return [(V + x, (vy - vx) & 0xFF), (vf, int(vy >= vx))]
-    if n == 0xE:
-        return [(V + x, (vx << 1) & 0xFF), (vf, vx >> 7)]
-    return []
+        result, flag = s & 0xFF, s >> 8
+    elif n == 0x5:
+        result, flag = (vx - vy) & 0xFF, int(vx >= vy)
+    elif n == 0x6:
+        result, flag = src >> 1, src & 1
+    elif n == 0x7:
+        result, flag = (vy - vx) & 0xFF, int(vy >= vx)
+    elif n == 0xE:
+        result, flag = (src << 1) & 0xFF, src >> 7
+    else:
+        return []
+    if c[Q_VFORDER]:
+        return [(vf, flag), (V + x, result)]
+    return [(V + x, result), (vf, flag)]
 
 
 def draw_writes(c: list[int], vx: int, vy: int, n: int) -> Writes:
     """DXYN as a fixed-length record: two display writes per sprite row
     (left and right byte the row can touch), then VF.
 
-    Writes that fall off-screen go to NULL so the record length depends only
-    on N, which keeps the transformer's micro-step bookkeeping trivial.
+    With clipping, writes that fall off-screen go to NULL so the record length
+    depends only on N, which keeps the transformer's micro-step bookkeeping
+    trivial. Without it, rows and bytes wrap around the screen.
     """
+    clip = c[Q_CLIP]
     x0, y0 = vx % spec.DISPLAY_W, vy % spec.DISPLAY_H
     b, o = x0 >> 3, x0 & 7
     w: Writes = []
@@ -243,6 +272,8 @@ def draw_writes(c: list[int], vx: int, vy: int, n: int) -> Writes:
         parts = ((b, s >> o), (b + 1, (s << (8 - o)) & 0xFF))
         row = y0 + i
         for col, bits in parts:
+            if not clip:
+                row, col = row % spec.DISPLAY_H, col % spec.DISPLAY_ROW_BYTES
             if row < spec.DISPLAY_H and col < spec.DISPLAY_ROW_BYTES:
                 a = DISPLAY + row * spec.DISPLAY_ROW_BYTES + col
                 old = c[a]

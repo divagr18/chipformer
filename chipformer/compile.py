@@ -105,9 +105,11 @@ def machine_spec() -> dict:
     """Constants a host needs to boot the model and talk to it (from chipformer.spec)."""
     names = ["VAL_BASE", "ADDR_BASE", "STEP", "TICK", "BOOT", "NUM_CELLS", "NULL", "CLS", "PC",
              "RNG", "KEYS", "DISPLAY", "DISPLAY_W", "DISPLAY_H", "PROGRAM_START", "FONT_BASE",
-             "RNG_SEED"]
+             "RNG_SEED", "QUIRKS"]
     out = {n: getattr(spec, n) for n in names}
     out["FONT"] = list(spec.FONT)
+    out["QUIRK_NAMES"] = list(spec.QUIRK_NAMES)
+    out["PROFILES"] = {k: list(v) for k, v in spec.PROFILES.items()}
     return out
 
 

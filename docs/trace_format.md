@@ -18,6 +18,7 @@ All state lives in one flat array of 4609 cells, each holding an integer `0..0xF
 | `0x1013` / `0x1014` | DT / ST | byte |
 | `0x1015` | RNG (12-bit Galois LFSR, mask `0x829`) | 1–4095 |
 | `0x1016` | CLS: writing it zeroes the display | – |
+| `0x1017–0x101C` | quirk flags (see `quirks.md`) | 0/1 |
 | `0x1020–0x102F` | stack (return addresses) | 12-bit |
 | `0x1030–0x103F` | keys 0–F | 0/1 |
 | `0x1100–0x11FF` | display, 32 rows × 8 bytes, MSB is the leftmost pixel | byte |
@@ -62,15 +63,15 @@ Each record is a list of writes, then the PC write, then `STEP`.
 | `00EE` | SP←SP−1, PC←stack[SP−1] |
 | `2NNN` | stack[SP]←PC+2, SP←SP+1 |
 | `1NNN`, `BNNN`, skips, `EX9E/EXA1`, `0NNN` | none |
-| `6XNN`, `7XNN`, `8XY0–3`, `FX07`, `FX0A` | VX |
-| `8XY4–7`, `8XYE` | VX, VF |
+| `6XNN`, `7XNN`, `8XY0–3`, `FX07`, `FX0A` | VX (8XY1–3 add VF←0 with `logic`) |
+| `8XY4–7`, `8XYE` | VX, VF (VF, VX with `vforder`) |
 | `ANNN`, `FX1E`, `FX29` | I |
 | `CXNN` | VX←rnd & NN, RNG←lfsr(RNG) where rnd = low byte of the new state |
-| `DXYN` | 2N display writes (left byte, right byte per row; off-screen → NULL), then VF |
+| `DXYN` | 2N display writes (left byte, right byte per row; off-screen bytes wrap, or go to NULL with `clip`), then VF |
 | `FX15` / `FX18` | DT / ST |
 | `FX33` | M[I], M[I+1], M[I+2] |
-| `FX55` | M[I..I+X] |
-| `FX65` | V0..VX |
+| `FX55` | M[I..I+X], then I←I+X+1 unless `loadstore` |
+| `FX65` | V0..VX, then I←I+X+1 unless `loadstore` |
 
-Record lengths depend only on the opcode (and N/X), never on the data. The one exception is
+Record lengths depend only on the opcode (and N/X) and the quirk flags, never on the data. The one exception is
 FX0A's PC value: if no key is held it rewrites VX unchanged and keeps PC.

@@ -13,7 +13,7 @@ from chipformer.compile import compile_graph
 from chipformer.dense import forward
 from chipformer.dsl.batch import evaluate_batch
 from chipformer.dsl.evaluate import Evaluator
-from chipformer.fuzz import random_program
+from chipformer.fuzz import random_program, random_quirks
 from chipformer.session import Session
 from chipformer.trace import Machine
 
@@ -35,12 +35,14 @@ def assert_exact(m: Machine) -> None:
 
 @pytest.mark.parametrize("seed", range(6))
 def test_fuzz_programs(seed):
-    assert_exact(run_machine(random_program(seed), 1500, seed=seed, key_rate=0.5))
+    quirks = random_quirks(seed)
+    assert_exact(run_machine(random_program(seed), 1500, seed=seed, key_rate=0.5, quirks=quirks))
 
 
 @pytest.mark.skipif(not PONG.exists(), reason="roms/pong.ch8 not provided")
-def test_pong():
-    assert_exact(run_machine(PONG.read_bytes(), 3000, seed=1, key_rate=0.3))
+@pytest.mark.parametrize("quirks", ["chip48", "octo", "cosmac"])
+def test_pong(quirks):
+    assert_exact(run_machine(PONG.read_bytes(), 2000, seed=1, key_rate=0.3, quirks=quirks))
 
 
 @pytest.mark.parametrize("rom", TEST_ROMS, ids=lambda p: p.name)
@@ -59,10 +61,10 @@ def test_dense_transformer_is_bit_identical():
 
 
 def test_free_running_generation():
-    rom = random_program(11)
+    rom, quirks = random_program(11), random_quirks(11)
     e = Evaluator(circuit())
-    s = Session(lambda tok: int(e.output("next", e.feed(tok))), rom)
-    m = Machine(rom)
+    s = Session(lambda tok: int(e.output("next", e.feed(tok))), rom, quirks)
+    m = Machine(rom, quirks)
     rng = random.Random(0)
     for i in range(25):
         if i % 10 == 0:

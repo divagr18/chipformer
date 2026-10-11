@@ -15,13 +15,13 @@ MAX_RECORD = 2 * 40 + 2  # longer than any valid record
 
 
 class Session:
-    def __init__(self, feed: Callable[[int], int], rom: bytes):
+    def __init__(self, feed: Callable[[int], int], rom: bytes, quirks=None):
         """``feed(token)`` processes one position and returns the predicted next token."""
         self.feed = feed
         self.cells = [0] * spec.NUM_CELLS
         self.tokens: list[int] = []
         self.pred = -1
-        boot = Chip8(rom)
+        boot = Chip8(rom, quirks)
         apply_writes(self.cells, boot.state_writes())
         for t in boot_tokens(boot.cells):
             self._push(t)

@@ -10,6 +10,10 @@ use serde_json::Value;
 
 const MAX_RECORD: usize = 2 * 40 + 2;
 
+fn strings(v: &Value) -> Vec<String> {
+    v.as_array().unwrap().iter().map(|s| s.as_str().unwrap().to_string()).collect()
+}
+
 #[derive(Clone)]
 pub struct Spec {
     pub val_base: u32,
@@ -30,6 +34,9 @@ pub struct Spec {
     pub font_base: usize,
     pub rng_seed: u32,
     pub font: Vec<u32>,
+    pub quirks: usize,
+    pub quirk_names: Vec<String>,
+    pub profiles: Vec<(String, Vec<String>)>,
 }
 
 impl Spec {
@@ -55,7 +62,28 @@ impl Spec {
             font_base: u("FONT_BASE") as usize,
             rng_seed: u("RNG_SEED") as u32,
             font: m["FONT"].as_array().unwrap().iter().map(|v| v.as_u64().unwrap() as u32).collect(),
+            quirks: u("QUIRKS") as usize,
+            quirk_names: strings(&m["QUIRK_NAMES"]),
+            profiles: m["PROFILES"]
+                .as_object()
+                .unwrap()
+                .iter()
+                .map(|(k, v)| (k.clone(), strings(v)))
+                .collect(),
         }
+    }
+
+    /// Quirk cell values for a profile name ("chip48") or comma-separated flags ("shift,clip").
+    pub fn quirk_cells(&self, quirks: &str) -> Result<Vec<(usize, u32)>, String> {
+        let on: Vec<String> = match self.profiles.iter().find(|(name, _)| name == quirks) {
+            Some((_, flags)) => flags.clone(),
+            None => quirks.split(',').filter(|q| !q.is_empty()).map(str::to_string).collect(),
+        };
+        if let Some(bad) = on.iter().find(|q| !self.quirk_names.contains(q)) {
+            return Err(format!("unknown quirk {bad:?}; known: {:?} or profiles {:?}", self.quirk_names,
+                self.profiles.iter().map(|p| &p.0).collect::<Vec<_>>()));
+        }
+        Ok(self.quirk_names.iter().enumerate().map(|(i, q)| (self.quirks + i, on.contains(q) as u32)).collect())
     }
 
     pub fn is_addr(&self, t: u32) -> bool {
@@ -67,7 +95,7 @@ impl Spec {
     }
 
     /// Initial cells for a ROM: font, program, PC and RNG seed.
-    pub fn boot_cells(&self, rom: &[u8]) -> Vec<u32> {
+    pub fn boot_cells(&self, rom: &[u8], quirks: &[(usize, u32)]) -> Vec<u32> {
         let mut cells = vec![0u32; self.num_cells];
         for (i, &b) in self.font.iter().enumerate() {
             cells[self.font_base + i] = b;
@@ -77,6 +105,9 @@ impl Spec {
         }
         cells[self.pc] = self.program_start as u32;
         cells[self.rng] = self.rng_seed;
+        for &(a, v) in quirks {
+            cells[a] = v;
+        }
         cells
     }
 
@@ -118,9 +149,10 @@ pub struct Session<'m> {
 }
 
 impl<'m> Session<'m> {
-    pub fn new(model: &'m Model, rom: &[u8], keep_tokens: bool) -> Self {
+    /// `quirks`: a profile name ("octo", "chip48", "cosmac") or comma-separated quirk flags.
+    pub fn new(model: &'m Model, rom: &[u8], quirks: &str, keep_tokens: bool) -> Result<Self, String> {
         let spec = Spec::from_config(&model.config);
-        let cells = spec.boot_cells(rom);
+        let cells = spec.boot_cells(rom, &spec.quirk_cells(quirks)?);
         let dark_since = vec![0; spec.width * spec.height];
         let mut s = Session {
             spec, state: State::new(model), cells, tokens: vec![], keep_tokens, pred: 0,
@@ -128,7 +160,7 @@ impl<'m> Session<'m> {
         };
         let boot = s.spec.boot_tokens(&s.cells);
         s.inject(&boot);
-        s
+        Ok(s)
     }
 
     fn push(&mut self, t: u32) {

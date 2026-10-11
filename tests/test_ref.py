@@ -15,11 +15,46 @@ def prog(*words: int) -> bytes:
     return b"".join(w.to_bytes(2, "big") for w in words)
 
 
-def run(rom: bytes, steps: int) -> Chip8:
-    emu = Chip8(rom)
+def run(rom: bytes, steps: int, quirks="chip48") -> Chip8:
+    emu = Chip8(rom, quirks)
     for _ in range(steps):
         emu.step()
     return emu
+
+
+def test_quirk_shift():
+    code = prog(0x6003, 0x6181, 0x8016)  # V0=3, V1=0x81, V0 >>= (V1 or V0)
+    assert run(code, 3, "shift").cells[V:V + 2] == [1, 0x81]
+    emu = run(code, 3, "octo")
+    assert emu.cells[V] == 0x40 and emu.cells[V + 0xF] == 1
+
+
+def test_quirk_loadstore():
+    code = prog(0xA300, 0xF255)
+    assert run(code, 2, "loadstore").cells[I] == 0x300
+    assert run(code, 2, "octo").cells[I] == 0x303
+
+
+def test_quirk_clip_vs_wrap():
+    code = prog(0x603E, 0x611E, 0xA050, 0xD015)  # font '0' at x=62, y=30
+    clipped = run(code, 4, "clip").cells
+    wrapped = run(code, 4, "octo").cells
+    assert clipped[DISPLAY + 0] == 0 and clipped[DISPLAY + 30 * 8 + 7] == 0x03
+    assert wrapped[DISPLAY + 30 * 8 + 7] == 0x03 and wrapped[DISPLAY + 30 * 8] == 0xC0  # wraps right
+    assert wrapped[DISPLAY + 0 * 8 + 7] == 0x02  # row 32 wraps to row 0
+
+
+def test_quirk_logic_jump_vforder():
+    assert run(prog(0x6F07, 0x8011), 2, "logic").cells[V + 0xF] == 0
+    assert run(prog(0x6F07, 0x8011), 2, "octo").cells[V + 0xF] == 7
+    assert run(prog(0x6104, 0xB120), 2, "jump").cells[PC] == 0x124  # B1NN: 0x120 + V1
+    assert run(prog(0x6104, 0xB120), 2, "octo").cells[PC] == 0x120  # BNNN: 0x120 + V0
+    code = prog(0x6FFF, 0x6102, 0x8F14)  # VF = 0xFF + 2: result 1, carry 1
+    assert run(code, 3, "octo").cells[V + 0xF] == 1  # flag written last
+    assert run(code, 3, "vforder").cells[V + 0xF] == 1  # result (0x01) written last
+    code = prog(0x6FFF, 0x6103, 0x8F14)  # result 2, carry 1
+    assert run(code, 3, "octo").cells[V + 0xF] == 1
+    assert run(code, 3, "vforder").cells[V + 0xF] == 2
 
 
 def test_lfsr_is_maximal():

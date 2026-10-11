@@ -92,8 +92,8 @@ class Machine:
     This is the ground truth the transformer must reproduce token for token.
     """
 
-    def __init__(self, rom: bytes):
-        self.emu = Chip8(rom)
+    def __init__(self, rom: bytes, quirks: "str | tuple[str, ...] | None" = None):
+        self.emu = Chip8(rom, quirks)
         self.tokens = boot_tokens(self.emu.cells)
         self.generated = [False] * len(self.tokens)  # tokens the model must predict
 

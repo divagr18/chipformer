@@ -1,6 +1,6 @@
 //! engine predict <model_dir> <tokens.u32> <out.u32>
 //!     Teacher-forced: feed every token, write the predicted next token per position.
-//! engine run <model_dir> <rom> [--instr N] [--ipf K] [--seed S] [--rollover T] [--dump trace.u32]
+//! engine run <model_dir> <rom> [--instr N] [--ipf K] [--seed S] [--quirks Q] [--rollover T] [--dump trace.u32]
 //!     Free-running CHIP-8 with a timer tick every K instructions and random key presses;
 //!     reports throughput and optionally dumps the token trace for verification.
 
@@ -67,7 +67,8 @@ fn main() {
             let mut seed: u64 = opt(&args, "--seed", 1);
             let dump: Option<PathBuf> = args.iter().position(|a| a == "--dump").map(|i| PathBuf::from(&args[i + 1]));
             let t = Instant::now();
-            let mut s = Session::new(&model, &rom, dump.is_some());
+            let quirks: String = opt(&args, "--quirks", String::new());
+            let mut s = Session::new(&model, &rom, &quirks, dump.is_some()).unwrap_or_else(|e| panic!("{e}"));
             let boot_pos = s.state.pos;
             eprintln!("boot prompt: {boot_pos} tokens in {:.2}s", t.elapsed().as_secs_f64());
             let t = Instant::now();

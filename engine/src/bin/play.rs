@@ -1,6 +1,6 @@
 //! Play a CHIP-8 ROM on the hand-built transformer.
 //!
-//!     play <model_dir> <rom> [--ipf 10] [--scale 12] [--keys pong|classic] [--persist 20] [--no-fade]
+//!     play <model_dir> <rom> [--ipf 10] [--scale 12] [--keys pong|classic] [--quirks Q] [--persist 20] [--no-fade]
 //!
 //! Pong controls (default):  left paddle  A = up, D = down
 //!                           right paddle Left = up, Right = down
@@ -41,7 +41,7 @@ fn opt(args: &[String], name: &str, default: &str) -> String {
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     if args.len() < 3 {
-        eprintln!("usage: play <model_dir> <rom> [--ipf 10] [--scale 12] [--keys pong|classic] [--persist 20] [--no-fade]");
+        eprintln!("usage: play <model_dir> <rom> [--ipf 10] [--scale 12] [--keys pong|classic] [--quirks Q] [--persist 20] [--no-fade]");
         std::process::exit(2);
     }
     let ipf: usize = opt(&args, "--ipf", "10").parse().expect("--ipf");
@@ -65,7 +65,8 @@ fn main() {
 
     let model = Model::load(Path::new(&args[1]));
     let rom = std::fs::read(&args[2]).expect("read rom");
-    let mut s = Session::new(&model, &rom, false);
+    let quirks = opt(&args, "--quirks", "");
+    let mut s = Session::new(&model, &rom, &quirks, false).unwrap_or_else(|e| panic!("{e}"));
     let (w, h) = (s.spec.width, s.spec.height);
 
     let mut window = Window::new("chipformer", w * scale, h * scale, WindowOptions::default())

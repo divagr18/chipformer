@@ -40,6 +40,14 @@ def random_instruction(rng: random.Random, sub_addr: int) -> int:
     return 0xF000 | x << 8 | int(kind.removeprefix("FX"), 16)
 
 
+def random_quirks(seed: int) -> tuple[str, ...]:
+    """A random quirk profile (each flag on with probability 1/2)."""
+    from chipformer.spec import QUIRK_NAMES
+
+    rng = random.Random(seed * 7919 + 1)
+    return tuple(q for q in QUIRK_NAMES if rng.random() < 0.5)
+
+
 def random_program(seed: int, body: int = 120) -> bytes:
     rng = random.Random(seed)
     sub_addr = 0x200 + 2 * (body + 1)

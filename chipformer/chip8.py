@@ -23,12 +23,6 @@ from chipformer.dsl.lib import MAX_POS, Circuit
 JMAX = 40  # write indices are clamped here (largest record: DXYN with 32 writes)
 NOT_FOUND = 2 * MAX_POS  # pushes "latest flagged position" checks negative when no flag exists
 
-FIXED_COUNT = {  # instructions whose writes (besides PC) are computed at the record start
-    "00E0": 1, "00EE": 1, "2NNN": 2, "6XNN": 1, "7XNN": 1, "ANNN": 1, "CXNN": 2,
-    "8XY0": 1, "8XY1": 1, "8XY2": 1, "8XY3": 1,
-    "8XY4": 2, "8XY5": 2, "8XY6": 2, "8XY7": 2, "8XYE": 2,
-    "FX07": 1, "FX0A": 1, "FX15": 1, "FX18": 1, "FX1E": 1, "FX29": 1, "FX33": 3,
-}
 
 
 class Chip8Circuit(Circuit):
@@ -85,6 +79,7 @@ def build() -> Chip8Circuit:
     rng = c.read(spec.RNG, "RNG")
     v0 = c.read(V, "V0")
     keys = [c.read(spec.KEYS + k, f"key{k:X}") for k in range(16)]
+    q = {name: c.read(spec.QUIRKS + i, f"q.{name}") for i, name in enumerate(spec.QUIRK_NAMES)}
 
     pc1 = c.wrap(pc + 1, 0x1000, "pc+1")
     pc2 = c.wrap(pc + 2, 0x1000, "pc+2")
@@ -140,21 +135,21 @@ def build() -> Chip8Circuit:
     nnb = c.bits(nn, 8, "nn.b")
     rnd = c.ffn([(1 << i, nnb[i], sbits[i]) for i in range(8)], "rnd&nn")
 
-    fixed = {
+    # 8XY6/8XYE shift VX in place with the shift quirk, otherwise VY
+    shr = c.mux(q["shift"], Circuit.from_bits(xb[1:]), Circuit.from_bits(yb[1:]), "shr")
+    shl = c.mux(q["shift"], 2 * Circuit.from_bits(xb[:7]), 2 * Circuit.from_bits(yb[:7]), "shl")
+    lsb = c.mux(q["shift"], xb[0], yb[0], "lsb")
+    msb = c.mux(q["shift"], xb[7], yb[7], "msb")
+
+    # Instructions whose writes (besides PC) are computed at the record start, as
+    # (condition, writes) variants: conditions are one-hot, quirks pick the variant.
+    fixed: list[tuple[Expr, list]] = [(ind[op], w) for op, w in {
         "00E0": [(spec.CLS, 0)],
         "00EE": [(spec.SP, sp_dec)],
         "2NNN": [(spec.STACK + sp, pc2), (spec.SP, sp_inc)],
         "6XNN": [(V + x, nn)],
         "7XNN": [(V + x, c.wrap(vx + nn, 256, "vx+nn"))],
         "8XY0": [(V + x, vy)],
-        "8XY1": [(V + x, vx + vy - and_xy)],
-        "8XY2": [(V + x, and_xy)],
-        "8XY3": [(V + x, vx + vy - 2 * and_xy)],
-        "8XY4": [(V + x, s - 256 * carry), (VF, carry)],
-        "8XY5": [(V + x, vx - vy + 256 * (1 - ge_xy)), (VF, ge_xy)],
-        "8XY6": [(V + x, Circuit.from_bits(xb[1:])), (VF, xb[0])],
-        "8XY7": [(V + x, vy - vx + 256 * (1 - ge_yx)), (VF, ge_yx)],
-        "8XYE": [(V + x, 2 * Circuit.from_bits(xb[:7])), (VF, xb[7])],
         "ANNN": [(spec.I, nnn)],
         "CXNN": [(V + x, rnd), (spec.RNG, rng_next)],
         "FX07": [(V + x, dt)],
@@ -165,16 +160,26 @@ def build() -> Chip8Circuit:
         "FX29": [(spec.I, spec.FONT_BASE + 5 * vx_lo)],
         "FX33": [(i_plus[0], hundreds), (i_plus[1], tens_all - 10 * hundreds),
                  (i_plus[2], vx - 10 * tens_all)],
-    }
-    assert {k: len(v) for k, v in fixed.items()} == FIXED_COUNT
-    fa = [c.select([(ind[op], w[m][0]) for op, w in fixed.items() if len(w) > m], f"A{m}")
-          for m in range(3)]
-    fv = [c.select([(ind[op], w[m][1]) for op, w in fixed.items() if len(w) > m], f"W{m}")
-          for m in range(3)]
-    has = [sum((ind[op] for op, w in fixed.items() if len(w) > m), Expr()) for m in range(3)]
+    }.items()]
+    for op, result in [("8XY1", vx + vy - and_xy), ("8XY2", and_xy), ("8XY3", vx + vy - 2 * and_xy)]:
+        fixed.append((c.gate(ind[op], 1 - q["logic"], f"{op}.plain"), [(V + x, result)]))
+        fixed.append((c.gate(ind[op], q["logic"], f"{op}.vfreset"), [(V + x, result), (VF, 0)]))
+    for op, result, flag in [("8XY4", s - 256 * carry, carry),
+                             ("8XY5", vx - vy + 256 * (1 - ge_xy), ge_xy), ("8XY6", shr, lsb),
+                             ("8XY7", vy - vx + 256 * (1 - ge_yx), ge_yx), ("8XYE", shl, msb)]:
+        fixed.append((c.gate(ind[op], 1 - q["vforder"], f"{op}.flaglast"),
+                      [(V + x, result), (VF, flag)]))
+        fixed.append((c.gate(ind[op], q["vforder"], f"{op}.flagfirst"),
+                      [(VF, flag), (V + x, result)]))
+    fa = [c.select([(cond, w[m][0]) for cond, w in fixed if len(w) > m], f"A{m}") for m in range(3)]
+    fv = [c.select([(cond, w[m][1]) for cond, w in fixed if len(w) > m], f"W{m}") for m in range(3)]
+    has = [sum((cond for cond, w in fixed if len(w) > m), Expr()) for m in range(3)]
     is_vec = ind["FX55"] + ind["FX65"] + ind["DXYN"]
 
-    nw = (sum((cnt * ind[op] for op, cnt in FIXED_COUNT.items()), Expr())
+    # FX55/FX65 advance I by X+1 after the transfer unless the loadstore quirk is set
+    ls_extra = c.gate(ind["FX55"] + ind["FX65"], 1 - q["loadstore"], "i_advance")
+    i_next = c.wrap(ireg + x + 1, 0x1000, "i+x+1")
+    nw = (sum((len(w) * cond for cond, w in fixed), Expr()) + ls_extra
           + c.ffn([(1, x + 1, ind["FX55"]), (1, x + 1, ind["FX65"]), (1, 2 * n + 1, ind["DXYN"])],
                   "vec_count"))
 
@@ -182,7 +187,7 @@ def build() -> Chip8Circuit:
                   (1, ind["5XY0"], eq_x_y), (1, ind["9XY0"], 1 - eq_x_y),
                   (1, ind["EX9E"], key_vx), (1, ind["EXA1"], 1 - key_vx)], "skip")
     wait = c.gate(ind["FX0A"], 1 - any_key, "wait")
-    bnnn = c.wrap(nnn + v0, 0x1000, "nnn+v0")
+    bnnn = c.wrap(nnn + c.mux(q["jump"], vx, v0, "jump_reg"), 0x1000, "jump_target")
     next_pc = pc2 + c.select([
         (skip, pc4 - pc2), (ind["1NNN"] + ind["2NNN"], nnn - pc2),
         (ind["00EE"], stack_top - pc2), (ind["BNNN"], bnnn - pc2), (wait, pc - pc2)], "next_pc")
@@ -195,6 +200,7 @@ def build() -> Chip8Circuit:
         "fx55": ind["FX55"], "fx65": ind["FX65"], "dxyn": ind["DXYN"],
         "dx_byte": Circuit.from_bits(x0b[3:]), "dx_off": Circuit.from_bits(x0b[:3]),
         "dy": Circuit.from_bits(y0b), "dt_dec": dt_dec, "st_dec": st_dec,
+        "ls_extra": ls_extra, "i_next": i_next, "clip": q["clip"],
     }
     k = dict(zip(ctx, c.latest(c.is_step + c.is_boot, list(ctx.values()), "ctx")))
 
@@ -208,6 +214,7 @@ def build() -> Chip8Circuit:
     le_x = c.step(k["x"] - j, "j<=x")
     lt_2n = c.step(2 * k["n"] - 1 - j, "j<2n")
     eq_2n = c.eq(j - 2 * k["n"], 0, "j==2n")
+    is_i_advance = c.eq(j - k["x"] - 1, 0, "j==x+1")
 
     i_j = c.wrap(k["I"] + j, 0x1000, "i+j")
     i_row = c.wrap(k["I"] + row_i, 0x1000, "i+row")
@@ -215,11 +222,15 @@ def build() -> Chip8Circuit:
     vread = c.read(q_vec, "vread")
     old = c.read_display(c.addr, "old")  # at an ADDR position: the target byte's current value
 
-    # DXYN rows: write j targets display byte (dy + j//2, dx_byte + j%2), or NULL if off-screen
+    # DXYN rows: write j targets display byte (dy + j//2, dx_byte + j%2). Off-screen bytes
+    # go to NULL with the clip quirk, otherwise the row and byte wrap around the screen.
     row = k["dy"] + row_i
     col = k["dx_byte"] + side
+    row_w = row - 32 * c.step(row - 32, "row>=32")
+    col_w = col - 8 * c.step(col - 8, "col>=8")
     on_screen = c.all_of(c.step(31 - row, "row<32"), c.step(7 - col, "col<8"), name="on_screen")
-    target = spec.NULL + c.gate(spec.DISPLAY + 8 * row + col - spec.NULL, on_screen, "target")
+    drawn = 1 - c.gate(1 - on_screen, k["clip"], "clipped")
+    target = spec.NULL + c.gate(spec.DISPLAY + 8 * row_w + col_w - spec.NULL, drawn, "target")
     shift = [c.eq(2 * k["dx_off"] + side, kk, f"shift{kk}") for kk in range(16)]
     sb = c.bits(vread, 8, "sprite.b")
     part_bits = []
@@ -256,7 +267,9 @@ def build() -> Chip8Circuit:
     case([at_addr, not_tick, k["fx55"], le_x], A + i_j, "fx55.addr")
     case([at_val, not_tick, k["fx65"], le_x], vread, "fx65.val")
     case([at_addr, not_tick, k["fx65"], le_x], A + V + j, "fx65.addr")
-    case([at_val, not_tick, k["dxyn"], lt_2n, on_screen], new_byte, "draw.val")
+    case([at_val, not_tick, k["ls_extra"], is_i_advance], k["i_next"], "i_advance.val")
+    case([at_addr, not_tick, k["ls_extra"], is_i_advance], A + spec.I, "i_advance.addr")
+    case([at_val, not_tick, k["dxyn"], lt_2n, drawn], new_byte, "draw.val")
     case([at_addr, not_tick, k["dxyn"], lt_2n], A + target, "draw.addr")
     case([at_val, not_tick, k["dxyn"], eq_2n], any_collision, "vf.val")
     case([at_addr, not_tick, k["dxyn"], eq_2n], A + VF, "vf.addr")
