@@ -17,7 +17,7 @@
 //! makes them blink), followed by a short phosphor fade. If the model is slower than real time the
 //! game slows down rather than skipping instructions.
 
-use chipformer_engine::games::parse_manifest;
+use chipformer_engine::games::{TAP_FRAMES, parse_manifest};
 use chipformer_engine::host::Session;
 use chipformer_engine::model::Model;
 use minifb::{Key, Window, WindowOptions};
@@ -75,7 +75,7 @@ fn main() {
     let persist: u64 = opt(&args, "--persist", "20").parse().expect("--persist");
 
     // a manifest game brings its ROM, speed, quirks and controls; flags override them
-    let (rom, mut ipf, mut quirks, keymap, title) = if args.iter().any(|a| a == "--game") {
+    let (rom, mut ipf, mut quirks, keymap, title, tap) = if args.iter().any(|a| a == "--game") {
         let path = opt(&args, "--games", "games/manifest.json");
         let games = parse_manifest(&std::fs::read_to_string(&path).expect("read manifest")).unwrap();
         let id = opt(&args, "--game", "");
@@ -83,14 +83,14 @@ fn main() {
         let rom = std::fs::read(Path::new(&path).parent().unwrap().join(&g.file)).expect("read rom");
         let keys = g.bindings().into_iter().map(|(k, c)| (key_named(k), c)).collect();
         eprintln!("{}: {}", g.title, g.controls);
-        (rom, g.ipf, g.quirks.clone(), with_classic(keys), g.title.clone())
+        (rom, g.ipf, g.quirks.clone(), with_classic(keys), g.title.clone(), g.tap_chips())
     } else {
         let keymap = match opt(&args, "--keys", "pong").as_str() {
             "classic" => CLASSIC.to_vec(),
             "pong" => with_classic(PONG.to_vec()),
             other => panic!("--keys must be pong or classic, not {other}"),
         };
-        (std::fs::read(&args[2]).expect("read rom"), 10, String::new(), keymap, args[2].clone())
+        (std::fs::read(&args[2]).expect("read rom"), 10, String::new(), keymap, args[2].clone(), vec![])
     };
     ipf = opt(&args, "--ipf", &ipf.to_string()).parse().expect("--ipf");
     quirks = opt(&args, "--quirks", &quirks);
@@ -106,12 +106,22 @@ fn main() {
     let frame = Duration::from_micros(16_667);
     let (mut frames, mut tokens_at, mut clock) = (0u32, s.state.pos, Instant::now());
     let mut rollovers = 0;
+    let (mut was_down, mut pulse) = ([false; 16], [0u32; 16]);
 
     while window.is_open() && !window.is_key_down(Key::Escape) {
         let start = Instant::now();
         let mut down = [false; 16];
         for &(k, chip) in &keymap {
             down[chip] |= window.is_key_down(k);
+        }
+        // tap keys: one short pulse per press, however long the key is held
+        for &chip in &tap {
+            if down[chip] && !was_down[chip] {
+                pulse[chip] = TAP_FRAMES;
+            }
+            was_down[chip] = down[chip];
+            down[chip] = pulse[chip] > 0;
+            pulse[chip] = pulse[chip].saturating_sub(1);
         }
         for (chip, &d) in down.iter().enumerate() {
             s.set_key(chip, d);

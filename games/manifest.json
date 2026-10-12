@@ -32,7 +32,8 @@
     },
     "tokens_per_instruction": 5.56,
     "realtime_tok_per_s": 2335
-   }
+   },
+   "tap": []
   },
   {
    "id": "octojam-2-title",
@@ -64,7 +65,8 @@
     "foreign_opcodes": {},
     "tokens_per_instruction": 21.82,
     "realtime_tok_per_s": 9165
-   }
+   },
+   "tap": []
   },
   {
    "id": "octojam-3-title",
@@ -96,7 +98,8 @@
     "foreign_opcodes": {},
     "tokens_per_instruction": 6.83,
     "realtime_tok_per_s": 2870
-   }
+   },
+   "tap": []
   },
   {
    "id": "octojam-4-title",
@@ -128,7 +131,8 @@
     "foreign_opcodes": {},
     "tokens_per_instruction": 8.04,
     "realtime_tok_per_s": 14475
-   }
+   },
+   "tap": []
   },
   {
    "id": "octojam-5-title",
@@ -160,7 +164,8 @@
     "foreign_opcodes": {},
     "tokens_per_instruction": 8.2,
     "realtime_tok_per_s": 3443
-   }
+   },
+   "tap": []
   },
   {
    "id": "octojam-6-title",
@@ -192,7 +197,8 @@
     "foreign_opcodes": {},
     "tokens_per_instruction": 25.22,
     "realtime_tok_per_s": 10592
-   }
+   },
+   "tap": []
   },
   {
    "id": "octojam-7-title",
@@ -224,7 +230,8 @@
     "foreign_opcodes": {},
     "tokens_per_instruction": 9.83,
     "realtime_tok_per_s": 17694
-   }
+   },
+   "tap": []
   },
   {
    "id": "octojam-8-title",
@@ -256,7 +263,8 @@
     "foreign_opcodes": {},
     "tokens_per_instruction": 9.49,
     "realtime_tok_per_s": 3986
-   }
+   },
+   "tap": []
   },
   {
    "id": "octojam-9-title",
@@ -288,7 +296,8 @@
     "foreign_opcodes": {},
     "tokens_per_instruction": 5.47,
     "realtime_tok_per_s": 4925
-   }
+   },
+   "tap": []
   },
   {
    "id": "octojam-10-title",
@@ -320,7 +329,8 @@
     "foreign_opcodes": {},
     "tokens_per_instruction": 10.96,
     "realtime_tok_per_s": 4602
-   }
+   },
+   "tap": []
   },
   {
    "id": "fuse",
@@ -352,7 +362,8 @@
     "foreign_opcodes": {},
     "tokens_per_instruction": 4.69,
     "realtime_tok_per_s": 4225
-   }
+   },
+   "tap": []
   },
   {
    "id": "slippery-slope",
@@ -384,7 +395,8 @@
     "foreign_opcodes": {},
     "tokens_per_instruction": 6.25,
     "realtime_tok_per_s": 11256
-   }
+   },
+   "tap": []
   },
   {
    "id": "chipwar",
@@ -416,7 +428,8 @@
     "foreign_opcodes": {},
     "tokens_per_instruction": 7.24,
     "realtime_tok_per_s": 6514
-   }
+   },
+   "tap": []
   },
   {
    "id": "cave-explorer",
@@ -450,7 +463,8 @@
     "realtime_tok_per_s": 6226
    },
    "controls": "Arrow keys move",
-   "featured": 9
+   "featured": 9,
+   "tap": []
   },
   {
    "id": "outlaw",
@@ -484,7 +498,8 @@
     "realtime_tok_per_s": 6352
    },
    "controls": "Arrow keys move, Space shoots",
-   "featured": 10
+   "featured": 10,
+   "tap": []
   },
   {
    "id": "rps",
@@ -516,7 +531,8 @@
     "foreign_opcodes": {},
     "tokens_per_instruction": 5.13,
     "realtime_tok_per_s": 2156
-   }
+   },
+   "tap": []
   },
   {
    "id": "octo-a-chip-8-story",
@@ -548,7 +564,8 @@
     "foreign_opcodes": {},
     "tokens_per_instruction": 7.59,
     "realtime_tok_per_s": 3187
-   }
+   },
+   "tap": []
   },
   {
    "id": "pumpkin-dreess-up",
@@ -580,7 +597,8 @@
     "foreign_opcodes": {},
     "tokens_per_instruction": 7.19,
     "realtime_tok_per_s": 3018
-   }
+   },
+   "tap": []
   },
   {
    "id": "pet-dog",
@@ -612,7 +630,8 @@
     "foreign_opcodes": {},
     "tokens_per_instruction": 12.86,
     "realtime_tok_per_s": 5403
-   }
+   },
+   "tap": []
   },
   {
    "id": "8ce-attourny--disc-1",
@@ -644,7 +663,8 @@
     "foreign_opcodes": {},
     "tokens_per_instruction": 7.05,
     "realtime_tok_per_s": 2961
-   }
+   },
+   "tap": []
   },
   {
    "id": "8ce-attourny--disc-2",
@@ -676,7 +696,8 @@
     "foreign_opcodes": {},
     "tokens_per_instruction": 6.15,
     "realtime_tok_per_s": 2582
-   }
+   },
+   "tap": []
   },
   {
    "id": "8ce-attourny--disc-3",
@@ -708,7 +729,8 @@
     "foreign_opcodes": {},
     "tokens_per_instruction": 7.04,
     "realtime_tok_per_s": 2956
-   }
+   },
+   "tap": []
   },
   {
    "id": "octo-rancher",
@@ -740,7 +762,8 @@
     "foreign_opcodes": {},
     "tokens_per_instruction": 5.75,
     "realtime_tok_per_s": 2413
-   }
+   },
+   "tap": []
   },
   {
    "id": "tank",
@@ -772,7 +795,8 @@
     "foreign_opcodes": {},
     "tokens_per_instruction": 3.73,
     "realtime_tok_per_s": 44816
-   }
+   },
+   "tap": []
   },
   {
    "id": "flight-runner",
@@ -806,7 +830,8 @@
     "realtime_tok_per_s": 4168
    },
    "controls": "Up/Down steer",
-   "featured": 11
+   "featured": 11,
+   "tap": []
   },
   {
    "id": "masquer8",
@@ -838,7 +863,8 @@
     "foreign_opcodes": {},
     "tokens_per_instruction": 6.53,
     "realtime_tok_per_s": 5879
-   }
+   },
+   "tap": []
   },
   {
    "id": "carbon8",
@@ -870,7 +896,8 @@
     "foreign_opcodes": {},
     "tokens_per_instruction": 5.32,
     "realtime_tok_per_s": 4791
-   }
+   },
+   "tap": []
   },
   {
    "id": "bad-kaiju-ju",
@@ -902,7 +929,8 @@
     "foreign_opcodes": {},
     "tokens_per_instruction": 6.35,
     "realtime_tok_per_s": 2667
-   }
+   },
+   "tap": []
   },
   {
    "id": "piper",
@@ -936,7 +964,8 @@
     "foreign_opcodes": {},
     "tokens_per_instruction": 4.54,
     "realtime_tok_per_s": 54516
-   }
+   },
+   "tap": []
   },
   {
    "id": "mini-lights-out",
@@ -968,7 +997,8 @@
     "foreign_opcodes": {},
     "tokens_per_instruction": 6.5,
     "realtime_tok_per_s": 2729
-   }
+   },
+   "tap": []
   },
   {
    "id": "horse-world-online",
@@ -1000,7 +1030,8 @@
     "foreign_opcodes": {},
     "tokens_per_instruction": 4.18,
     "realtime_tok_per_s": 7515
-   }
+   },
+   "tap": []
   },
   {
    "id": "ghost-escape",
@@ -1032,7 +1063,8 @@
     "foreign_opcodes": {},
     "tokens_per_instruction": 5.79,
     "realtime_tok_per_s": 2432
-   }
+   },
+   "tap": []
   },
   {
    "id": "tomb-ston-tipp",
@@ -1064,7 +1096,8 @@
     "foreign_opcodes": {},
     "tokens_per_instruction": 5.75,
     "realtime_tok_per_s": 2415
-   }
+   },
+   "tap": []
   },
   {
    "id": "br8kout",
@@ -1098,7 +1131,8 @@
     "realtime_tok_per_s": 2560
    },
    "controls": "Left/Right move the paddle",
-   "featured": 8
+   "featured": 8,
+   "tap": []
   },
   {
    "id": "1d-cellular-automata",
@@ -1130,7 +1164,8 @@
     "foreign_opcodes": {},
     "tokens_per_instruction": 5.38,
     "realtime_tok_per_s": 322707
-   }
+   },
+   "tap": []
   },
   {
    "id": "spacejam",
@@ -1162,7 +1197,8 @@
     "foreign_opcodes": {},
     "tokens_per_instruction": 3.86,
     "realtime_tok_per_s": 23140
-   }
+   },
+   "tap": []
   },
   {
    "id": "mastermind",
@@ -1194,7 +1230,8 @@
     "foreign_opcodes": {},
     "tokens_per_instruction": 5.83,
     "realtime_tok_per_s": 6997
-   }
+   },
+   "tap": []
   },
   {
    "id": "space-racer",
@@ -1225,7 +1262,8 @@
     "foreign_opcodes": {},
     "tokens_per_instruction": 8.99,
     "realtime_tok_per_s": 10782
-   }
+   },
+   "tap": []
   },
   {
    "id": "down8",
@@ -1259,7 +1297,8 @@
     "realtime_tok_per_s": 4395
    },
    "controls": "Left/Right move",
-   "featured": 12
+   "featured": 12,
+   "tap": []
   },
   {
    "id": "danm8ku",
@@ -1290,7 +1329,8 @@
     "foreign_opcodes": {},
     "tokens_per_instruction": 5.23,
     "realtime_tok_per_s": 313647
-   }
+   },
+   "tap": []
   },
   {
    "id": "chipquarium",
@@ -1325,7 +1365,8 @@
     "foreign_opcodes": {},
     "tokens_per_instruction": 5.65,
     "realtime_tok_per_s": 5089
-   }
+   },
+   "tap": []
   },
   {
    "id": "glitch-ghost",
@@ -1357,7 +1398,8 @@
     "foreign_opcodes": {},
     "tokens_per_instruction": 3.95,
     "realtime_tok_per_s": 47360
-   }
+   },
+   "tap": []
   },
   {
    "id": "spock-paper-scissors",
@@ -1389,7 +1431,8 @@
     "foreign_opcodes": {},
     "tokens_per_instruction": 4.49,
     "realtime_tok_per_s": 4042
-   }
+   },
+   "tap": []
   },
   {
    "id": "snek",
@@ -1421,7 +1464,8 @@
     "foreign_opcodes": {},
     "tokens_per_instruction": 3.68,
     "realtime_tok_per_s": 220539
-   }
+   },
+   "tap": []
   },
   {
    "id": "super-pong",
@@ -1455,7 +1499,8 @@
     "realtime_tok_per_s": 7110
    },
    "controls": "WASD moves the paddles, Space (E) resets",
-   "featured": 5
+   "featured": 5,
+   "tap": []
   },
   {
    "id": "wdl",
@@ -1490,7 +1535,8 @@
     "foreign_opcodes": {},
     "tokens_per_instruction": 3.95,
     "realtime_tok_per_s": 3555
-   }
+   },
+   "tap": []
   },
   {
    "id": "knumber-knower",
@@ -1523,7 +1569,8 @@
     "foreign_opcodes": {},
     "tokens_per_instruction": 6.05,
     "realtime_tok_per_s": 5445
-   }
+   },
+   "tap": []
   },
   {
    "id": "dino-run",
@@ -1560,7 +1607,8 @@
     "realtime_tok_per_s": 4189
    },
    "controls": "Up or Space jumps",
-   "featured": 13
+   "featured": 13,
+   "tap": []
   },
   {
    "id": "tick",
@@ -1594,7 +1642,8 @@
     "foreign_opcodes": {},
     "tokens_per_instruction": 7.26,
     "realtime_tok_per_s": 5227
-   }
+   },
+   "tap": []
   },
   {
    "id": "mato8",
@@ -1626,7 +1675,8 @@
     "foreign_opcodes": {},
     "tokens_per_instruction": 5.18,
     "realtime_tok_per_s": 6215
-   }
+   },
+   "tap": []
   },
   {
    "id": "15-puzzle",
@@ -1657,7 +1707,8 @@
     "foreign_opcodes": {},
     "tokens_per_instruction": 4.2,
     "realtime_tok_per_s": 3777
-   }
+   },
+   "tap": []
   },
   {
    "id": "addition-problems",
@@ -1688,7 +1739,8 @@
     "foreign_opcodes": {},
     "tokens_per_instruction": 10.73,
     "realtime_tok_per_s": 9657
-   }
+   },
+   "tap": []
   },
   {
    "id": "airplane",
@@ -1717,7 +1769,8 @@
     "foreign_opcodes": {},
     "tokens_per_instruction": 5.78,
     "realtime_tok_per_s": 5204
-   }
+   },
+   "tap": []
   },
   {
    "id": "animal-race",
@@ -1748,7 +1801,8 @@
     "foreign_opcodes": {},
     "tokens_per_instruction": 6.67,
     "realtime_tok_per_s": 6005
-   }
+   },
+   "tap": []
   },
   {
    "id": "astro-dodge",
@@ -1781,7 +1835,8 @@
     "foreign_opcodes": {},
     "tokens_per_instruction": 7.24,
     "realtime_tok_per_s": 6514
-   }
+   },
+   "tap": []
   },
   {
    "id": "biorhythm",
@@ -1812,7 +1867,8 @@
     "foreign_opcodes": {},
     "tokens_per_instruction": 6.66,
     "realtime_tok_per_s": 5995
-   }
+   },
+   "tap": []
   },
   {
    "id": "blinky",
@@ -1850,7 +1906,8 @@
     "realtime_tok_per_s": 9732
    },
    "controls": "Arrow keys steer through the maze",
-   "featured": 3
+   "featured": 3,
+   "tap": []
   },
   {
    "id": "blitz",
@@ -1883,7 +1940,8 @@
     "foreign_opcodes": {},
     "tokens_per_instruction": 4.52,
     "realtime_tok_per_s": 4071
-   }
+   },
+   "tap": []
   },
   {
    "id": "bowling",
@@ -1914,7 +1972,8 @@
     "foreign_opcodes": {},
     "tokens_per_instruction": 5.43,
     "realtime_tok_per_s": 4884
-   }
+   },
+   "tap": []
   },
   {
    "id": "breakout",
@@ -1948,7 +2007,8 @@
     "foreign_opcodes": {},
     "tokens_per_instruction": 4.71,
     "realtime_tok_per_s": 4237
-   }
+   },
+   "tap": []
   },
   {
    "id": "breakout-2",
@@ -1979,7 +2039,8 @@
     "foreign_opcodes": {},
     "tokens_per_instruction": 5.55,
     "realtime_tok_per_s": 4993
-   }
+   },
+   "tap": []
   },
   {
    "id": "brick",
@@ -2008,7 +2069,8 @@
     "foreign_opcodes": {},
     "tokens_per_instruction": 5.12,
     "realtime_tok_per_s": 4605
-   }
+   },
+   "tap": []
   },
   {
    "id": "brix",
@@ -2044,7 +2106,8 @@
     "realtime_tok_per_s": 4033
    },
    "controls": "Left/Right move the paddle",
-   "featured": 2
+   "featured": 2,
+   "tap": []
   },
   {
    "id": "cave",
@@ -2073,7 +2136,8 @@
     "foreign_opcodes": {},
     "tokens_per_instruction": 4.7,
     "realtime_tok_per_s": 4226
-   }
+   },
+   "tap": []
   },
   {
    "id": "coin-flipping",
@@ -2104,7 +2168,8 @@
     "foreign_opcodes": {},
     "tokens_per_instruction": 4.52,
     "realtime_tok_per_s": 4068
-   }
+   },
+   "tap": []
   },
   {
    "id": "connect-4",
@@ -2139,7 +2204,8 @@
     "foreign_opcodes": {},
     "tokens_per_instruction": 4.85,
     "realtime_tok_per_s": 8727
-   }
+   },
+   "tap": []
   },
   {
    "id": "craps",
@@ -2170,7 +2236,8 @@
     "foreign_opcodes": {},
     "tokens_per_instruction": 3.62,
     "realtime_tok_per_s": 3258
-   }
+   },
+   "tap": []
   },
   {
    "id": "deflection",
@@ -2201,7 +2268,8 @@
     "foreign_opcodes": {},
     "tokens_per_instruction": 4.2,
     "realtime_tok_per_s": 3780
-   }
+   },
+   "tap": []
   },
   {
    "id": "figures",
@@ -2230,7 +2298,8 @@
     "foreign_opcodes": {},
     "tokens_per_instruction": 5.19,
     "realtime_tok_per_s": 4669
-   }
+   },
+   "tap": []
   },
   {
    "id": "filter",
@@ -2259,7 +2328,8 @@
     "foreign_opcodes": {},
     "tokens_per_instruction": 4.02,
     "realtime_tok_per_s": 3619
-   }
+   },
+   "tap": []
   },
   {
    "id": "guess-the-number",
@@ -2293,7 +2363,8 @@
     "foreign_opcodes": {},
     "tokens_per_instruction": 4.72,
     "realtime_tok_per_s": 4248
-   }
+   },
+   "tap": []
   },
   {
    "id": "hi-lo",
@@ -2324,7 +2395,8 @@
     "foreign_opcodes": {},
     "tokens_per_instruction": 3.56,
     "realtime_tok_per_s": 3207
-   }
+   },
+   "tap": []
   },
   {
    "id": "hidden",
@@ -2361,7 +2433,8 @@
     "foreign_opcodes": {},
     "tokens_per_instruction": 7.94,
     "realtime_tok_per_s": 7143
-   }
+   },
+   "tap": []
   },
   {
    "id": "kaleidoscope",
@@ -2399,7 +2472,8 @@
     "foreign_opcodes": {},
     "tokens_per_instruction": 5.82,
     "realtime_tok_per_s": 5236
-   }
+   },
+   "tap": []
   },
   {
    "id": "landing",
@@ -2428,7 +2502,8 @@
     "foreign_opcodes": {},
     "tokens_per_instruction": 4.92,
     "realtime_tok_per_s": 4431
-   }
+   },
+   "tap": []
   },
   {
    "id": "lunar-lander",
@@ -2457,7 +2532,8 @@
     "foreign_opcodes": {},
     "tokens_per_instruction": 6.77,
     "realtime_tok_per_s": 6091
-   }
+   },
+   "tap": []
   },
   {
    "id": "mastermind-fourrow",
@@ -2488,7 +2564,8 @@
     "foreign_opcodes": {},
     "tokens_per_instruction": 4.69,
     "realtime_tok_per_s": 4223
-   }
+   },
+   "tap": []
   },
   {
    "id": "merlin",
@@ -2519,7 +2596,8 @@
     "foreign_opcodes": {},
     "tokens_per_instruction": 3.97,
     "realtime_tok_per_s": 3577
-   }
+   },
+   "tap": []
   },
   {
    "id": "missile-command",
@@ -2554,7 +2632,8 @@
     "realtime_tok_per_s": 3399
    },
    "controls": "Space fires",
-   "featured": 7
+   "featured": 7,
+   "tap": []
   },
   {
    "id": "most-dangerous-game",
@@ -2585,7 +2664,8 @@
     "foreign_opcodes": {},
     "tokens_per_instruction": 3.79,
     "realtime_tok_per_s": 3409
-   }
+   },
+   "tap": []
   },
   {
    "id": "nim",
@@ -2616,7 +2696,8 @@
     "foreign_opcodes": {},
     "tokens_per_instruction": 4.13,
     "realtime_tok_per_s": 3717
-   }
+   },
+   "tap": []
   },
   {
    "id": "paddles",
@@ -2645,10 +2726,11 @@
     "foreign_opcodes": {},
     "tokens_per_instruction": 5.51,
     "realtime_tok_per_s": 4962
-   }
+   },
+   "tap": []
   },
   {
-   "id": "pong",
+   "id": "pong-1-player",
    "title": "Pong",
    "authors": [
     "1 player"
@@ -2663,17 +2745,13 @@
     "logic"
    ],
    "ipf": 15,
-   "keys": {
-    "up": 1,
-    "down": 4,
-    "player2Up": 12,
-    "player2Down": 13
-   },
+   "keys": {},
    "notes": [
     "platform waits for vblank on draw; not modelled"
    ],
-   "file": "roms/pong.ch8",
+   "file": "roms/pong-1-player.ch8",
    "sha1": "607c4f7f4e4dce9f99d96b3182bfe7e88bb090ee",
+   "tap": [],
    "status": "ok",
    "result": {
     "verified_records": 21543,
@@ -2681,9 +2759,7 @@
     "foreign_opcodes": {},
     "tokens_per_instruction": 5.96,
     "realtime_tok_per_s": 5366
-   },
-   "controls": "Left paddle A/D (or W/S), right paddle Left/Right (or Up/Down)",
-   "featured": 4
+   }
   },
   {
    "id": "pong-2",
@@ -2719,10 +2795,11 @@
     "foreign_opcodes": {},
     "tokens_per_instruction": 6.1,
     "realtime_tok_per_s": 5488
-   }
+   },
+   "tap": []
   },
   {
-   "id": "pong-3",
+   "id": "pong",
    "title": "Pong",
    "authors": [
     "Paul Vervalin"
@@ -2737,11 +2814,16 @@
     "logic"
    ],
    "ipf": 15,
-   "keys": {},
+   "keys": {
+    "up": 1,
+    "down": 4,
+    "player2Up": 12,
+    "player2Down": 13
+   },
    "notes": [
     "platform waits for vblank on draw; not modelled"
    ],
-   "file": "roms/pong-3.ch8",
+   "file": "roms/pong.ch8",
    "sha1": "b232ef880bd6060fb45fa6effed7edf0ae95670e",
    "status": "ok",
    "result": {
@@ -2750,7 +2832,10 @@
     "foreign_opcodes": {},
     "tokens_per_instruction": 5.93,
     "realtime_tok_per_s": 5335
-   }
+   },
+   "controls": "Left paddle A/D (or W/S), right paddle Left/Right (or Up/Down)",
+   "featured": 4,
+   "tap": []
   },
   {
    "id": "programmable-spacefighters",
@@ -2781,7 +2866,8 @@
     "foreign_opcodes": {},
     "tokens_per_instruction": 4.69,
     "realtime_tok_per_s": 4219
-   }
+   },
+   "tap": []
   },
   {
    "id": "puzzle",
@@ -2810,7 +2896,8 @@
     "foreign_opcodes": {},
     "tokens_per_instruction": 6.26,
     "realtime_tok_per_s": 5634
-   }
+   },
+   "tap": []
   },
   {
    "id": "reversi",
@@ -2839,7 +2926,8 @@
     "foreign_opcodes": {},
     "tokens_per_instruction": 4.6,
     "realtime_tok_per_s": 4138
-   }
+   },
+   "tap": []
   },
   {
    "id": "rocket",
@@ -2870,7 +2958,8 @@
     "foreign_opcodes": {},
     "tokens_per_instruction": 7.06,
     "realtime_tok_per_s": 6356
-   }
+   },
+   "tap": []
   },
   {
    "id": "rocket-launch",
@@ -2901,7 +2990,8 @@
     "foreign_opcodes": {},
     "tokens_per_instruction": 5.54,
     "realtime_tok_per_s": 9979
-   }
+   },
+   "tap": []
   },
   {
    "id": "rocket-launcher",
@@ -2930,7 +3020,8 @@
     "foreign_opcodes": {},
     "tokens_per_instruction": 5.57,
     "realtime_tok_per_s": 5016
-   }
+   },
+   "tap": []
   },
   {
    "id": "rush-hour",
@@ -2961,7 +3052,8 @@
     "foreign_opcodes": {},
     "tokens_per_instruction": 4.2,
     "realtime_tok_per_s": 3782
-   }
+   },
+   "tap": []
   },
   {
    "id": "russian-roulette",
@@ -2992,7 +3084,8 @@
     "foreign_opcodes": {},
     "tokens_per_instruction": 3.59,
     "realtime_tok_per_s": 3227
-   }
+   },
+   "tap": []
   },
   {
    "id": "sequence-shoot",
@@ -3023,7 +3116,8 @@
     "foreign_opcodes": {},
     "tokens_per_instruction": 3.66,
     "realtime_tok_per_s": 3294
-   }
+   },
+   "tap": []
   },
   {
    "id": "shooting-stars",
@@ -3054,7 +3148,8 @@
     "foreign_opcodes": {},
     "tokens_per_instruction": 5.06,
     "realtime_tok_per_s": 4552
-   }
+   },
+   "tap": []
   },
   {
    "id": "slide",
@@ -3085,7 +3180,8 @@
     "foreign_opcodes": {},
     "tokens_per_instruction": 4.33,
     "realtime_tok_per_s": 3896
-   }
+   },
+   "tap": []
   },
   {
    "id": "soccer",
@@ -3114,7 +3210,8 @@
     "foreign_opcodes": {},
     "tokens_per_instruction": 5.41,
     "realtime_tok_per_s": 4872
-   }
+   },
+   "tap": []
   },
   {
    "id": "space-flight",
@@ -3143,7 +3240,8 @@
     "foreign_opcodes": {},
     "tokens_per_instruction": 3.96,
     "realtime_tok_per_s": 3563
-   }
+   },
+   "tap": []
   },
   {
    "id": "space-intercept",
@@ -3172,7 +3270,8 @@
     "foreign_opcodes": {},
     "tokens_per_instruction": 5.5,
     "realtime_tok_per_s": 4952
-   }
+   },
+   "tap": []
   },
   {
    "id": "space-invaders",
@@ -3209,7 +3308,8 @@
     "realtime_tok_per_s": 8659
    },
    "controls": "Left/Right move, Space fires (press Space to start)",
-   "featured": 1
+   "featured": 1,
+   "tap": []
   },
   {
    "id": "spooky-spot",
@@ -3240,7 +3340,8 @@
     "foreign_opcodes": {},
     "tokens_per_instruction": 3.8,
     "realtime_tok_per_s": 3421
-   }
+   },
+   "tap": []
   },
   {
    "id": "squash",
@@ -3274,7 +3375,8 @@
     "foreign_opcodes": {},
     "tokens_per_instruction": 4.77,
     "realtime_tok_per_s": 4292
-   }
+   },
+   "tap": []
   },
   {
    "id": "submarine",
@@ -3305,7 +3407,8 @@
     "foreign_opcodes": {},
     "tokens_per_instruction": 7.27,
     "realtime_tok_per_s": 6547
-   }
+   },
+   "tap": []
   },
   {
    "id": "sum-fun",
@@ -3336,7 +3439,8 @@
     "foreign_opcodes": {},
     "tokens_per_instruction": 4.14,
     "realtime_tok_per_s": 3729
-   }
+   },
+   "tap": []
   },
   {
    "id": "syzygy",
@@ -3369,7 +3473,8 @@
     "foreign_opcodes": {},
     "tokens_per_instruction": 4.42,
     "realtime_tok_per_s": 7954
-   }
+   },
+   "tap": []
   },
   {
    "id": "tank-battle",
@@ -3398,7 +3503,8 @@
     "foreign_opcodes": {},
     "tokens_per_instruction": 6.42,
     "realtime_tok_per_s": 5780
-   }
+   },
+   "tap": []
   },
   {
    "id": "tapeworm",
@@ -3429,7 +3535,8 @@
     "foreign_opcodes": {},
     "tokens_per_instruction": 3.9,
     "realtime_tok_per_s": 3513
-   }
+   },
+   "tap": []
   },
   {
    "id": "tetris",
@@ -3448,7 +3555,7 @@
     "clip",
     "jump"
    ],
-   "ipf": 30,
+   "ipf": 15,
    "keys": {
     "left": 5,
     "right": 6,
@@ -3469,7 +3576,22 @@
     "realtime_tok_per_s": 7684
    },
    "controls": "Left/Right move, Down drops faster, Space rotates",
-   "featured": 0
+   "featured": 0,
+   "tap": [
+    "a"
+   ],
+   "game_over": {
+    "rows": [
+     6,
+     7
+    ],
+    "cols": [
+     27,
+     35
+    ],
+    "seconds": 5,
+    "message": "The well is full"
+   }
   },
   {
    "id": "tic-tac-toe",
@@ -3498,7 +3620,8 @@
     "foreign_opcodes": {},
     "tokens_per_instruction": 4.07,
     "realtime_tok_per_s": 7326
-   }
+   },
+   "tap": []
   },
   {
    "id": "timebomb",
@@ -3527,7 +3650,8 @@
     "foreign_opcodes": {},
     "tokens_per_instruction": 7.47,
     "realtime_tok_per_s": 6724
-   }
+   },
+   "tap": []
   },
   {
    "id": "tron",
@@ -3556,7 +3680,8 @@
     "foreign_opcodes": {},
     "tokens_per_instruction": 4.66,
     "realtime_tok_per_s": 4193
-   }
+   },
+   "tap": []
   },
   {
    "id": "ufo",
@@ -3593,7 +3718,8 @@
     "realtime_tok_per_s": 5612
    },
    "controls": "Left/Space/Right fire left, up, right",
-   "featured": 6
+   "featured": 6,
+   "tap": []
   },
   {
    "id": "vers",
@@ -3624,7 +3750,8 @@
     "foreign_opcodes": {},
     "tokens_per_instruction": 4.43,
     "realtime_tok_per_s": 3987
-   }
+   },
+   "tap": []
   },
   {
    "id": "vertical-brix",
@@ -3655,7 +3782,8 @@
     "foreign_opcodes": {},
     "tokens_per_instruction": 5.15,
     "realtime_tok_per_s": 4633
-   }
+   },
+   "tap": []
   },
   {
    "id": "wall",
@@ -3689,7 +3817,8 @@
     "foreign_opcodes": {},
     "tokens_per_instruction": 5.27,
     "realtime_tok_per_s": 4744
-   }
+   },
+   "tap": []
   },
   {
    "id": "wipe-off",
@@ -3720,7 +3849,8 @@
     "foreign_opcodes": {},
     "tokens_per_instruction": 5.6,
     "realtime_tok_per_s": 5036
-   }
+   },
+   "tap": []
   },
   {
    "id": "superworm-v4",
@@ -3752,7 +3882,8 @@
     "foreign_opcodes": {},
     "tokens_per_instruction": 3.72,
     "realtime_tok_per_s": 3351
-   }
+   },
+   "tap": []
   },
   {
    "id": "x-mirror",
@@ -3781,7 +3912,8 @@
     "foreign_opcodes": {},
     "tokens_per_instruction": 6.03,
     "realtime_tok_per_s": 5422
-   }
+   },
+   "tap": []
   },
   {
    "id": "zeropong",
@@ -3812,7 +3944,8 @@
     "foreign_opcodes": {},
     "tokens_per_instruction": 4.46,
     "realtime_tok_per_s": 4011
-   }
+   },
+   "tap": []
   }
  ]
 }

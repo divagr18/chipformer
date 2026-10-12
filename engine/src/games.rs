@@ -10,7 +10,12 @@ pub struct Game {
     pub quirks: String, // comma-separated flags
     pub keys: Vec<(String, usize)>, // role ("left", "a", "player2Up", ...) -> CHIP-8 key
     pub controls: String,
+    /// roles delivered as one short pulse per press (see chipformer/games.py TUNING)
+    pub tap: Vec<String>,
 }
+
+/// Length of a tap pulse in 60 Hz frames.
+pub const TAP_FRAMES: u32 = 3;
 
 pub fn parse_manifest(text: &str) -> Result<Vec<Game>, String> {
     let v: Value = serde_json::from_str(text).map_err(|e| format!("manifest: {e}"))?;
@@ -31,6 +36,10 @@ pub fn parse_manifest(text: &str) -> Result<Vec<Game>, String> {
                 .map(|k| k.iter().filter_map(|(r, c)| Some((r.clone(), c.as_u64()? as usize))).collect())
                 .unwrap_or_default(),
             controls: g["controls"].as_str().unwrap_or_default().to_string(),
+            tap: g["tap"]
+                .as_array()
+                .map(|t| t.iter().filter_map(|r| r.as_str().map(str::to_string)).collect())
+                .unwrap_or_default(),
         })
         .collect())
 }
@@ -56,6 +65,11 @@ pub fn role_keys(role: &str, two_player: bool) -> &'static [&'static str] {
 impl Game {
     pub fn two_player(&self) -> bool {
         self.keys.iter().any(|(r, _)| r.starts_with("player2"))
+    }
+
+    /// CHIP-8 keys that are tapped rather than held.
+    pub fn tap_chips(&self) -> Vec<usize> {
+        self.keys.iter().filter(|(r, _)| self.tap.contains(r)).map(|(_, c)| *c).collect()
     }
 
     /// (keyboard key name, CHIP-8 key) pairs for this game's roles.

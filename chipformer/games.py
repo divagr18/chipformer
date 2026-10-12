@@ -98,6 +98,31 @@ FEATURED = {
     "dino-run": ({}, "Up or Space jumps"),
 }
 
+# Per-game play tuning. "ipf" overrides the platform's default speed. "tap" lists key roles
+# delivered as one short pulse per physical press: games that act on every pass of their loop
+# while a key is held (Tetris rotates once per pass) otherwise repeat a press several times.
+# Measured on Tetris: at 30 instructions/frame a 150 ms press rotates twice; at 15 it rotates
+# once even for a 200 ms hold.
+#
+# "game_over" lets the cabinet end games that never end themselves: Fran Dachille's Tetris
+# (1991, HP48) has no game-over detection (its manual says "ENTER - restart"), so once the
+# well is full it spawns pieces into the stack forever. The host declares the game over
+# when any pixel in the given screen rows/columns stays lit for `seconds`. For Tetris, pieces
+# spawn in rows 2-5; rows 6-7 are only crossed by falling pieces (at most 2.4 s in simulated
+# play) until the stack reaches them. This is the host reading the screen, not the model.
+TUNING = {
+    "tetris": {"ipf": 15, "tap": ["a"],
+               "game_over": {"rows": [6, 7], "cols": [27, 35], "seconds": 5,
+                             "message": "The well is full"}},
+}
+TAP_FRAMES = 3  # length of a tap pulse, in 60 Hz frames
+
+# Ids for classics whose titles collide: the well-known original gets the plain name.
+CLASSIC_IDS = {
+    "Pong [Paul Vervalin, 1990].ch8": "pong",
+    "Pong (1 player).ch8": "pong-1-player",
+}
+
 
 def _slug(title: str) -> str:
     return "".join(ch if ch.isalnum() else "-" for ch in title.lower()).strip("-").replace("--", "-")
@@ -142,8 +167,8 @@ def build() -> list[dict]:
     games: list[dict] = []
     seen: set[str] = set()
 
-    def add(entry: dict, rom: bytes) -> None:
-        base = gid = _slug(entry["title"])
+    def add(entry: dict, rom: bytes, gid: str | None = None) -> None:
+        base = gid = gid or _slug(entry["title"])
         n = 2
         while gid in seen:
             gid, n = f"{base}-{n}", n + 1
@@ -157,6 +182,11 @@ def build() -> list[dict]:
             entry["keys"] = {**entry["keys"], **keys}
             entry["controls"] = hint
             entry["featured"] = list(FEATURED).index(gid)
+        tuning = TUNING.get(gid, {})
+        entry["ipf"] = tuning.get("ipf", entry["ipf"])
+        entry["tap"] = tuning.get("tap", [])
+        if "game_over" in tuning:
+            entry["game_over"] = tuning["game_over"]
         (GAMES / "roms").mkdir(parents=True, exist_ok=True)
         (GAMES / "roms" / f"{gid}.ch8").write_bytes(rom)
         games.append(entry)
@@ -216,7 +246,7 @@ def build() -> list[dict]:
             "ipf": int((dbrom or {}).get("tickrate") or platforms[plat].get("defaultTickrate", 15)),
             "keys": (dbrom or {}).get("keys") or {},
             "notes": notes,
-        }, rom)
+        }, rom, CLASSIC_IDS.get(path.name))
 
     missing = set(FEATURED) - {g["id"] for g in games}
     if missing:

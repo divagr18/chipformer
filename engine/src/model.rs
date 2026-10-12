@@ -365,6 +365,9 @@ pub struct State<'m> {
     v_buf: Vec<f64>,
     /// nanoseconds spent in attention, FFN and unembedding (when CHIPFORMER_PROFILE is set)
     pub prof: Option<[u128; 3]>,
+    /// when Some: for every position fed, each head's attention distance (pos - attended pos),
+    /// heads in model order. Used to visualize where the model is reading from.
+    pub telemetry: Option<Vec<u32>>,
 }
 
 #[inline]
@@ -387,6 +390,7 @@ impl<'m> State<'m> {
             attn: vec![0.0; model.d],
             v_buf: vec![],
             prof,
+            telemetry: None,
         }
     }
 
@@ -437,6 +441,9 @@ impl<'m> State<'m> {
                 assert!(h.wq.dot(1, r) == 1.0, "query y must be 1");
                 let q = exact_int(h.wq.dot(0, r), "query");
                 let src = self.trees[h.tree].query(q) as usize;
+                if let Some(t) = self.telemetry.as_mut() {
+                    t.push((self.pos - src) as u32);
+                }
                 self.v_buf.clear();
                 self.v_buf.extend_from_slice(&self.values[h.store][src * n_v..(src + 1) * n_v]);
                 for (i, &v) in self.v_buf.iter().enumerate() {

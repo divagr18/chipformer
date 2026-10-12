@@ -6,6 +6,7 @@
 //! writes (for the screen). It never computes machine semantics.
 
 use crate::model::{Model, State};
+use std::collections::VecDeque;
 use serde_json::Value;
 
 const MAX_RECORD: usize = 2 * 40 + 2;
@@ -144,9 +145,19 @@ pub struct Session<'m> {
     /// CHIP-8 games erase and redraw sprites with XOR, so a screen sampled at one instant
     /// shows half-drawn frames; keeping a pixel visible for a few instructions after it goes
     /// dark hides that (see visible())
-    instructions: u64,
+    pub instructions: u64,
     dark_since: Vec<u64>,
+    lit_since: Vec<u64>,
+    /// how long each pixel had been lit when it last went dark
+    lit_for: Vec<u64>,
+    /// tokens fed since the session started (across context rollovers)
+    pub fed: u64,
+    pub rollovers: u32,
+    /// the most recent tokens (for showing the token stream)
+    pub recent: VecDeque<u32>,
 }
+
+const RECENT_TOKENS: usize = 2048;
 
 impl<'m> Session<'m> {
     /// `quirks`: a profile name ("octo", "chip48", "cosmac") or comma-separated quirk flags.
@@ -156,7 +167,8 @@ impl<'m> Session<'m> {
         let dark_since = vec![0; spec.width * spec.height];
         let mut s = Session {
             spec, state: State::new(model), cells, tokens: vec![], keep_tokens, pred: 0,
-            instructions: 0, dark_since,
+            instructions: 0, lit_since: dark_since.clone(), lit_for: dark_since.clone(), dark_since, fed: 0, rollovers: 0,
+            recent: VecDeque::with_capacity(RECENT_TOKENS),
         };
         let boot = s.spec.boot_tokens(&s.cells);
         s.inject(&boot);
@@ -167,6 +179,11 @@ impl<'m> Session<'m> {
         if self.keep_tokens {
             self.tokens.push(t);
         }
+        if self.recent.len() == RECENT_TOKENS {
+            self.recent.pop_front();
+        }
+        self.recent.push_back(t);
+        self.fed += 1;
         self.pred = self.state.feed(t);
     }
 
@@ -208,21 +225,26 @@ impl<'m> Session<'m> {
         self.generate_record()
     }
 
-    /// Record the time of every pixel a pending write (or CLS) turns off.
+    /// Record when each pixel a pending write (or CLS) turns on or off.
     fn note_dark_pixels(&mut self, addr: usize, val: u32) {
         let bytes = self.spec.width * self.spec.height / 8;
         let d = self.spec.display;
-        let changes: Vec<(usize, u32)> = if addr == self.spec.cls {
-            (0..bytes).map(|i| (i, self.cells[d + i])).collect()
+        let changes: Vec<(usize, u32, u32)> = if addr == self.spec.cls {
+            (0..bytes).map(|i| (i, self.cells[d + i], 0)).collect()
         } else if (d..d + bytes).contains(&addr) {
-            vec![(addr - d, self.cells[addr] & !val)]
+            vec![(addr - d, self.cells[addr] & !val, val & !self.cells[addr])]
         } else {
             return;
         };
-        for (byte, gone) in changes {
+        for (byte, gone, came) in changes {
             for bit in 0..8 {
+                let i = byte * 8 + bit;
                 if gone >> (7 - bit) & 1 == 1 {
-                    self.dark_since[byte * 8 + bit] = self.instructions;
+                    self.dark_since[i] = self.instructions;
+                    self.lit_for[i] = self.instructions - self.lit_since[i];
+                }
+                if came >> (7 - bit) & 1 == 1 {
+                    self.lit_since[i] = self.instructions;
                 }
             }
         }
@@ -249,6 +271,23 @@ impl<'m> Session<'m> {
         self.state.reset();
         let boot = self.spec.boot_tokens(&self.cells);
         self.inject(&boot);
+        self.rollovers += 1;
+    }
+
+    /// One 60 Hz frame: inject key changes (bit k of `keys` = CHIP-8 key k held), one TICK,
+    /// then `ipf` instructions; roll the context over once it passes `rollover_at` tokens.
+    pub fn frame(&mut self, keys: u16, ipf: usize, rollover_at: usize) -> Result<(), String> {
+        for k in 0..16 {
+            self.set_key(k, keys >> k & 1 == 1);
+        }
+        self.tick()?;
+        for _ in 0..ipf {
+            self.step()?;
+        }
+        if self.state.pos > rollover_at {
+            self.rollover();
+        }
+        Ok(())
     }
 
     pub fn pixel(&self, x: usize, y: usize) -> bool {
@@ -256,10 +295,18 @@ impl<'m> Session<'m> {
         (byte >> (7 - x % 8)) & 1 == 1
     }
 
-    /// Lit now, or went dark less than `persist` instructions ago. Pong erases a paddle and
-    /// redraws it ~17 instructions later every loop, so persist >= 16 removes all blinking
-    /// (measured: 47% of frames show a missing paddle with persist 0, none with 16).
+    /// Lit now, or a stable pixel that went dark less than `persist` instructions ago.
+    ///
+    /// Games erase and redraw sprites with XOR: Pong erases a paddle and redraws it ~17
+    /// instructions later every loop, so persist >= 16 removes that blinking (measured: 47% of
+    /// frames show a missing paddle with persist 0, none with 16). Only pixels that had been
+    /// lit for at least STABLE instructions are held: games also draw short-lived probe
+    /// sprites (Tetris tests collisions and full lines when a piece lands) and holding those
+    /// would make them flash (measured on Tetris: 170 flashing frames in 30 s with no stability
+    /// rule, 0 with STABLE = 8, and no change to paddle visibility).
     pub fn visible(&self, x: usize, y: usize, persist: u64) -> bool {
-        self.pixel(x, y) || self.instructions - self.dark_since[y * self.spec.width + x] < persist
+        const STABLE: u64 = 8;
+        let i = y * self.spec.width + x;
+        self.pixel(x, y) || (self.instructions - self.dark_since[i] < persist && self.lit_for[i] >= STABLE)
     }
 }
