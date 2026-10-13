@@ -1,0 +1,103 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>chipformer · games running inside a transformer</title>
+  <meta name="description" content="Tetris, Space Invaders and Pong running inside a transformer whose weights were set by hand. No emulator: every pixel is the model predicting its next token." />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500&family=IBM+Plex+Mono:wght@400;500&display=swap" />
+  <link rel="stylesheet" href="style.css" />
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 26 26'%3E%3Crect width='26' height='26' rx='6' fill='%2319221f'/%3E%3Crect x='6' y='13.5' width='14' height='5' rx='1.2' fill='none' stroke='%23ddf59e' stroke-width='1.4'/%3E%3Crect x='6' y='7.5' width='14' height='4.5' rx='1.2' fill='%238b93f8'/%3E%3C/svg%3E" />
+</head>
+<body>
+  <header class="wrap">
+    <div class="top">
+    <a class="wordmark" href="https://divagr.com/chipformer" aria-label="chipformer">
+      <svg width="28" height="28" viewBox="0 0 26 26" aria-hidden="true">
+        <rect width="26" height="26" rx="6" fill="#19221f" />
+        <path d="M13 21.5v-2.5M13 7V4.5" stroke="#ddf59e" stroke-width="1.6" stroke-linecap="round" />
+        <rect x="6" y="13.5" width="14" height="5" rx="1.2" fill="none" stroke="#ddf59e" stroke-width="1.4" />
+        <rect x="8.6" y="15.3" width="1.8" height="1.8" fill="#ddf59e" />
+        <rect x="12.1" y="15.3" width="1.8" height="1.8" fill="#ddf59e" />
+        <rect x="15.6" y="15.3" width="1.8" height="1.8" fill="#ddf59e" />
+        <rect x="6" y="7.5" width="14" height="4.5" rx="1.2" fill="#8b93f8" />
+      </svg>
+      <span>chipformer</span>
+    </a>
+    <nav class="links">
+      <a href="https://github.com/divagr18/chipformer" target="_blank" rel="noopener">GitHub <span aria-hidden="true">↗</span></a>
+      <a href="https://huggingface.co/divagr1925/chipformer" target="_blank" rel="noopener">Model <span aria-hidden="true">↗</span></a>
+      <a class="btn btn-line" href="https://divagr.com/chipformer" target="_blank" rel="noopener">Full site <span aria-hidden="true">↗</span></a>
+    </nav>
+    </div>
+  </header>
+
+  <main class="wrap">
+    <section class="intro">
+      <h1>This game is running inside a <span class="accent">transformer.</span></h1>
+      <p>No emulator. Every pixel is a transformer predicting its next token. Its <span id="fact-weights">139,229</span> weights were set by hand, and it never saw a single training example.</p>
+    </section>
+
+    <section class="play">
+      <div class="player">
+        <div class="chips" id="chips" role="toolbar" aria-label="Choose a game"></div>
+        <div class="crt">
+          <div class="screen">
+            <canvas id="screen" width="1024" height="512" aria-label="The game, drawn by the transformer"></canvas>
+            <div id="overlay" class="overlay"></div>
+          </div>
+        </div>
+        <div class="touch" id="touch"></div>
+        <div class="controls">
+          <div class="hints fine" id="hints"></div>
+          <div class="tools">
+            <button class="tool" id="btn-play">Play</button>
+            <button class="tool" id="btn-step" title="Run exactly one instruction">Step</button>
+            <button class="tool" id="btn-restart">Restart</button>
+            <button class="tool" id="btn-sound" aria-pressed="true">Sound</button>
+          </div>
+        </div>
+        <p class="label plain" id="readout">loading…</p>
+      </div>
+
+      <aside class="model" aria-label="The transformer, running live">
+        <header class="model-head">
+          <h2 class="label light">The transformer, live</h2>
+          <span class="label legend"><span><i class="sw-head"></i>Head</span><span><i class="sw-relu"></i>ReLU</span></span>
+        </header>
+        <div class="box">
+          <div class="box-head"><span class="label light">Tokens in → embedding</span><span class="label" id="embed-note"></span></div>
+          <div class="mono tokens" id="tokens-in">BOOT @M[200] =6A @M[201] =02 … STEP</div>
+        </div>
+        <div class="flow"></div>
+        <ol class="box layers" id="layers"></ol>
+        <div class="flow"></div>
+        <div class="next">
+          <div class="label next-head"><span>Unembedding → next token</span><span id="next-count"></span></div>
+          <div class="mono next-tok"><span id="next-cell">@PC</span><span id="next-val">=200</span></div>
+          <p>A write to the machine’s memory. The screen is drawn from these.</p>
+        </div>
+        <div class="box inspector" id="inspector" hidden>
+          <div class="box-head"><span class="label" id="insp-pc">Next instruction</span><button class="tool tool-dark" id="insp-step">Step ▸</button></div>
+          <div class="insp-body"><span class="mono acid" id="insp-code"></span><span id="insp-text"></span></div>
+        </div>
+      </aside>
+    </section>
+
+    <section class="credits">
+      <div class="credit-game" id="credit"></div>
+      <div class="facts" id="facts"></div>
+    </section>
+  </main>
+
+  <footer class="wrap foot">
+    <div class="foot-rule"></div>
+    <p>Games: originals from the <a href="https://github.com/JohnEarnest/chip8Archive" target="_blank" rel="noopener">CHIP-8 Archive</a> (CC0) and classics from the Revival Studios CHIP-8 pack (freely distributable), each belonging to its author; full list in <a href="assets/ATTRIBUTION.md" target="_blank">ATTRIBUTION.md</a>. Quirks and controls from the <a href="https://github.com/chip-8/chip-8-database" target="_blank" rel="noopener">CHIP-8 database</a>. Related work: looped transformers as programmable computers (Giannou et al., 2023), Percepta’s transformer-vm, Tracr.</p>
+    <div class="label foot-row"><span>© 2026 Divyansh Agrawal</span><a href="https://divagr.com" target="_blank" rel="noopener">divagr.com ↗</a></div>
+  </footer>
+
+  <script type="module" src="app.js"></script>
+</body>
+</html>

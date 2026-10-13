@@ -1,0 +1,106 @@
+# Single-file `chipformer` binaries (model and games built in) for Windows, macOS and Linux.
+# Push a tag like v0.1.0 to build them and attach them to a GitHub Release; run it by hand
+# (workflow_dispatch) to build them as workflow artifacts only.
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: build ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-latest, target: x86_64-unknown-linux-gnu, exe: chipformer, smoke: true }
+          - { os: windows-latest, target: x86_64-pc-windows-msvc, exe: chipformer.exe, smoke: true }
+          - { os: macos-14, target: aarch64-apple-darwin, exe: chipformer, smoke: true }
+          # cross-compiled on the Apple Silicon runner (GitHub retired the Intel macOS images)
+          - { os: macos-14, target: x86_64-apple-darwin, exe: chipformer, smoke: false }
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Linux window-system headers (minifb)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends pkg-config libx11-dev libxcursor-dev \
+            libxrandr-dev libxi-dev libxkbcommon-dev libwayland-dev
+
+      - uses: astral-sh/setup-uv@v5
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      # The weights are generated from source (no download, no training): about a second.
+      - name: Build the model
+        run: uv run --frozen python -m chipformer.compile --out model
+
+      - name: Build chipformer
+        working-directory: engine
+        run: cargo build --release --locked --bin chipformer --features embed --target ${{ matrix.target }}
+
+      - name: Smoke test (headless)
+        if: matrix.smoke
+        shell: bash
+        run: |
+          bin=engine/target/${{ matrix.target }}/release/${{ matrix.exe }}
+          "$bin" list
+          "$bin" play tetris --headless --frames 600
+          "$bin" play pong --headless --frames 300 | tail -n 1
+
+      - name: Linked libraries
+        if: runner.os == 'Linux'
+        run: ldd engine/target/${{ matrix.target }}/release/chipformer || true
+
+      - name: Package
+        id: package
+        shell: bash
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then version="${GITHUB_REF_NAME#v}"; else version="dev-${GITHUB_SHA::7}"; fi
+          name="chipformer-${version}-${{ matrix.target }}"
+          mkdir -p "dist/$name"
+          cp "engine/target/${{ matrix.target }}/release/${{ matrix.exe }}" "dist/$name/"
+          cp README.md games/ATTRIBUTION.md "dist/$name/"
+          if [ -f LICENSE ]; then cp LICENSE "dist/$name/"; fi
+          cd dist
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            7z a -tzip "$name.zip" "$name" > /dev/null
+            echo "file=dist/$name.zip" >> "$GITHUB_OUTPUT"
+          else
+            tar czf "$name.tar.gz" "$name"
+            echo "file=dist/$name.tar.gz" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.target }}
+          path: ${{ steps.package.outputs.file }}
+          if-no-files-found: error
+
+  release:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Checksums
+        working-directory: dist
+        run: sha256sum * > SHA256SUMS.txt && cat SHA256SUMS.txt
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          generate_release_notes: true

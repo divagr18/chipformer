@@ -1,3 +1,5 @@
+#[cfg(feature = "window")]
+pub mod desktop;
 pub mod fast;
 pub mod games;
 pub mod host;

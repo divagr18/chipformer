@@ -1,0 +1,25 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - name: System libraries for the windowed player
+        run: sudo apt-get update && sudo apt-get install -y libx11-dev libxkbcommon-dev libwayland-dev libxcursor-dev libxrandr-dev libxinerama-dev libxi-dev
+      - name: Build the weights
+        run: uv run python -m chipformer.compile --out model
+      - name: Build the engine
+        run: cargo build --release --manifest-path engine/Cargo.toml
+      - name: Lint
+        run: uv run ruff check .
+      - name: Tests
+        run: uv run pytest -q
+      - name: Engine tests
+        run: cargo test --release --manifest-path engine/Cargo.toml

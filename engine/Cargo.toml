@@ -11,6 +11,8 @@ crate-type = ["rlib", "cdylib"]
 default = ["safetensors", "window"]
 safetensors = ["dep:safetensors"]
 window = ["dep:minifb"]
+# bake model/model.chipformer and games/ into the `chipformer` binary (see build.rs)
+embed = []
 
 [dependencies]
 minifb = { version = "0.29.0", optional = true }
@@ -20,6 +22,10 @@ serde_json = "1.0.154"
 [[bin]]
 name = "play"
 required-features = ["window"]
+
+[[bin]]
+name = "chipformer"
+required-features = ["window", "embed"]
 
 [profile.release]
 codegen-units = 1

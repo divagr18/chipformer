@@ -12,6 +12,29 @@ pub struct Game {
     pub controls: String,
     /// roles delivered as one short pulse per press (see chipformer/games.py TUNING)
     pub tap: Vec<String>,
+    /// "ok" when the game ran verified-exact on the transformer
+    pub status: String,
+    /// display position among the featured games, if featured
+    pub featured: Option<usize>,
+    pub authors: Vec<String>,
+    pub license: String,
+    pub game_over: Option<GameOver>,
+}
+
+/// The host ends a game that never ends itself when any pixel in `rows` x `cols` stays lit
+/// for `seconds` (see chipformer/games.py TUNING). This is the host reading the screen.
+pub struct GameOver {
+    pub rows: Vec<usize>,
+    pub cols: (usize, usize),
+    pub seconds: f64,
+    pub message: String,
+}
+
+impl GameOver {
+    /// True when any pixel in the watched region is lit.
+    pub fn region_lit(&self, lit: impl Fn(usize, usize) -> bool) -> bool {
+        self.rows.iter().any(|&y| (self.cols.0..=self.cols.1).any(|x| lit(x, y)))
+    }
 }
 
 /// Length of a tap pulse in 60 Hz frames.
@@ -40,6 +63,22 @@ pub fn parse_manifest(text: &str) -> Result<Vec<Game>, String> {
                 .as_array()
                 .map(|t| t.iter().filter_map(|r| r.as_str().map(str::to_string)).collect())
                 .unwrap_or_default(),
+            status: g["status"].as_str().unwrap_or_default().to_string(),
+            featured: g["featured"].as_u64().map(|f| f as usize),
+            authors: g["authors"]
+                .as_array()
+                .map(|a| a.iter().filter_map(|x| x.as_str().map(str::to_string)).collect())
+                .unwrap_or_default(),
+            license: g["license"].as_str().unwrap_or_default().to_string(),
+            game_over: g.get("game_over").filter(|r| r.is_object()).map(|r| GameOver {
+                rows: r["rows"]
+                    .as_array()
+                    .map(|a| a.iter().filter_map(|y| y.as_u64().map(|y| y as usize)).collect())
+                    .unwrap_or_default(),
+                cols: (r["cols"][0].as_u64().unwrap_or(0) as usize, r["cols"][1].as_u64().unwrap_or(0) as usize),
+                seconds: r["seconds"].as_f64().unwrap_or(5.0),
+                message: r["message"].as_str().unwrap_or("Game over").to_string(),
+            }),
         })
         .collect())
 }

@@ -10,6 +10,10 @@ dependencies = [
 
 [project.optional-dependencies]
 play = ["pygame>=2.5"]
+hf = [
+    "torch>=2.14.1",
+    "transformers>=5.19.0",
+]
 
 [dependency-groups]
 dev = [
