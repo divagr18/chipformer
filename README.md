@@ -1,9 +1,16 @@
 # chipformer
 
-**Tetris, running inside a transformer.** chipformer is a decoder-only transformer whose
-weights were **set by hand, never trained**. It executes CHIP-8 programs: predicting the next
-token *is* running the next instruction. The same 139,229 weights play Tetris, Space Invaders,
-Brix, Pong and 100+ other games in real time.
+**Tetris, running entirely inside a transformer.**
+
+chipformer is a transformer that *is* a CHIP-8 computer. The game goes in as the prompt, and
+every token the model predicts is one write to the machine's memory: a register, the program
+counter, a row of pixels. Paint those writes onto a 64×32 screen and you are playing Tetris. Your
+keypresses and the 60 Hz clock go into the context window; every frame, collision and score
+comes out of the model. There is no emulator behind it, just the loop every language model runs:
+predict the next token, append it, repeat.
+
+One model plays Tetris, Space Invaders, Brix, Pong and 100+ other games in real time. Switching
+games means switching the prompt.
 
 - **Play it in your browser:** [divagr.com/chipformer](https://divagr.com/chipformer)
 - **Model on Hugging Face:** [divagr1925/chipformer](https://huggingface.co/divagr1925/chipformer)
@@ -64,7 +71,6 @@ the desktop binary or the browser demo.
 | FFN | ReGLU, 22,276 hidden units in total |
 | Parameters | 32.3M dense, 139,229 nonzero |
 | Vocabulary | 8,708 tokens (4,096 values, 4,609 cell addresses, STEP/TICK/BOOT) |
-| Training steps | 0 |
 | Speed | ~100,000 tok/s on one CPU core natively; real time in the browser via WebAssembly |
 
 The architecture is plain: token and position embeddings, residual blocks of causal softmax
@@ -97,7 +103,7 @@ bit-identical to the circuit specification. Everything runs in fp64.
   - argmax the rank-1 unembedding as a max of lines
   - share one KV cache between heads with identical keys
 
-The circuit is written in a small DSL (`chipformer/chip8.py`). Each node is automatically placed
+The weights are compiled rather than learned, which is what makes every instruction exact. The circuit is written in a small DSL (`chipformer/chip8.py`). Each node is automatically placed
 in the earliest legal sublayer, and `chipformer/compile.py` turns the graph into weight
 matrices in about 0.3 s.
 

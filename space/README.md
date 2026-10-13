@@ -7,14 +7,13 @@ sdk: static
 app_file: index.html
 pinned: false
 license: mit
-short_description: CHIP-8 games running on a hand-built transformer
+short_description: Tetris running entirely inside a transformer
 ---
 
 # chipformer
 
-Tetris, Space Invaders, Pong and more, running inside a transformer. There is no emulator here:
-every pixel is the model predicting its next token. Its weights were set by hand and it never
-saw a training example.
+Tetris, Space Invaders, Pong and more, running entirely inside a transformer. There is no
+emulator here: the model is the computer, and every frame is built from the tokens it predicts.
 
 - Code: https://github.com/divagr18/chipformer
 - Model: https://huggingface.co/divagr1925/chipformer

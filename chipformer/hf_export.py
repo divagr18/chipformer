@@ -75,7 +75,6 @@ pipeline_tag: text-generation
 tags:
 - chip-8
 - emulator
-- hand-crafted-weights
 - mechanistic-interpretability
 - compiled-transformer
 - custom_code
@@ -83,17 +82,21 @@ tags:
 
 # chipformer
 
-A decoder-only transformer that runs CHIP-8 games. Its weights were **set by hand, not trained**:
-predicting the next token *is* executing the program.
+**Tetris, running entirely inside a transformer.**
 
-- **Training steps: 0.** No data, no gradients. The weights are compiled from circuits
-  written in a small DSL, in about 0.3 seconds.
-- {config['n_layers']} layers, d_model {config['d_model']}, {heads} attention heads,
-  {units:,} ReLU (ReGLU) units, vocabulary {config['vocab_size']:,}.
-- {config['params']:,} parameters, of which {config['nonzero_params']:,} are nonzero.
-  float64 throughout.
-- One fixed set of weights runs every game: Tetris, Space Invaders, Brix, Pong and 100+ more.
-  Each game's quirk profile is just more state in the prompt.
+This model *is* a CHIP-8 computer. Give it a game as the prompt and greedy decoding runs the game:
+every token it predicts is one write to the machine's memory (a register, the program counter, a
+row of pixels). Paint those writes onto a 64×32 screen and you are playing Tetris. Your keypresses
+and the 60 Hz clock go into the context window. Everything else, every frame, every collision,
+every point on the scoreboard, comes out of the model.
+
+There is no emulator behind it. It is the same loop every language model runs: read the context,
+predict the next token, append it, repeat.
+
+- One set of weights plays Tetris, Space Invaders, Brix, Pong and 100+ other games. Switching games
+  means switching the prompt.
+- An ordinary decoder-only architecture: {config['n_layers']} layers, d_model {config['d_model']},
+  {heads} attention heads, {units:,} ReGLU units, vocabulary {config['vocab_size']:,}, float64.
 
 **Play it in your browser:** [{LINKS['demo'].removeprefix('https://')}]({LINKS['demo']}) ·
 [Hugging Face Space]({LINKS['space']}) · Source: [GitHub]({LINKS['github']})
@@ -120,6 +123,10 @@ The architecture is ordinary:
 
 `modeling_chipformer.py` contains nothing CHIP-8 specific apart from the host loop, which only feeds
 tokens in and reads the screen back.
+
+**Where the weights come from.** They are compiled from a description of the CHIP-8 circuit
+(written in a small DSL in the GitHub repo) rather than learned, which is what makes every
+instruction exact. {config['nonzero_params']:,} of the {config['params']:,} parameters are nonzero.
 
 ## Usage
 
