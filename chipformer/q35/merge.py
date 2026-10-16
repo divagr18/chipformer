@@ -22,6 +22,8 @@ IN_COLS = re.compile(
 OUT_ROWS = re.compile(r"(out_proj|o_proj|down_proj)\.weight$|visual\.merger\.linear_fc2\.(weight|bias)$")
 WIDE_NORMS = re.compile(r"(input_layernorm|post_attention_layernorm)\.weight$|language_model\.norm\.weight$")
 
+IM_START = 248045  # <|im_start|> in Qwen3.5's tokenizer
+
 
 def load(path):
     path = Path(path)
@@ -277,10 +279,16 @@ def build_merged(src, dst, hidden: int | None = None, m: int | None = None,
     (dst / "model.safetensors.index.json").write_text(json.dumps(index, indent=2))
     (dst / "config.json").write_text(json.dumps(cfg, indent=2))
     extend_tokenizer(src, dst, v0)
-    if not (dst / "generation_config.json").exists():
+    gen_path = dst / "generation_config.json"
+    gen = json.loads(gen_path.read_text()) if gen_path.exists() else {}
+    if "eos_token_id" not in gen:
         eos = cfg["text_config"].get("eos_token_id", 248044)
-        (dst / "generation_config.json").write_text(json.dumps(
-            {"eos_token_id": [248046, eos], "pad_token_id": eos}, indent=2))
+        gen.update(eos_token_id=[248046, eos], pad_token_id=eos)
+    # After the circuit prints a tool response inside the assistant turn, Qwen sometimes opens a
+    # new turn (<|im_start|>user ...) instead of going on. Qwen never writes <|im_start|> in its
+    # own output, so the merged model bans it; the circuit never predicts it either.
+    gen["bad_words_ids"] = [[IM_START]]
+    gen_path.write_text(json.dumps(gen, indent=2))
     meta = {"layout": "v2", "chip_token_offset": v0, "chip_vocab": spec.VOCAB_SIZE,
             "chip_layers": n_chip, "qwen_layers_from": n_chip, "hidden": hidden,
             "chip_dims_offset": d0, "ballast_dims": m, "circuit": c.stats(),
