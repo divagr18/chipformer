@@ -172,30 +172,31 @@ def pick_hidden(base: int, n_chip: int) -> tuple[int, int]:
 
 def build_merged(src, dst, hidden: int | None = None, m: int | None = None,
                  mute_qwen: bool = True):
-    """Write Qwen3.5 + the CHIP-8 circuit as one checkpoint; returns (circuit, layout)."""
+    """Write Qwen3.5 + the CHIP-8 circuit as one checkpoint ("v2" layout); returns (circuit,
+    layout).
+
+    The chip layers come first. Every token carries the ballast and the features of its
+    class (chip token, or one of bridge.py's text classes); the last chip sublayer clears all
+    of it, leaving each token's Qwen part, mu (1 on chip tokens), the output code and tau, so
+    Qwen's layers see their usual input on text and a muted, empty token at chip positions.
+    """
     from safetensors.torch import save_file
+    from transformers import AutoTokenizer
 
     from chipformer import spec
-    from chipformer.q35 import chip8_q35, tiny
-    from chipformer.q35.emit import (
-        Layout,
-        allocate,
-        check_bf16,
-        clearable_dims,
-        embedding_rows,
-        emit_layers,
-    )
+    from chipformer.q35 import bridge, chip8_q35, tiny
+    from chipformer.q35.emit import Layout, allocate, check_bf16, embedding_rows, emit_layers
+    from chipformer.q35.ir import Target
 
     src, dst = Path(src), Path(dst)
     cfg, sd = load(src)
     tc = cfg["text_config"]
     d0, v0, inter = tc["hidden_size"], tc["vocab_size"], tc["intermediate_size"]
-    from chipformer.q35.ir import Target
-
     c = chip8_q35.build(Target(tc["linear_num_key_heads"], tc["linear_num_value_heads"], inter))
+    keep = set(c.keep)
     code = [next(iter(e.terms)) for e in c.code]
-    tau = next(iter(c.tau.terms))
-    alloc = allocate(c, clearable_dims(c, tiny.sample_traces()), {*code, tau}, inter)
+    tau, mu = next(iter(c.tau.terms)), next(iter(c.mu.terms))
+    alloc = allocate(c, None, keep, inter)
     if hidden is None:
         hidden, m = pick_hidden(d0, 1 + alloc.n_slots)
     lay = Layout(hidden=hidden, off=d0, m=m, slots=alloc.slots)
@@ -206,8 +207,11 @@ def build_merged(src, dst, hidden: int | None = None, m: int | None = None,
     cfg, sd = widen(cfg, sd, hidden)
     tc = cfg["text_config"]
     n0 = tc["num_hidden_layers"]
-    tc["layer_types"] += ["linear_attention"] * n_chip
-    tc["num_hidden_layers"] = n0 + n_chip
+    # Qwen's layers move behind the chip layers
+    shift = re.compile(r"^(model\.language_model\.layers\.)(\d+)\.")
+    sd = {shift.sub(lambda mt: f"{mt[1]}{int(mt[2]) + n_chip}.", k): v for k, v in sd.items()}
+    tc["layer_types"] = ["linear_attention"] * n_chip + tc["layer_types"]
+    tc["num_hidden_layers"] = n_chip + n0
     vocab = -(-(v0 + spec.VOCAB_SIZE) // 64) * 64
     tc["vocab_size"] = vocab
 
@@ -215,22 +219,38 @@ def build_merged(src, dst, hidden: int | None = None, m: int | None = None,
         from chipformer.q35.mute import fit_anti_sink, mute
 
         dev = "cuda" if torch.cuda.is_available() else "cpu"
-        mute(sd, tc, n0, lay.off, lay.ballast * lay.scale, sinks=fit_anti_sink(src, dev))
-    layers = emit_layers(c, lay, tc, n0, TEXT, alloc)
+        sinks = fit_anti_sink(src, dev)
+        mute(sd, tc, n0, lay.dim(mu), hidden**0.5, sinks=sinks, first=n_chip)
+    layers = emit_layers(c, lay, tc, 0, TEXT, alloc, keep)
     sd.update({k: v.to(torch.bfloat16) for k, v in layers.items()})
     del layers
 
-    emb = sd[TEXT + "embed_tokens.weight"]
+    # embeddings: Qwen's rows keep their Qwen part and get their text class's chip features
+    tok = AutoTokenizer.from_pretrained(src)
+    text_ids = {}
+    for cls, string in bridge.QWEN_TEXT.items():
+        ids = tok.encode(string, add_special_tokens=False)
+        assert len(ids) == 1, (string, ids)
+        text_ids[cls] = ids[0]
+    classes = list(range(bridge.TEXT_BASE, bridge.TEXT_BASE + bridge.N_TEXT))
+    rows = dict(zip(classes, embedding_rows(c, lay, classes, hidden).to(torch.bfloat16)))
     full = torch.zeros(vocab, hidden, dtype=torch.bfloat16)
-    full[:v0] = emb
-    full[:v0, lay.dim(tau)] = TAU_TEXT
+    full[:v0, :d0] = sd[TEXT + "embed_tokens.weight"][:, :d0]
+    full[:v0, d0:] = rows[bridge.OTHER][d0:]
+    for cls, i in text_ids.items():
+        full[i, d0:] = rows[cls][d0:]
     chip = embedding_rows(c, lay, list(range(spec.VOCAB_SIZE)), hidden)
     full[v0 : v0 + spec.VOCAB_SIZE] = chip.to(torch.bfloat16)
     sd[TEXT + "embed_tokens.weight"] = full
+    # image tokens come from the vision merger: give them the OTHER class too
+    bias = "model.visual.merger.linear_fc2.bias"
+    if bias in sd:
+        sd[bias] = sd[bias].clone()
+        sd[bias][d0:] = rows[bridge.OTHER][d0:].to(sd[bias].dtype)
 
     norm = sd[TEXT + "norm.weight"].float()
     norm[d0:] = -1.0  # chip dims are invisible to the lm_head ...
-    for d in code:  # ... except the output code
+    for d in code:  # ... except the output code and tau
         norm[lay.dim(d)] = tiny.code_gain(lay)
     norm[lay.dim(tau)] = TAU_GAIN
     check_bf16("final norm", norm[d0:])
@@ -257,9 +277,11 @@ def build_merged(src, dst, hidden: int | None = None, m: int | None = None,
         eos = cfg["text_config"].get("eos_token_id", 248044)
         (dst / "generation_config.json").write_text(json.dumps(
             {"eos_token_id": [248046, eos], "pad_token_id": eos}, indent=2))
-    meta = {"chip_token_offset": v0, "chip_vocab": spec.VOCAB_SIZE, "chip_layers": n_chip,
-            "hidden": hidden, "chip_dims_offset": d0, "ballast_dims": m,
-            "circuit": c.stats(), "slots": alloc.n_slots, "muted": mute_qwen}
+    meta = {"layout": "v2", "chip_token_offset": v0, "chip_vocab": spec.VOCAB_SIZE,
+            "chip_layers": n_chip, "qwen_layers_from": n_chip, "hidden": hidden,
+            "chip_dims_offset": d0, "ballast_dims": m, "circuit": c.stats(),
+            "slots": alloc.n_slots, "muted": mute_qwen,
+            "text_ids": {str(k): v for k, v in text_ids.items()}}
     (dst / "chipformer.json").write_text(json.dumps(meta, indent=2))
     return c, lay
 

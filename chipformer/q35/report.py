@@ -147,6 +147,41 @@ def post_trace(model, tok, off, device, lengths=(0, 2000, 10000)):
     return out
 
 
+PRINT_ROM = bytes([0xA2, 0x0A, 0x60, 4, 0x00, 0xFD, 0x12, 0x06, 0, 0, 4, 8, 1, 7])  # prints 4817
+
+
+@torch.no_grad()
+def bridge_demo(model, tok, meta, device, rom: bytes = PRINT_ROM, n_new: int = 120):
+    """One generate(): a chat turn hands over to a CHIP-8 program, which runs, prints its result
+    as text, halts, and Qwen continues. Checks the machine part against the reference."""
+    from chipformer.q35 import bridge
+    from chipformer.ref.emu import Chip8
+    from chipformer.trace import boot_tokens
+
+    off = meta["chip_token_offset"]
+    text_ids = {int(k): v for k, v in meta["text_ids"].items()}
+    to_id = {**text_ids}
+    pre = tok.apply_chat_template(
+        [{"role": "user", "content": "Run the program and tell me the number it prints, "
+          "then that number plus one."}],
+        add_generation_prompt=True, return_tensors="pt", enable_thinking=False)["input_ids"][0]
+    pre = pre.tolist() + tok("Running it now.\n", add_special_tokens=False).input_ids
+    boot = boot_tokens(Chip8(rom).cells)
+    ids = pre + [t + off for t in boot]
+    out = model.generate(torch.tensor([ids], device=device), max_new_tokens=n_new,
+                         do_sample=False)[0, len(ids):].tolist()
+    # reference: the machine records and the print, as model token ids
+    bm = bridge.BridgeMachine(rom)
+    while not bm.halted:
+        bm.step()
+    want = [to_id[t] if bridge.is_text(t) else t + off for t in bm.tokens[len(boot):]]
+    got_machine = out[:len(want)]
+    return {"machine_and_print_exact": got_machine == want,
+            "printed": tok.decode(out[:len(want)][-(len(want) - want.index(text_ids[bridge.NL])):]),
+            "continuation": tok.decode(out[len(want):], skip_special_tokens=True),
+            "n_machine_tokens": len(want)}
+
+
 def main() -> None:
     from transformers import AutoTokenizer
 
@@ -178,6 +213,8 @@ def main() -> None:
                add_special_tokens=False).input_ids
     rep["chip_mixed"] = chip_check(model, off, m.tokens, m.generated, args.device, pre, post)
     rep["post_trace"] = post_trace(model, tok, off, args.device)
+    if meta.get("layout") == "v2":
+        rep["bridge"] = bridge_demo(model, tok, meta, args.device)
     merged = text_run(model, prompts, args.device, args.new)
     rep["sample_merged"] = tok.decode(merged[0][2])
     del model

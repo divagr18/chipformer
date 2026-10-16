@@ -37,3 +37,15 @@ def describe(mm: list[Mismatch]) -> str:
 
 
 __all__ = ["check", "describe", "predictions", "spec"]
+
+
+def check_bridge(c: Chip8Q35, tokens: list[int], generated: list[bool], owner_want, limit=10):
+    """Predictions at generated positions, and the owner bit everywhere it is defined."""
+    pred, m = predictions(c, tokens)
+    owner = ir.ev(c.owner, m)
+    want = np.array(tokens[1:] + [-1])
+    gen = np.array(generated[1:] + [False])
+    bad = [(int(p), int(want[p]), int(pred[p])) for p in np.nonzero(gen & (pred != want))[0]]
+    bad_owner = [(p, float(owner[p]), w) for p, w in enumerate(owner_want)
+                 if w is not None and owner[p] != w]
+    return int(gen.sum()), bad[:limit], bad_owner[:limit]

@@ -18,18 +18,24 @@ All arithmetic is on bits, one-hot nibbles and small integers, so it is exact in
 
 from chipformer import spec
 from chipformer.dsl.graph import Expr
+from chipformer.q35 import bridge as B
 from chipformer.q35.ir import Chan, Target
 from chipformer.q35.prims import Circ, cat, from_bits, onehot_bits
 
-JMAX = 40  # write indices above this all read as JMAX + 1
+JMAX = 64  # write indices above this all read as JMAX + 1
 NCODE = 15  # output code: [is_addr, is_ctrl, payload bits 0..12]
 CODE_AMP = 128
+KAPPA = 2**-20  # output code after the exit: tiny, so it never disturbs Qwen's norms
+TAU_TEXT = 2.0**-40
 V, VF = spec.V, spec.V + 0xF
+TEXT_CODE = 16  # text classes are ctrl codes with payload 16 + class (STEP/TICK/BOOT: 0..2)
 
 
 def token_code(t: int) -> list[int]:
-    """0/1 code of a chip token; the embedding stores CODE_AMP * (2 * bit - 1)."""
-    if spec.is_val(t):
+    """0/1 code of a token; the embedding stores CODE_AMP * (2 * bit - 1)."""
+    if B.is_text(t):
+        kind, payload = (0, 1), TEXT_CODE + t - B.TEXT_BASE
+    elif spec.is_val(t):
         kind, payload = (0, 0), t - spec.VAL_BASE
     elif spec.is_addr(t):
         kind, payload = (1, 0), t - spec.ADDR_BASE
@@ -41,7 +47,7 @@ def token_code(t: int) -> list[int]:
 def decode_code(bits: list[int]) -> int:
     payload = sum(b << i for i, b in enumerate(bits[2:]))
     if bits[1]:
-        return spec.STEP + payload
+        return B.TEXT_BASE + payload - TEXT_CODE if payload >= TEXT_CODE else spec.STEP + payload
     return (spec.ADDR_BASE if bits[0] else spec.VAL_BASE) + payload
 
 
@@ -62,12 +68,16 @@ class Chip8Q35(Circ):
                     for x in range(16)] for k in range(3)]
         self.a12 = f("a12", lambda t: int(isa(t) and (t - spec.ADDR_BASE) >> 12 & 1))
         self.is_cls_addr = f("is_cls_addr", lambda t: int(t == spec.addr_token(spec.CLS)))
-        self.code = [f(f"code{i}", lambda t, i=i: CODE_AMP * (2 * token_code(t)[i] - 1))
-                     for i in range(NCODE)]
-        # tau: -1 on chip tokens (cancelled by the last layer). In a merged model the text
-        # tokens' rows hold a tiny tau and the final norm amplifies it, pushing the chip tokens'
-        # logits far down at text positions.
-        self.tau = f("tau", lambda t: -1)
+        self.is_text = f("is_text", lambda t: int(B.is_text(t)))
+        self.mu = f("mu", lambda t: int(not B.is_text(t)))  # chip token: Qwen's layers mute on it
+        self.text = {cls: f(f"text{cls - B.TEXT_BASE}", lambda t, cls=cls: int(t == cls))
+                     for cls in range(B.TEXT_BASE, B.TEXT_BASE + B.N_TEXT)}
+        self.code = [f(f"code{i}", lambda t, i=i: 0 if t == B.OTHER else
+                       CODE_AMP * (2 * token_code(t)[i] - 1)) for i in range(NCODE)]
+        # tau: -1 on chip tokens (cancelled by the last layer), a tiny value on text tokens.
+        # The final norm amplifies it, pushing the chip tokens' logits far down wherever Qwen
+        # speaks.
+        self.tau = f("tau", lambda t: TAU_TEXT if B.is_text(t) else -1)
         self.rs = self.is_step + self.is_boot  # record start
 
     def addr_lits(self, a: int) -> list:
@@ -115,8 +125,10 @@ def build(target: Target | None = None) -> Chip8Q35:
     q = {name: R[f"q.{name}"][0] for name in spec.QUIRK_NAMES}
 
     # ------------------------------------------------------------ micro-step counter
+    # j = VAL tokens (inside a record) or text tokens (inside a print) since the record start
     (x,) = c.slot_head("counter", {0: rs, 1: one - rs}, {0: one - rs, 1: one - rs},
-                       {2: rs}, one - rs, 110 * c.is_val + 238 * rs, tiny=2.0**-60)
+                       {2: rs}, one - rs, 110 * (c.is_val + c.is_text) + 238 * rs,
+                       tiny=2.0**-90)
     cnt = [c.node([(1, one - rs, 7 * one - 8 * 2**m * x), (-1, one - rs, 6 * one - 8 * 2**m * x)],
                   f"j>{m}") for m in range(JMAX + 1)]  # cnt[m] = [j > m]
     j = sum(cnt, Expr())
@@ -182,6 +194,8 @@ def build(target: Target | None = None) -> Chip8Q35:
         ind[name] = c.and_(nib_lits(hib, h), name)
     ind["00E0"] = c.and_(nib_lits(b1[:4], 0) + nib_lits(b1[4:], 0) + nib_lits(b2[:4], 0)
                          + nib_lits(b2[4:], 0xE), "00E0")
+    ind["00FD"] = c.and_(nib_lits(b1[:4], 0) + nib_lits(b1[4:], 0) + nib_lits(b2[:4], 0xD)
+                         + nib_lits(b2[4:], 0xF), "00FD")  # print and halt (bridge.py)
     ind["00EE"] = c.and_(nib_lits(b1[:4], 0) + nib_lits(b1[4:], 0) + nib_lits(b2[:4], 0xE)
                          + nib_lits(b2[4:], 0xE), "00EE")
     for h, name in [(5, "5XY0"), (9, "9XY0")]:
@@ -397,7 +411,7 @@ def build(target: Target | None = None) -> Chip8Q35:
         "W0": fv[0], "W1": fv[1], "W2": fv[2], "fx55": [ind["FX55"]], "fx65": [ind["FX65"]],
         "dxyn": [ind["DXYN"]], "dx_byte": vxb[3:6], "dx_off": vxb[0:3], "dy": vyb[0:5],
         "dt_dec": dt_dec, "st_dec": st_dec, "ls_extra": [ls_extra], "i_next": i_next,
-        "clip": [q["clip"]],
+        "clip": [q["clip"]], "fd": [ind["00FD"]], "v0": v0b,
     }
     flat = [(name, i, e) for name, vals in ctx_vals.items() for i, e in enumerate(vals)]
     k = {name: [None] * len(vals) for name, vals in ctx_vals.items()}
@@ -425,11 +439,12 @@ def build(target: Target | None = None) -> Chip8Q35:
     side = sum((jeq(v) for v in range(1, JMAX + 1, 2)), Expr())  # j % 2
     kI_lo = from_bits(k["I"][:8])
     i_j = bits12(c.add12(kI_lo, k["Ihi"], j, JMAX + 1, "I+j"))
-    # vread address: I + j (FX65) or I + j // 2 (DXYN)
-    d = c.node([(1, k["fx65"][0], j), (1, k["dxyn"][0], row_i)], "vec_off")
+    # vread address: I + j (FX65), I + j // 2 (DXYN) or I + j - 3 (the digits of a print)
+    d = c.node([(1, k["fx65"][0], j), (1, k["dxyn"][0], row_i), (1, k["fd"][0], j - 3 * one)],
+               "vec_off")
     qa = c.add12(kI_lo, k["Ihi"], d, JMAX + 1, "vread_addr")
     vread = [Expr() for _ in range(8)]
-    ram_read = k["fx65"][0] + k["dxyn"][0]
+    ram_read = k["fx65"][0] + k["dxyn"][0] + k["fd"][0]
     for half in range(2):
         for h in range(16):
             cells = {(half << 11) | (s >> 4 << 8) | ((s & 15) << 4) | h: s for s in range(128)}
@@ -481,38 +496,76 @@ def build(target: Target | None = None) -> Chip8Q35:
     def case(lits, kind, payload):
         A.append((lits, kind, payload))
 
+    nfd = one - k["fd"][0]  # machine records; a print (00FD) emits text instead
     for m in range(3):
-        case([at_val, not_tick, k["fixed"][0], jeq(m), k["has"][m]], 0, k[f"W{m}"])
-        case([at_addr, not_tick, k["fixed"][0], jeq(m), k["has"][m]], 1, k[f"A{m}"])
+        case([at_val, nfd, not_tick, k["fixed"][0], jeq(m), k["has"][m]], 0, k[f"W{m}"])
+        case([at_addr, nfd, not_tick, k["fixed"][0], jeq(m), k["has"][m]], 1, k[f"A{m}"])
     jbits = onehot_bits([jeq(v) for v in range(16)], 4)
-    case([at_val, not_tick, k["fx55"][0], le_x], 0, vread)
-    case([at_addr, not_tick, k["fx55"][0], le_x], 1, i_j)
-    case([at_val, not_tick, k["fx65"][0], le_x], 0, vread)
-    case([at_addr, not_tick, k["fx65"][0], le_x], 1, jbits + [0] * 8 + [1])
-    case([at_val, not_tick, k["ls_extra"][0], is_i_adv], 0, k["i_next"])
-    case([at_addr, not_tick, k["ls_extra"][0], is_i_adv], 1, spec.I)
-    case([at_val, not_tick, k["dxyn"][0], lt_2n, drawn], 0, new_byte)
-    case([at_addr, not_tick, k["dxyn"][0], lt_2n], 1, target)
-    case([at_val, not_tick, k["dxyn"][0], eq_2n], 0, [any_collision])
-    case([at_addr, not_tick, k["dxyn"][0], eq_2n], 1, VF)
-    case([at_val, not_tick, is_pc], 0, k["next_pc"])
-    case([at_addr, not_tick, is_pc], 1, spec.PC)
-    case([at_addr, not_tick, is_end], 2, 0)
-    case([at_val, in_tick, jeq(0)], 0, k["dt_dec"])
-    case([at_addr, in_tick, jeq(0)], 1, spec.DT)
-    case([at_val, in_tick, jeq(1)], 0, k["st_dec"])
-    case([at_addr, in_tick, jeq(1)], 1, spec.ST)
-    case([at_addr, in_tick, jeq(2)], 2, 0)
+    case([at_val, nfd, not_tick, k["fx55"][0], le_x], 0, vread)
+    case([at_addr, nfd, not_tick, k["fx55"][0], le_x], 1, i_j)
+    case([at_val, nfd, not_tick, k["fx65"][0], le_x], 0, vread)
+    case([at_addr, nfd, not_tick, k["fx65"][0], le_x], 1, jbits + [0] * 8 + [1])
+    case([at_val, nfd, not_tick, k["ls_extra"][0], is_i_adv], 0, k["i_next"])
+    case([at_addr, nfd, not_tick, k["ls_extra"][0], is_i_adv], 1, spec.I)
+    case([at_val, nfd, not_tick, k["dxyn"][0], lt_2n, drawn], 0, new_byte)
+    case([at_addr, nfd, not_tick, k["dxyn"][0], lt_2n], 1, target)
+    case([at_val, nfd, not_tick, k["dxyn"][0], eq_2n], 0, [any_collision])
+    case([at_addr, nfd, not_tick, k["dxyn"][0], eq_2n], 1, VF)
+    case([at_val, nfd, not_tick, is_pc], 0, k["next_pc"])
+    case([at_addr, nfd, not_tick, is_pc], 1, spec.PC)
+    case([at_addr, nfd, not_tick, is_end], 2, 0)
+    case([at_val, nfd, in_tick, jeq(0)], 0, k["dt_dec"])
+    case([at_addr, nfd, in_tick, jeq(0)], 1, spec.DT)
+    case([at_val, nfd, in_tick, jeq(1)], 0, k["st_dec"])
+    case([at_addr, nfd, in_tick, jeq(1)], 1, spec.ST)
+    case([at_addr, nfd, in_tick, jeq(2)], 2, 0)
+
+
+    # a print: STEP, then NL <tool_response> NL digits NL </tool_response> NL as text tokens.
+    # Position j (STEP = 0, then each printed token) predicts printed token j; n = min(V0, 58).
+    v0 = from_bits(k["v0"])
+    z = j - v0
+    small = c.node(c.t_lt(v0, B.MAX_PRINT + 1, 0, 255), "print.small")
+    big = one - small
+    lim = B.MAX_PRINT
+
+    def zj(dz, name):  # [j == n + dz]
+        return c.node(c.t_eq(z, dz, -255, JMAX + 1, lits=[small])
+                      + c.t_and([big, jeq(lim + dz)]), name)
+
+    nl_end, trc, nl_last = zj(3, "print.nl1"), zj(4, "print.trc"), zj(5, "print.nl2")
+    # [3 <= j < 3 + n] = [j >= 3] - [j >= 3 + n]
+    digit = c.node(c.t_and([cnt[2]]) + c.t_ge(z, 3, -255, JMAX + 1, -1, lits=[small])
+                   + c.t_and([big, cnt[lim + 2]], -1), "print.digit")
+    upto = c.node(c.t_lt(z, 6, -255, JMAX + 1, lits=[small])
+                  + c.t_and([big, one - cnt[lim + 5]]), "print.upto")
+    in_print = [k["fd"][0], c.is_step + c.is_text]
+    code = {cls: TEXT_CODE + cls - B.TEXT_BASE for cls in (B.NL, B.TR_OPEN, B.TR_CLOSE)}
+    for lits, cls in [([jeq(0)], B.NL), ([jeq(1)], B.TR_OPEN), ([jeq(2)], B.NL),
+                      ([nl_end], B.NL), ([trc], B.TR_CLOSE), ([nl_last], B.NL)]:
+        case(in_print + lits, 2, code[cls])
+    case(in_print + [digit], 2, list(vread[:4]) + [1])  # TEXT_CODE + low nibble
+    # who predicts the next token: the circuit on chip tokens and inside a print, else Qwen
+    owner = c.node(c.t_and([c.mu]) + c.t_and([c.is_text, k["fd"][0], cnt[0], upto]), "owner")
 
     nxt = [c.node([t for lits, kind, _ in A if kind == 1 for t in c.t_and(lits)], "next.is_addr"),
            c.node([t for lits, kind, _ in A if kind == 2 for t in c.t_and(lits)], "next.is_ctrl")]
     nxt += c.select_bits([(lits, p) for lits, _, p in A], 13, "next")
     c.next_bits = nxt
-    S = 2**12
+    c.owner = owner
+    # ---------------------------------------------------------- exit (the last chip sublayer)
+    # The emitter clears every other chip dim here, so after the chip layers a token holds only
+    # its Qwen part, mu, the output code (KAPPA * +-1 where the circuit owns the position, else
+    # 0) and tau (0 on chip tokens, the text value on text tokens).
+    for i, e in enumerate(c.code):  # the input code goes first, so the exit adds onto 0
+        c.ffn([(-1, one, e), (1, one, -1 * e)], f"code.clear{i}", into=e)
+    top = max(n.level for n in c.nodes)
     for i, e in enumerate(c.code):
-        c.ffn([(2 * S, one, nxt[i]), (-S, one, one), (-1, one, e), (1, one, -1 * e)],
-              f"logit{i}", into=e)
-    c.ffn([(1, one, one)], "tau.cancel", into=c.tau)
+        c.ffn(c.t_and([nxt[i], owner], 2 * KAPPA) + c.t_and([owner], -KAPPA),
+              f"exit.code{i}", into=e, min_level=top)
+    c.ffn([(1, c.mu, one)], "exit.tau", into=c.tau, min_level=top)
+    c.keep = [next(iter(e.terms)) for e in c.code] + [next(iter(c.tau.terms)),
+                                                       next(iter(c.mu.terms))]
     c.out = {"regs": R, "x": x, "cnt": cnt, "in_tick": in_tick, "old": old, "b1": b1, "b2": b2,
              "ind": ind, "vx": vxb, "vy": vyb, "ctx": k, "vread": vread, "next": nxt}
     return c

@@ -64,6 +64,7 @@ class Alloc:
     n_slots: int
     subtract: dict[int, int] = field(default_factory=dict)  # FFN-defined dim -> old dim
     clears: dict[int, list[int]] = field(default_factory=dict)  # MLP level -> old dims
+    final: list[int] = field(default_factory=list)  # each slot's last owner
 
 
 def reads(n) -> list[int]:
@@ -73,8 +74,12 @@ def reads(n) -> list[int]:
     return [d for e in exprs for d in e.terms]
 
 
-def allocate(g: Graph, clearable: set[int], keep: set[int], unit_cap: int) -> Alloc:
-    """Assign slots; dims in ``keep`` are never handed over (outputs read by the lm_head)."""
+def allocate(g: Graph, clearable: set[int] | None, keep: set[int], unit_cap: int) -> Alloc:
+    """Assign slots; dims in ``keep`` are never handed over (outputs read by the lm_head).
+
+    A handover clears the old value with one "a-form" unit, -x * relu(ONE), exact for any bf16
+    x, so every dim is clearable unless ``clearable`` restricts it.
+    """
     top = max(n.level for n in g.nodes) + 1
     last = {d: g.dims[d].level for d in range(1, len(g.dims))}
     for n in g.nodes:
@@ -90,7 +95,7 @@ def allocate(g: Graph, clearable: set[int], keep: set[int], unit_cap: int) -> Al
 
     def take(d, level, by_ffn):
         for s, o in enumerate(owner):
-            if o in keep or o not in clearable:
+            if o in keep or (clearable is not None and o not in clearable):
                 continue
             born = g.dims[o].level  # the old value must already be in the sublayer's input
             if by_ffn and last[o] <= level and born < level and units.get(level, 0) < unit_cap:
@@ -120,6 +125,7 @@ def allocate(g: Graph, clearable: set[int], keep: set[int], unit_cap: int) -> Al
         for d, by_ffn in defined[level]:
             take(d, level, by_ffn)
     a.n_slots = len(owner)
+    a.final = list(owner)
     return a
 
 
@@ -174,8 +180,12 @@ def clearable_dims(g: Graph, traces: list[list[int]]) -> set[int]:
 
 
 def emit_layers(g: Graph, lay: Layout, tc: dict, first: int, prefix: str,
-                alloc: Alloc | None = None) -> dict:
-    """Weights of the chip layers, named ``{prefix}layers.{first + i}.*``."""
+                alloc: Alloc | None = None, keep: set[int] | None = None) -> dict:
+    """Weights of the chip layers, named ``{prefix}layers.{first + i}.*``.
+
+    With ``keep``, the MLP sublayer of the nodes named ``exit.*`` also clears every chip dim
+    except ``keep`` (and the ballast), so nothing of the circuit is left for later layers.
+    """
     h, nk, nv = tc["hidden_size"], tc["linear_num_key_heads"], tc["linear_num_value_heads"]
     inter = tc["intermediate_size"]
     # With more value heads than key heads (4B: 32 vs 16), value head i reads key head
@@ -184,6 +194,12 @@ def emit_layers(g: Graph, lay: Layout, tc: dict, first: int, prefix: str,
     assert r * nk == nv
     f32 = torch.float32
     out = {}
+    exit_level = None
+    if keep is not None:
+        exit_level = max(n.level for n in g.nodes if n.name.startswith("exit."))
+        assert all(n.level < exit_level for n in g.nodes if not n.name.startswith("exit."))
+        live = alloc.final if alloc else list(range(1, len(g.dims)))
+        exit_clear = [d for d in live if d not in keep]
     for L in range(g.n_layers()):
         p = f"{prefix}layers.{first + L}."
         qkv = torch.zeros(2 * nk * HD + nv * HD, h, dtype=f32)
@@ -217,13 +233,22 @@ def emit_layers(g: Graph, lay: Layout, tc: dict, first: int, prefix: str,
                 continue
             units += [(coef, a, b, n.out) for coef, a, b in n.terms]
             if alloc and n.out in alloc.subtract:  # hand the slot over: remove the old value
-                units.append((-1, one, Expr({alloc.subtract[n.out]: 1}), n.out))
-        units += [(-1, one, Expr({o: 1}), o) for o in (alloc.clears.get(2 * L + 2, [])
+                units.append((-1, Expr({alloc.subtract[n.out]: 1}), one, n.out))
+        units += [(-1, Expr({o: 1}), one, o) for o in (alloc.clears.get(2 * L + 2, [])
                                                        if alloc else [])]
+        if exit_level == 2 * L + 2:
+            units += [(-1, Expr({o: 1}), one, o) for o in exit_clear]
+        assert len(units) <= inter, (L, len(units), inter)
         for u, (coef, a, b, d) in enumerate(units):
             row(b, lay, gate[u], K)
             row(a, lay, up[u], 1 / K)
             down[lay.dim(d), u] = float(coef)
+        if exit_level == 2 * L + 2:  # the ballast goes too: -B per ballast dim
+            for i in range(lay.m):
+                u = len(units) + i
+                row(Expr({ONE: K}), lay, gate[u])
+                up[u, lay.off + i] = (lay.ballast / K) / (lay.ballast * lay.scale)
+                down[lay.off + i, u] = -1.0
         layer = {
             "input_layernorm.weight": torch.zeros(h, dtype=f32),
             "post_attention_layernorm.weight": torch.zeros(h, dtype=f32),

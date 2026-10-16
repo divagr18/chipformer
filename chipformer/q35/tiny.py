@@ -5,7 +5,6 @@ merges into the real model unchanged. HF's cache needs one full-attention layer 
 positions; it is appended last with zero weights, so it adds nothing.
 """
 
-import math
 
 import torch
 
@@ -46,13 +45,15 @@ def pick_layout(n_dims: int) -> Layout:
     return best
 
 
-def code_gain(lay: Layout, n_code: int = 15, amp: int = 128, s: int = 2**12) -> float:
-    """Final-norm gain on the code dims that puts the predicted token's logit near 2^8."""
-    return 2.0 ** round(math.log2(256 / (n_code * s * lay.scale * amp)))
+CODE_GAIN = 2.0**20  # final-norm gain on the output code (the exit leaves KAPPA * +-1 there)
+
+
+def code_gain(lay: Layout | None = None) -> float:
+    return CODE_GAIN
 
 
 def build(g: Graph, vocab: list[int], code_dims: list[int], dtype=torch.bfloat16,
-          clearable: set[int] | None = None):
+          clearable: set[int] | None = None, share: bool = False):
     """Qwen3_5ForCausalLM whose token i is chip token vocab[i]; lm_head reads ``code_dims``.
 
     With ``clearable`` (dims whose slots may be handed over), dims share residual slots.
@@ -60,8 +61,9 @@ def build(g: Graph, vocab: list[int], code_dims: list[int], dtype=torch.bfloat16
     from transformers import Qwen3_5ForCausalLM, Qwen3_5TextConfig
 
     alloc = None
-    if clearable is not None:
-        alloc = allocate(g, clearable, set(code_dims), BASE["intermediate_size"])
+    keep = set(getattr(g, "keep", code_dims))
+    if share:
+        alloc = allocate(g, clearable, keep, BASE["intermediate_size"])
         lay = pick_layout(alloc.n_slots + 1)
         lay.slots = alloc.slots
     else:
@@ -70,7 +72,7 @@ def build(g: Graph, vocab: list[int], code_dims: list[int], dtype=torch.bfloat16
     n_vocab = -(-len(vocab) // 64) * 64
     tc = dict(BASE, hidden_size=lay.hidden, vocab_size=n_vocab, num_hidden_layers=n_chip + 1,
               layer_types=["linear_attention"] * n_chip + ["full_attention"])
-    sd = emit_layers(g, lay, tc, 0, "model.", alloc)
+    sd = emit_layers(g, lay, tc, 0, "model.", alloc, keep if hasattr(g, "keep") else None)
     emb = torch.zeros(n_vocab, lay.hidden)
     emb[: len(vocab)] = embedding_rows(g, lay, vocab, lay.hidden)
     sd["model.embed_tokens.weight"] = emb
@@ -106,14 +108,12 @@ def sample_traces() -> list[list[int]]:
 
 
 def build_chip8(dtype=torch.bfloat16, share_slots: bool = True):
-    from chipformer import spec
-    from chipformer.q35 import chip8_q35
-    from chipformer.q35.emit import clearable_dims
+    from chipformer.q35 import bridge, chip8_q35
 
     c = chip8_q35.build()
-    clear = clearable_dims(c, sample_traces()) if share_slots else None
-    model = build(c, list(range(spec.VOCAB_SIZE)), [next(iter(e.terms)) for e in c.code],
-                  dtype=dtype, clearable=clear)
+    vocab = list(range(bridge.TEXT_BASE + bridge.N_TEXT))
+    model = build(c, vocab, [next(iter(e.terms)) for e in c.code], dtype=dtype,
+                  share=share_slots)
     return c, model
 
 

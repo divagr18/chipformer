@@ -65,13 +65,19 @@ def fit_anti_sink(base_dir, device: str = "cpu") -> dict[int, torch.Tensor]:
 
 
 def mute(sd: dict, tc: dict, n_qwen: int, ballast_dim: int, normed_ballast: float,
-         prefix: str = "model.language_model.", sinks: dict | None = None) -> None:
-    """Patch Qwen layers 0..n_qwen-1 of the state dict ``sd`` in place."""
+         prefix: str = "model.language_model.", sinks: dict | None = None,
+         first: int = 0) -> None:
+    """Patch Qwen's layers (indices first .. first+n_qwen-1) of ``sd`` in place.
+
+    ``ballast_dim`` is any dim that is a known constant on chip tokens and exactly 0 on text
+    (the ballast in the v1 layout, the mu marker after the chip layers' exit in v2);
+    ``normed_ballast`` is its value after the RMSNorm. ``sinks`` is keyed by Qwen's own index.
+    """
     w = MUTE / normed_ballast
     hd = tc["head_dim"]
     for i in range(n_qwen):
-        p = f"{prefix}layers.{i}."
-        if tc["layer_types"][i] == "linear_attention":
+        p = f"{prefix}layers.{first + i}."
+        if tc["layer_types"][first + i] == "linear_attention":
             for name in ("in_proj_a", "in_proj_b", "in_proj_z"):
                 t = sd[f"{p}linear_attn.{name}.weight"]
                 t[:, ballast_dim] = w
