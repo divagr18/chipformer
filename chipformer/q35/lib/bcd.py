@@ -21,12 +21,28 @@ SRC = f"""
 idle:   jp idle                 ; PC rests here between calls (not a PRINT)
 
 ; ---------------------------------------------------------------- add: R = A + B
-add:    badd                    ; macro: R = A + B, v7 = length
-        jp print
+add:    badd                    ; macro: R = A + B, v7 = length, then print1
+
+; ---------------------------------------------------------------- print R[0..v7), short path
+; Only R[0] can be 0 after add or mul of plain numbers, so check one or two digits and fall
+; back to the general loop when both are 0 (zero arguments, or sub).
+print1: ld i, {R_ADDR}
+        ld v0, [i]
+        se v0, 0
+        jp pr_all               ; R[0] != 0: print everything
+        ld i, {R_ADDR + 1}
+        ld v0, [i]
+        sne v0, 0
+        jp print                ; R[1] == 0 too
+        ld v0, v7
+        add v0, 0xff
+        print                   ; R[1..v7)
+pr_all: ld v0, v7
+        print
 
 ; ---------------------------------------------------------------- sub: R = A - B (A >= B)
 sub:    bsub                    ; macro: R = A - B, v7 = length
-        jp print
+        jp print1
 
 ; ---------------------------------------------------------------- mul: R = A * B
 mul:    bzero                   ; macro: R = 0, v7 = LA + LB
@@ -36,6 +52,7 @@ mul_r:  add v1, 0xff            ; row = LB-1 .. 0
         bmac v1                 ; macro: one schoolbook row with b = B[v1]
         se v1, 0
         jp mul_r
+        jp print1
 
 ; ---------------------------------------------------------------- print R[0..v7), no leading 0s
 print:  ld v6, 0
