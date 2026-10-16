@@ -111,3 +111,24 @@ def test_bios_arithmetic():
             bm.step()
         got = "".join("0123456789abcdef"[B.HEX.index(t)] for t in bm.tokens if t in B.HEX)
         assert got == str(int(a) + int(b) if op == "add" else int(a) * int(b))
+
+
+def test_bignum_macros(circuit):
+    """Random multi-call sessions: BADD / BZERO / BMAC records are predicted exactly."""
+    import random
+
+    from chipformer.q35.lib import bcd
+
+    rng = random.Random(11)
+    for _ in range(6):
+        bm = B.BridgeMachine(bcd.ROM, bcd.QUIRKS)
+        bm.text(3)
+        for _ in range(2):
+            op = rng.choice(["add", "mul"])
+            a, b = str(rng.randrange(10**rng.randint(1, 12))), str(rng.randrange(10**rng.randint(1, 12)))
+            bm.tool_call(op, a, b)
+            while not bm.halted:
+                bm.step()
+            bm.text(4)
+        n, bad, bad_owner = Q.check_bridge(circuit, bm.tokens, bm.generated, B.owner_expected(bm))
+        assert not bad and not bad_owner, (bad, bad_owner)

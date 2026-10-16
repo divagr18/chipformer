@@ -55,10 +55,18 @@ class BridgeMachine(Machine):
     def step(self):
         if self.halted:
             raise RuntimeError("machine halted")
-        if fetch(self.emu.cells) == PRINT_OP:
+        op = fetch(self.emu.cells)
+        if op == PRINT_OP:
             self._emit(readout(self.emu.cells), True)
             self.halted = True
             return []
+        from chipformer.q35.lib.macros import macro_writes
+
+        w = macro_writes(self.emu.cells, op)
+        if w is not None:
+            self.emu.apply(w)
+            self._emit(encode_writes(w) + [spec.STEP], True)
+            return w
         return super().step()
 
     def text(self, n: int, cls: int = OTHER) -> None:
