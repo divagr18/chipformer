@@ -46,7 +46,7 @@ def test_test_roms(circuit, rom, quirks):
 def test_fuzz(circuit, seed):
     m = run_machine(random_program(seed), 300, ipf=7, seed=seed, key_rate=0.3,
                     quirks=random_quirks(seed))
-    n, bad = Q.check(circuit, m)
+    _, bad = Q.check(circuit, m)
     assert not bad, Q.describe(bad)
 
 

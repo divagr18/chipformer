@@ -170,7 +170,8 @@ def pick_hidden(base: int, n_chip: int) -> tuple[int, int]:
     return best
 
 
-def build_merged(src, dst, hidden: int | None = None, m: int | None = None):
+def build_merged(src, dst, hidden: int | None = None, m: int | None = None,
+                 mute_qwen: bool = True):
     """Write Qwen3.5 + the CHIP-8 circuit as one checkpoint; returns (circuit, layout)."""
     from safetensors.torch import save_file
 
@@ -210,6 +211,11 @@ def build_merged(src, dst, hidden: int | None = None, m: int | None = None):
     vocab = -(-(v0 + spec.VOCAB_SIZE) // 64) * 64
     tc["vocab_size"] = vocab
 
+    if mute_qwen:
+        from chipformer.q35.mute import fit_anti_sink, mute
+
+        dev = "cuda" if torch.cuda.is_available() else "cpu"
+        mute(sd, tc, n0, lay.off, lay.ballast * lay.scale, sinks=fit_anti_sink(src, dev))
     layers = emit_layers(c, lay, tc, n0, TEXT, alloc)
     sd.update({k: v.to(torch.bfloat16) for k, v in layers.items()})
     del layers
@@ -247,9 +253,13 @@ def build_merged(src, dst, hidden: int | None = None, m: int | None = None):
     (dst / "model.safetensors.index.json").write_text(json.dumps(index, indent=2))
     (dst / "config.json").write_text(json.dumps(cfg, indent=2))
     extend_tokenizer(src, dst, v0)
+    if not (dst / "generation_config.json").exists():
+        eos = cfg["text_config"].get("eos_token_id", 248044)
+        (dst / "generation_config.json").write_text(json.dumps(
+            {"eos_token_id": [248046, eos], "pad_token_id": eos}, indent=2))
     meta = {"chip_token_offset": v0, "chip_vocab": spec.VOCAB_SIZE, "chip_layers": n_chip,
             "hidden": hidden, "chip_dims_offset": d0, "ballast_dims": m,
-            "circuit": c.stats(), "slots": alloc.n_slots}
+            "circuit": c.stats(), "slots": alloc.n_slots, "muted": mute_qwen}
     (dst / "chipformer.json").write_text(json.dumps(meta, indent=2))
     return c, lay
 
@@ -262,8 +272,9 @@ def main() -> None:
     ap.add_argument("--out", default="dist/qwen3.5-0.8b-chip8")
     ap.add_argument("--hidden", type=int, default=None)
     ap.add_argument("--ballast", type=int, default=None)
+    ap.add_argument("--no-mute", action="store_true", help="leave Qwen's layers active on chip tokens")
     args = ap.parse_args()
-    c, lay = build_merged(args.src, args.out, args.hidden, args.ballast)
+    c, lay = build_merged(args.src, args.out, args.hidden, args.ballast, not args.no_mute)
     print(f"{args.out}: hidden {lay.hidden}, {c.n_layers()} chip layers, {c.stats()}")
 
 

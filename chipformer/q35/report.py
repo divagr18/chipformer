@@ -106,6 +106,47 @@ def chip_check(model, off, tokens, generated, device, prefix=(), suffix=()):
             "max_chip_logit_at_text": leak}
 
 
+@torch.no_grad()
+def post_trace(model, tok, off, device, lengths=(0, 2000, 10000)):
+    """Does Qwen remember the conversation after a CHIP-8 run in the middle of it?
+
+    Compares the merged model on [prompt, trace, question] with itself on [prompt, question]
+    where the question keeps the positions it has after the trace, so only the trace's content
+    differs. Reports KL on the answer's next-token distributions and both greedy answers.
+    """
+    pre = tok.apply_chat_template(
+        [{"role": "user", "content": "Remember this: my locker code is 4817 and my cat is called "
+          "Biscuit. I'll ask about it later. First, run this CHIP-8 program."},
+         {"role": "assistant", "content": "Sure, running it now."}],
+        return_tensors="pt", enable_thinking=False)["input_ids"][0].tolist()
+    q = tok.apply_chat_template(
+        [{"role": "user", "content": "What is my locker code and what is my cat called?"}],
+        add_generation_prompt=True, return_tensors="pt", enable_thinking=False)["input_ids"][0]
+    q = q.tolist()
+    out = {}
+    m = game_trace("tetris", 4000, seed=7)
+    for n in lengths:
+        trace = [t + off for t in m.tokens[:n]]
+        if trace and m.tokens[n - 1] != 8705:  # end on a STEP
+            last = max(i for i in range(n) if m.tokens[i] == 8705)
+            trace = trace[: last + 1]
+        full = torch.tensor([pre + trace + q], device=device)
+        gap = torch.tensor([pre + q], device=device)
+        pos = torch.cat([torch.arange(len(pre)), torch.arange(len(q)) + len(pre) + len(trace)])
+        a = model.generate(full, max_new_tokens=24, do_sample=False)[0, full.shape[1]:]
+        b = model.generate(gap, position_ids=pos[None].to(device), max_new_tokens=24,
+                           do_sample=False)[0, gap.shape[1]:] if trace else a
+        la = model(input_ids=torch.cat([full, a[None]], 1)).logits[0, -len(a) - 1:-1].float()
+        pos_b = torch.cat([pos, torch.arange(len(a)) + pos[-1] + 1])[None].to(device)
+        lb = model(input_ids=torch.cat([gap, a[None]], 1), position_ids=pos_b).logits[
+            0, -len(a) - 1:-1].float()
+        p, r = torch.log_softmax(la[:, :248320], -1), torch.log_softmax(lb[:, :248320], -1)
+        out[n] = {"trace_tokens": len(trace), "kl": float((p.exp() * (p - r)).sum(-1).mean()),
+                  "answer_with_trace": tok.decode(a, skip_special_tokens=True),
+                  "answer_without": tok.decode(b, skip_special_tokens=True)}
+    return out
+
+
 def main() -> None:
     from transformers import AutoTokenizer
 
@@ -136,6 +177,7 @@ def main() -> None:
     post = tok("\nThe machine is running Tetris now. What should I do next?",
                add_special_tokens=False).input_ids
     rep["chip_mixed"] = chip_check(model, off, m.tokens, m.generated, args.device, pre, post)
+    rep["post_trace"] = post_trace(model, tok, off, args.device)
     merged = text_run(model, prompts, args.device, args.new)
     rep["sample_merged"] = tok.decode(merged[0][2])
     del model
