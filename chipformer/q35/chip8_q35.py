@@ -20,6 +20,7 @@ from chipformer import spec
 from chipformer.dsl.graph import Expr
 from chipformer.q35 import bridge as B
 from chipformer.q35.ir import Chan, Target
+from chipformer.q35.lib import bcd as bios
 from chipformer.q35.prims import Circ, cat, from_bits, onehot_bits
 
 JMAX = 64  # write indices above this all read as JMAX + 1
@@ -125,12 +126,16 @@ def build(target: Target | None = None) -> Chip8Q35:
     q = {name: R[f"q.{name}"][0] for name in spec.QUIRK_NAMES}
 
     # ------------------------------------------------------------ micro-step counter
-    # j = VAL tokens (inside a record) or text tokens (inside a print) since the record start
-    (x,) = c.slot_head("counter", {0: rs, 1: one - rs}, {0: one - rs, 1: one - rs},
-                       {2: rs}, one - rs, 110 * (c.is_val + c.is_text) + 238 * rs,
+    # j = VAL tokens (inside a record) or text tokens (inside a print) since the record start;
+    # a CALL record starts at the </tool_call> token
+    tco, tcc = c.text[B.TC_OPEN], c.text[B.TC_CLOSE]
+    rsc = rs + tcc
+    (x,) = c.slot_head("counter", {0: rsc, 1: one - rsc}, {0: one - rsc, 1: one - rsc},
+                       {2: rsc}, one - rsc, 110 * (c.is_val + c.is_text - tcc) + 238 * rsc,
                        tiny=2.0**-90)
-    cnt = [c.node([(1, one - rs, 7 * one - 8 * 2**m * x), (-1, one - rs, 6 * one - 8 * 2**m * x)],
-                  f"j>{m}") for m in range(JMAX + 1)]  # cnt[m] = [j > m]
+    cnt = [c.node([(1, one - rsc, 7 * one - 8 * 2**m * x),
+                   (-1, one - rsc, 6 * one - 8 * 2**m * x)], f"j>{m}")
+           for m in range(JMAX + 1)]  # cnt[m] = [j > m]
     j = sum(cnt, Expr())
 
     def jeq(v):  # [j == v], a 0/1 linear form
@@ -138,6 +143,54 @@ def build(target: Target | None = None) -> Chip8Q35:
 
     (in_tick,) = c.slot_head("in_tick", {0: rs + c.is_tick}, {0: one}, {2: c.is_tick},
                              rs + c.is_tick)
+
+    # ------------------------------------------------------------ tool-call capture
+    # Inside <tool_call> ... </tool_call> the circuit keeps the routine's name and the digits of
+    # each argument (runs of digit tokens, in order) for the CALL record it writes afterwards.
+    is_dig = sum((c.text[B.HEX[v]] for v in range(10)), Expr())
+    dvb = [sum((c.text[B.HEX[v]] for v in range(10) if v >> i & 1), Expr()) for i in range(4)]
+    fns = {op: c.text[cls] for op, cls in B.FUNCS.items()}
+    fn_any = sum(fns.values(), Expr())
+    (in_call,) = c.slot_head("in_call", {0: tco + tcc + rs}, {0: one}, {2: tco}, tco + tcc + rs)
+    (prev_dig,) = c.slot_head("prev_digit", {0: one}, {0: one}, {2: Chan(is_dig, (0, 1, 0, 0))},
+                              one)
+    run_start = c.and_([is_dig, one - prev_dig, in_call], "arg.start")
+    cont = c.and_([is_dig, prev_dig, in_call], "arg.cont")
+    (xp,) = c.slot_head("arg.count", {0: tco, 1: one - tco}, {0: one - tco, 1: one - tco},
+                        {2: tco}, one - tco, 110 * run_start + 238 * tco, tiny=2.0**-90)
+    (xd,) = c.slot_head("digit.count", {0: run_start, 1: one - run_start},
+                        {0: one - run_start, 1: one - run_start}, {2: run_start},
+                        one - run_start, 110 * cont + 238 * run_start, tiny=2.0**-90)
+
+    def thermo(xv, gate, n, name):  # [count > m] for m < n, from x = 2^-count
+        return [c.node([(1, one - gate, 7 * one - 8 * 2**m * xv),
+                        (-1, one - gate, 6 * one - 8 * 2**m * xv)], f"{name}>{m}")
+                for m in range(n)]
+
+    cp = thermo(xp, tco, 3, "p")  # p = argument number (1, 2)
+    cd = thermo(xd, run_start, B.MAX_ARG + 1, "d")  # d = digit index within the argument
+
+    def peq(v):
+        return cp[v - 1] - cp[v]
+
+    def deq(w):
+        return (one if w == 0 else cd[w - 1]) - cd[w]
+
+    # lengths and the routine: slots 0/1 = length of argument 1/2 (rewritten at every digit),
+    # slot 2 = the routine (at its name token), slot 127 = ballast (at <tool_call>)
+    len_bits = [sum((deq(w) for w in range(B.MAX_ARG) if (w + 1) >> i & 1), Expr())
+                for i in range(5)]
+    data = {}
+    for a_ in (1, 2):
+        for i in range(5):
+            data[2 + 5 * (a_ - 1) + i] = is_dig + peq(a_) + len_bits[i] - 2
+    ops = list(B.FUNCS)
+    for i, op in enumerate(ops):
+        data[12 + i] = fns[op]
+    lk = {0: is_dig + in_call + peq(1) - 2, 1: is_dig + in_call + peq(2) - 2,
+          2: fn_any + in_call - 1, 127: tco}
+    out = c.slot_head("call.args", lk, {0: one, 1: one, 2: one, 127: one}, data, tco)
+    la_bits, lb_bits, op_oh = out[0:5], out[5:10], out[10:10 + len(ops)]
 
     # ------------------------------------------------------------ display bytes ("old")
     disp_q = {}
@@ -496,7 +549,47 @@ def build(target: Target | None = None) -> Chip8Q35:
     def case(lits, kind, payload):
         A.append((lits, kind, payload))
 
-    nfd = one - k["fd"][0]  # machine records; a print (00FD) emits text instead
+    # ---------------------------------------------------------------- CALL record
+    # At </tool_call> (with a known routine) the circuit writes the arguments' digits to RAM,
+    # their lengths, then PC = the routine, then STEP; the machine then runs the routine.
+    op_valid = sum(op_oh, Expr())
+    (calling,) = c.slot_head("calling", {0: tcc + rs}, {0: one}, {2: tcc + op_valid - 1},
+                             tcc + rs)
+    la, lb = from_bits(la_bits), from_bits(lb_bits)
+    za, zz = j - la, j - la - lb
+    in_a = c.node(c.t_lt(za, 0, -B.MAX_ARG, JMAX + 1), "call.in_a")
+    in_b = c.node(c.t_ge(za, 0, -B.MAX_ARG, JMAX + 1)
+                  + c.t_ge(zz, 0, -2 * B.MAX_ARG, JMAX + 1, -1), "call.in_b")
+    ez = [c.node(c.t_eq(zz, v, -2 * B.MAX_ARG, JMAX + 1), f"call.e{v}") for v in range(4)]
+    q_a = [c.and_([jeq(w), in_a], f"call.qa{w}") for w in range(B.MAX_ARG)]
+    q_b = [c.node(c.t_eq(za, w, -B.MAX_ARG, JMAX + 1, lits=[in_b]), f"call.qb{w}")
+           for w in range(B.MAX_ARG)]
+    keys = {32 * (a_ - 1) + w: is_dig + in_call + peq(a_) + deq(w) - 3
+            for a_ in (1, 2) for w in range(B.MAX_ARG)}
+    query = {**{w: q_a[w] for w in range(B.MAX_ARG)},
+             **{32 + w: q_b[w] for w in range(B.MAX_ARG)}}
+    digit_bits = c.slot_head("call.digits", keys, query, {2 + i: dvb[i] for i in range(4)}, one)
+    pad = [0] * (32 - B.MAX_ARG)
+    a_addr = onehot_bits(q_a + pad, 5)
+    b_addr = onehot_bits(q_b + pad, 5)
+    a_addr = [bios.A_ADDR >> i & 1 if i >= 5 else a_addr[i] for i in range(13)]
+    b_addr = [bios.B_ADDR >> i & 1 if i >= 5 else b_addr[i] for i in range(13)]
+    entry = [sum((op_oh[k_] for k_, op in enumerate(ops) if bios.OPS[op] >> i & 1), Expr())
+             for i in range(12)]
+    case([at_addr, calling, in_a], 1, a_addr)
+    case([at_val, calling, in_a], 0, digit_bits)
+    case([at_addr, calling, in_b], 1, b_addr)
+    case([at_val, calling, in_b], 0, digit_bits)
+    case([at_addr, calling, ez[0]], 1, bios.LEN)
+    case([at_val, calling, ez[0]], 0, la_bits)
+    case([at_addr, calling, ez[1]], 1, bios.LEN + 1)
+    case([at_val, calling, ez[1]], 0, lb_bits)
+    case([at_addr, calling, ez[2]], 1, spec.PC)
+    case([at_val, calling, ez[2]], 0, entry)
+    case([at_addr, calling, ez[3]], 2, 0)
+
+    # machine records (not inside a print or a CALL record)
+    nfd = one - k["fd"][0] - calling
     for m in range(3):
         case([at_val, nfd, not_tick, k["fixed"][0], jeq(m), k["has"][m]], 0, k[f"W{m}"])
         case([at_addr, nfd, not_tick, k["fixed"][0], jeq(m), k["has"][m]], 1, k[f"A{m}"])
@@ -539,14 +632,16 @@ def build(target: Target | None = None) -> Chip8Q35:
                    + c.t_and([big, cnt[lim + 2]], -1), "print.digit")
     upto = c.node(c.t_lt(z, 6, -255, JMAX + 1, lits=[small])
                   + c.t_and([big, one - cnt[lim + 5]]), "print.upto")
-    in_print = [k["fd"][0], c.is_step + c.is_text]
+    in_print = [k["fd"][0], c.is_step + c.is_text, one - calling]
     code = {cls: TEXT_CODE + cls - B.TEXT_BASE for cls in (B.NL, B.TR_OPEN, B.TR_CLOSE)}
     for lits, cls in [([jeq(0)], B.NL), ([jeq(1)], B.TR_OPEN), ([jeq(2)], B.NL),
                       ([nl_end], B.NL), ([trc], B.TR_CLOSE), ([nl_last], B.NL)]:
         case(in_print + lits, 2, code[cls])
     case(in_print + [digit], 2, list(vread[:4]) + [1])  # TEXT_CODE + low nibble
     # who predicts the next token: the circuit on chip tokens and inside a print, else Qwen
-    owner = c.node(c.t_and([c.mu]) + c.t_and([c.is_text, k["fd"][0], cnt[0], upto]), "owner")
+    owner = c.node(c.t_and([c.mu]) + c.t_and([c.is_text, k["fd"][0], cnt[0], upto,
+                                              one - calling])
+                   + c.t_and([c.is_text, calling]), "owner")
 
     nxt = [c.node([t for lits, kind, _ in A if kind == 1 for t in c.t_and(lits)], "next.is_addr"),
            c.node([t for lits, kind, _ in A if kind == 2 for t in c.t_and(lits)], "next.is_ctrl")]
@@ -563,7 +658,10 @@ def build(target: Target | None = None) -> Chip8Q35:
     for i, e in enumerate(c.code):
         c.ffn(c.t_and([nxt[i], owner], 2 * KAPPA) + c.t_and([owner], -KAPPA),
               f"exit.code{i}", into=e, min_level=top)
-    c.ffn([(1, c.mu, one)], "exit.tau", into=c.tau, min_level=top)
+    # tau: 0 wherever the circuit predicts (chip tokens: -1 + 1; owned text: TAU_TEXT - TAU_TEXT),
+    # TAU_TEXT where Qwen does, which keeps chip tokens out of Qwen's text
+    c.ffn([(1, c.mu, one)] + c.t_and([owner, c.is_text], -TAU_TEXT), "exit.tau", into=c.tau,
+          min_level=top)
     c.keep = [next(iter(e.terms)) for e in c.code] + [next(iter(c.tau.terms)),
                                                        next(iter(c.mu.terms))]
     c.out = {"regs": R, "x": x, "cnt": cnt, "in_tick": in_tick, "old": old, "b1": b1, "b2": b2,

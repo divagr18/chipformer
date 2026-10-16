@@ -239,6 +239,10 @@ def build_merged(src, dst, hidden: int | None = None, m: int | None = None,
     full[:v0, d0:] = rows[bridge.OTHER][d0:]
     for cls, i in text_ids.items():
         full[i, d0:] = rows[cls][d0:]
+    for cls, strings in bridge.EXTRA_TEXT.items():
+        for string in strings:
+            (i,) = tok.encode(string, add_special_tokens=False)
+            full[i, d0:] = rows[cls][d0:]
     chip = embedding_rows(c, lay, list(range(spec.VOCAB_SIZE)), hidden)
     full[v0 : v0 + spec.VOCAB_SIZE] = chip.to(torch.bfloat16)
     sd[TEXT + "embed_tokens.weight"] = full

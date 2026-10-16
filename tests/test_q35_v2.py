@@ -77,3 +77,37 @@ def test_checkpoint_print_and_exit(circuit, dtype):
     kept = {lay.dim(d) for d in circuit.keep}
     others = [i for i in range(lay.hidden) if i not in kept]
     assert res[:, others].abs().max() == 0
+
+
+@pytest.mark.parametrize("calls", [[("mul", "37", "43")], [("add", "48213", "9921"),
+                                                          ("mul", "12", "34")]])
+def test_tool_call(circuit, calls):
+    from chipformer.q35.lib import bcd
+
+    bm = B.BridgeMachine(bcd.ROM, bcd.QUIRKS)
+    bm.text(6)
+    for op, a, b in calls:
+        bm.tool_call(op, a, b)
+        while not bm.halted:
+            bm.step()
+        bm.text(5)
+    n, bad, bad_owner = Q.check_bridge(circuit, bm.tokens, bm.generated, B.owner_expected(bm))
+    assert n > 500 and not bad and not bad_owner, (bad, bad_owner)
+
+
+def test_bios_arithmetic():
+    import random
+
+    from chipformer.q35.lib import bcd
+    from chipformer.ref.emu import apply_writes
+
+    rng = random.Random(1)
+    for _ in range(100):
+        op = rng.choice(["add", "mul"])
+        a, b = str(rng.randrange(10**rng.randint(1, 10))), str(rng.randrange(10**rng.randint(1, 10)))
+        bm = B.BridgeMachine(bcd.ROM, bcd.QUIRKS)
+        apply_writes(bm.emu.cells, bcd.call_writes(op, a, b))
+        while not bm.halted:
+            bm.step()
+        got = "".join("0123456789abcdef"[B.HEX.index(t)] for t in bm.tokens if t in B.HEX)
+        assert got == str(int(a) + int(b) if op == "add" else int(a) * int(b))

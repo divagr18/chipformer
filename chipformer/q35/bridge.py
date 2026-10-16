@@ -14,19 +14,25 @@ the machine stops and Qwen continues. Nothing in the machine state changes.
 
 from chipformer import spec
 from chipformer.ref.emu import fetch
-from chipformer.trace import Machine
+from chipformer.trace import Machine, encode_writes
 
 TEXT_BASE = spec.VOCAB_SIZE  # 8708
 HEX = list(range(TEXT_BASE, TEXT_BASE + 16))  # '0'..'9', 'a'..'f'
-NL, TR_OPEN, TR_CLOSE, TC_OPEN, TC_CLOSE, OTHER = range(TEXT_BASE + 16, TEXT_BASE + 22)
-N_TEXT = 22
+NL, TR_OPEN, TR_CLOSE, TC_OPEN, TC_CLOSE, OTHER, FN_ADD, FN_MUL = range(TEXT_BASE + 16,
+                                                                     TEXT_BASE + 24)
+N_TEXT = 24
+FUNCS = {"add": FN_ADD, "mul": FN_MUL}  # tool names the circuit answers
 PRINT_OP = 0x00FD
 MAX_PRINT = 58  # digits per print (the write counter tops out at 64)
+MAX_ARG = 24  # digits per tool-call argument
 
 # Qwen3.5 token ids of the classes (single tokens in its tokenizer)
 QWEN_TEXT = {**{TEXT_BASE + i: c for i, c in enumerate("0123456789abcdef")},
              NL: "\n", TR_OPEN: "<tool_response>", TR_CLOSE: "</tool_response>",
-             TC_OPEN: "<tool_call>", TC_CLOSE: "</tool_call>"}
+             TC_OPEN: "<tool_call>", TC_CLOSE: "</tool_call>", FN_ADD: "add", FN_MUL: "mul"}
+# other single tokens Qwen generates for the same thing: it writes <function=add> as "=add" and
+# <function=mul> as "=m" "ul", not the way its tokenizer splits the text
+EXTRA_TEXT = {FN_ADD: ["=add"], FN_MUL: ["ul"]}
 
 
 def is_text(t: int) -> bool:
@@ -58,6 +64,24 @@ class BridgeMachine(Machine):
     def text(self, n: int, cls: int = OTHER) -> None:
         """Qwen writes n text tokens (the circuit must hand over)."""
         self._emit([cls] * n, False)
+
+    def tool_call(self, op: str, a: str, b: str) -> None:
+        """Qwen calls a library routine with its native syntax; the circuit then writes the
+        CALL record (the arguments into RAM, PC = the routine) and the machine runs it."""
+        from chipformer.q35.lib import bcd
+
+        def lit(n):
+            return [OTHER] * n
+
+        da, db = [HEX[int(ch)] for ch in a], [HEX[int(ch)] for ch in b]
+        text = ([TC_OPEN, NL] + lit(2) + [FUNCS[op]] + lit(1) + [NL] + lit(3) + [NL] + da
+                + [NL] + lit(3) + [NL] + lit(3) + [NL] + db + [NL] + lit(3) + [NL] + lit(3)
+                + [NL, TC_CLOSE])
+        self._emit(text, False)
+        w = bcd.call_writes(op, a, b)
+        self.emu.apply(w)
+        self._emit(encode_writes(w) + [spec.STEP], True)
+        self.halted = False
 
 
 def owner_expected(m: BridgeMachine) -> list[int | None]:
