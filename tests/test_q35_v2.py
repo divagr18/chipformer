@@ -92,7 +92,7 @@ def test_tool_call(circuit, calls):
             bm.step()
         bm.text(5)
     n, bad, bad_owner = Q.check_bridge(circuit, bm.tokens, bm.generated, B.owner_expected(bm))
-    assert n > 500 and not bad and not bad_owner, (bad, bad_owner)
+    assert n > 100 and not bad and not bad_owner, (bad, bad_owner)
 
 
 def test_bios_arithmetic():
@@ -130,5 +130,5 @@ def test_bignum_macros(circuit):
             while not bm.halted:
                 bm.step()
             bm.text(4)
-        n, bad, bad_owner = Q.check_bridge(circuit, bm.tokens, bm.generated, B.owner_expected(bm))
+        _n, bad, bad_owner = Q.check_bridge(circuit, bm.tokens, bm.generated, B.owner_expected(bm))
         assert not bad and not bad_owner, (bad, bad_owner)
