@@ -120,9 +120,9 @@ class BatchDecoder:
 
         self.model = model
         self.lm = _text_model(model)
-        self.head = model.lm_head.weight
+        self.head = model.lm_head  # an nn.Linear, or fast.SparseLinear after fast.compact
         self.cfg = getattr(model.config, "text_config", model.config)
-        self.dev = self.head.device
+        self.dev = model.lm_head.weight.device
         self.max_len = max_len
         if eos is None:
             eos = model.generation_config.eos_token_id
@@ -150,7 +150,7 @@ class BatchDecoder:
                 h = lm(input_ids=tok, position_ids=pos[:, None], past_key_values=cache,
                        attention_mask={"full_attention": mask, "linear_attention": None},
                        use_cache=True).last_hidden_state[:, -1]
-                return torch.nn.functional.linear(h, head).argmax(-1)
+                return head(h).argmax(-1)
 
             if self.compile:
                 step = torch.compile(step, mode=self.mode, fullgraph=self.fullgraph)
@@ -166,7 +166,7 @@ class BatchDecoder:
         h = self.lm(input_ids=x, position_ids=torch.arange(n, device=self.dev)[None],
                     attention_mask=torch.ones_like(x), past_key_values=self.small,
                     use_cache=True).last_hidden_state[:, -1:]
-        return int(torch.nn.functional.linear(h, self.head)[0, -1].argmax())
+        return int(self.head(h)[0, -1].argmax())
 
     @torch.no_grad()
     def warmup(self, prompt: list[int], steps: int = 3) -> None:

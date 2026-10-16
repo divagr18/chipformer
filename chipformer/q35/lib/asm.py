@@ -85,6 +85,8 @@ def _encode(op: str, args: list[str], labels: dict[str, int]) -> int:
         return 0x5001
     if op == "BZERO":
         return 0x5002
+    if op == "BSUB":
+        return 0x5004
     if op == "BMAC":
         return 0x5003 | r[0] << 8
     if op == "JP":

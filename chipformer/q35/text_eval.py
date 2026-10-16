@@ -123,6 +123,7 @@ def generate(model, prompts, max_new, eos, pad, batch=GEN_BATCH):
         for r, i in enumerate(b):
             ids[r, n - len(prompts[i]):] = torch.tensor(prompts[i])
             mask[r, n - len(prompts[i]):] = 1
+        model.model.rope_deltas = None
         g = model.generate(input_ids=ids.cuda(), attention_mask=mask.cuda(), max_new_tokens=max_new,
                            do_sample=False, temperature=None, top_p=None, top_k=None,
                            eos_token_id=eos, pad_token_id=pad)[:, n:].tolist()
@@ -310,6 +311,7 @@ def prefill(model, ids, keep=1):
     """Chunked prefill with a fresh cache; logits (text vocab) of the last ``keep`` positions."""
     from transformers import DynamicCache
 
+    model.model.rope_deltas = None  # stale after a batched generate(); text-only deltas are 0
     cache = DynamicCache(config=model.config)
     n = len(ids) - keep
     cuts = list(range(0, n, CHUNK)) + [n, len(ids)]

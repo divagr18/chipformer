@@ -25,7 +25,9 @@ TOOLS = [{"type": "function", "function": {
         "b": {"type": "integer", "description": "second operand"}}}}}
     for name, desc in [("mul", ("Multiply two non-negative integers exactly. Use it for any "
                                "multiplication.")),
-                       ("add", "Add two non-negative integers exactly. Use it for any addition.")]]
+                       ("add", "Add two non-negative integers exactly. Use it for any addition."),
+                       ("sub", ("Subtract b from a exactly (a must be >= b). Use it for any "
+                               "subtraction."))]]
 
 
 def problems(n: int, seed: int = 0) -> list[tuple[str, str, int]]:

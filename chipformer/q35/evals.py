@@ -30,16 +30,16 @@ import math
 import random
 import re
 import time
+from collections import deque
 from decimal import Decimal, InvalidOperation
 from fractions import Fraction
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-BASE_VOCAB = 248320
 SUFFIX = "\n\nGive the final answer as a single number in \\boxed{} at the end."
 CONDS = ("base", "base_think", "merged", "merged_plain", "pytool_inline", "pytool")
 TOOL_CONDS = ("merged", "pytool_inline", "pytool")
-BUDGET = {False: 1536, True: 8192}  # Qwen-written tokens (thinking or not); machine tokens extra
+BUDGET = {False: 2048, True: 8192}  # Qwen-written tokens (thinking or not); machine tokens extra
 
 
 def _div(a, b):
@@ -254,60 +254,6 @@ def is_correct(pred, gold: str) -> bool:
 
 # ---------------------------------------------------------------------------------- decoding
 
-class Decoder:
-    """Greedy batch-1 decoding with a static cache and a CUDA-graph step (like fast.Runner, but
-    over the whole vocabulary). ``prefill`` takes any number of tokens at the current position."""
-
-    def __init__(self, model, max_len: int, vocab: int, compile: bool = True):
-        import torch
-        from transformers import StaticCache
-
-        self.torch = torch
-        cfg = getattr(model.config, "text_config", model.config)
-        self.cache = StaticCache(config=cfg, max_cache_len=max_len)
-        self.max_len = max_len
-        inner = model.model
-        self.lm = getattr(inner, "language_model", inner)
-        self.head = model.lm_head.weight[:vocab]
-        self.dev = self.head.device
-        self.pos = 0
-        self.tok = torch.zeros(1, 1, dtype=torch.long, device=self.dev)
-        self.cpos = torch.zeros(1, dtype=torch.long, device=self.dev)
-        self._step = (torch.compile(self._forward, mode="reduce-overhead", fullgraph=False)
-                      if compile else self._forward)
-
-    def _forward(self, tok, cpos):
-        h = self.lm(input_ids=tok, past_key_values=self.cache, cache_position=cpos,
-                    use_cache=True).last_hidden_state[0, -1]
-        return (self.head @ h).argmax(-1)
-
-    def prefill(self, toks: list[int]) -> int:
-        torch = self.torch
-        with torch.no_grad():
-            nxt = None
-            for s in range(0, len(toks), 4096):
-                chunk = toks[s:s + 4096]
-                x = torch.tensor([chunk], device=self.dev)
-                cpos = torch.arange(self.pos, self.pos + len(chunk), device=self.dev)
-                h = self.lm(input_ids=x, past_key_values=self.cache, cache_position=cpos,
-                            use_cache=True).last_hidden_state[0, -1]
-                self.pos += len(chunk)
-                nxt = int((self.head @ h).argmax())
-        return nxt
-
-    def feed(self, token: int) -> int:
-        with self.torch.no_grad():
-            self.tok.fill_(token)
-            self.cpos.fill_(self.pos)
-            nxt = self._step(self.tok, self.cpos)
-            self.pos += 1
-            return int(nxt)
-
-    def reset(self) -> None:
-        self.cache.reset()
-        self.pos = 0
-
-
 class Ctx:
     """What the decode loop needs to know about token ids."""
 
@@ -340,6 +286,8 @@ class Ctx:
                 run = 0
             if t is not None:
                 text.append(t)
+        if text:
+            parts.append(self.tok.decode(text, skip_special_tokens=False))
         return "".join(parts)
 
 
@@ -361,58 +309,108 @@ def executor(style: str, ctx: Ctx):
     return run
 
 
-def decode(dec: Decoder, ctx: Ctx, prompt: list[int], budget: int, hook=None) -> dict:
-    """Greedy decode until a stop token, ``budget`` Qwen-written tokens, or the cache end.
-    Machine tokens (chip tokens and the circuit's print) and injected tokens are not counted."""
-    dec.reset()
-    nxt = dec.prefill(prompt)
-    out, n_qwen, n_inj, printing, stop = [], 0, 0, False, "budget"
-    while True:
-        out.append(nxt)
-        if nxt in ctx.stop:
-            stop = "eos"
-            break
-        if ctx.is_chip(nxt):
-            printing = True
-        elif printing:
-            if nxt == ctx.tr_close:
-                printing = "end"
+class _Row:
+    """One problem in flight: its tokens, the tokens still to force (a Python tool response), and
+    the count of Qwen-written tokens (machine tokens, the circuit's print and injected tokens are
+    not counted against the budget)."""
+
+    def __init__(self, i: int, n_prompt: int):
+        self.i, self.n_prompt, self.t0 = i, n_prompt, time.time()
+        self.out: list[int] = []
+        self.forced: deque = deque()
+        self.n_qwen = self.n_inj = 0
+        self.printing = False
+        self.stop = None
+
+    def push(self, t: int, forced: bool, ctx, budget: int, max_len: int, hook) -> bool:
+        """Record token t; returns True when the row is finished."""
+        self.out.append(t)
+        if self.n_prompt + len(self.out) >= max_len - 1:
+            self.stop = "context"
+            return True
+        if forced:
+            self.n_inj += 1
+            return False
+        if t in ctx.stop:
+            self.stop = "eos"
+            return True
+        if ctx.is_chip(t):
+            self.printing = True
+        elif self.printing == "end":
+            self.printing = False  # the newline after </tool_response> is the circuit's
+        elif self.printing:
+            if t == ctx.tr_close:
+                self.printing = "end"
         else:
-            n_qwen += 1
-        if printing == "end" and nxt != ctx.tr_close:
-            printing = False  # the newline after </tool_response> was the circuit's
-        if n_qwen >= budget:
-            break
-        inject = hook(out) if hook and nxt == ctx.tc_close else []
-        if len(prompt) + len(out) + len(inject) + 1 >= dec.max_len:
-            stop = "context"
-            break
-        if inject:
-            out += inject
-            n_inj += len(inject)
-            nxt = dec.prefill([nxt] + inject)  # </tool_call> and the response, then predict
-            continue
-        nxt = dec.feed(nxt)
-    return {"out": out, "n_qwen": n_qwen, "n_injected": n_inj, "stop": stop}
+            self.n_qwen += 1
+        if self.n_qwen >= budget:
+            self.stop = "budget"
+            return True
+        if hook is not None and t == ctx.tc_close:
+            self.forced.extend(hook(self.out))
+        return False
+
+    def result(self) -> dict:
+        return {"out": self.out, "n_qwen": self.n_qwen, "n_injected": self.n_inj,
+                "stop": self.stop, "seconds": time.time() - self.t0}
 
 
-def hf_generate_batch(model, tok, prompts: list[list[int]], max_new: int) -> list[list[int]]:
-    """Plain HF batched greedy generation with left padding (text-only conditions)."""
+def decode_all(bd, ctx, prompts: list[list[int]], budget: int, hook, on_done) -> None:
+    """Greedy decoding of every prompt through ``batch.BatchDecoder``'s rows (per-row positions,
+    batch-1 prefill, continuous refill), with per-row stop rules and token forcing: after a
+    </tool_call>, a ``hook`` (the Python executor) may queue tokens that are fed instead of the
+    model's predictions. Calls ``on_done(i, result)`` as each problem finishes."""
     import torch
 
-    pad = tok.pad_token_id if tok.pad_token_id is not None else 248044
-    n = max(len(p) for p in prompts)
-    x = torch.tensor([[pad] * (n - len(p)) + p for p in prompts], device="cuda")
-    m = torch.tensor([[0] * (n - len(p)) + [1] * len(p) for p in prompts], device="cuda")
+    queue = deque(range(len(prompts)))
+    n = bd.batch
+    first = bd.prefill(prompts[queue[0]])
+    rows, tok, pos, step = bd._level(n)
+    live: list[_Row | None] = [None] * n
+
+    def admit(b, first=None):
+        while queue:
+            i = queue.popleft()
+            t = bd.prefill(prompts[i]) if first is None else first
+            first = None
+            r = _Row(i, len(prompts[i]))
+            if r.push(t, False, ctx, budget, bd.max_len, hook):
+                on_done(i, r.result())
+                continue
+            rows.load_row(b, bd.small, len(prompts[i]))
+            tok[b, 0] = t
+            pos[b] = len(prompts[i])
+            live[b] = r
+            return
+        live[b] = None
+        tok[b, 0] = 0  # idle row: decodes garbage at slot 0
+        pos[b] = 0
+
+    admit(0, first)
+    for b in range(1, n):
+        admit(b)
     with torch.no_grad():
-        g = model.generate(input_ids=x, attention_mask=m, max_new_tokens=max_new,
-                           do_sample=False, pad_token_id=pad)
-    outs = []
-    stops = {tok.convert_tokens_to_ids("<|im_end|>"), tok.convert_tokens_to_ids("<|endoftext|>")}
-    for row in g[:, n:].tolist():
-        k = next((i for i, t in enumerate(row) if t in stops), None)
-        outs.append(row if k is None else row[:k + 1])
-    return outs
+        while any(r is not None for r in live):
+            pred = step(tok, pos).tolist()
+            pos.add_(1)
+            nt, done = [], []
+            for b, p in enumerate(pred):
+                r = live[b]
+                if r is None:
+                    nt.append(0)
+                    continue
+                forced = bool(r.forced)
+                t = r.forced.popleft() if forced else p
+                nt.append(t)
+                if r.push(t, forced, ctx, budget, bd.max_len, hook):
+                    done.append(b)
+            tok.copy_(torch.tensor(nt, device=tok.device)[:, None])
+            idle = [b for b in range(n) if live[b] is None]
+            if idle:
+                pos[idle] = 0
+            for b in done:
+                on_done(live[b].i, live[b].result())
+                admit(b)
 
 
 # ---------------------------------------------------------------------------------- scoring
@@ -452,7 +450,7 @@ def score(p: dict, cond: str, ctx: Ctx, r: dict, seconds: float, think: bool) ->
 
 def default_model(cond: str) -> str:
     if cond.startswith("merged"):
-        return str(ROOT / "dist" / "q4-v3")
+        return str(ROOT / "dist" / "q4-v4")
     snaps = sorted(Path.home().glob(".cache/huggingface/hub/models--Qwen--Qwen3.5-4B/snapshots/*"))
     return str(snaps[-1])
 
@@ -490,7 +488,7 @@ def run(args) -> None:
     tok = AutoTokenizer.from_pretrained(mpath)
     model = AutoModelForImageTextToText.from_pretrained(mpath, dtype=torch.bfloat16)
     model = model.cuda().eval()
-    chip, bios, vocab = None, [], BASE_VOCAB
+    chip, bios = None, []
     meta_path = Path(mpath) / "chipformer.json"
     if meta_path.exists():
         from chipformer.q35.lib import bcd
@@ -499,7 +497,6 @@ def run(args) -> None:
 
         meta = json.loads(meta_path.read_text())
         chip = (meta["chip_token_offset"], meta["chip_vocab"])
-        vocab = chip[0] + chip[1]
         if cond == "merged":
             bios = [t + chip[0] for t in boot_tokens(Chip8(bcd.ROM, bcd.QUIRKS).cells)]
     ctx = Ctx(tok, chip)
@@ -516,25 +513,27 @@ def run(args) -> None:
                                       for c in rec["calls"]]}), flush=True)
 
     prompts = [build_prompt(tok, p["question"], cond, bios) for p in todo]
-    if args.batch > 1 and cond in ("base", "base_think", "merged_plain"):
-        tok.padding_side = "left"
-        for s in range(0, len(todo), args.batch):
-            t = time.time()
-            outs = hf_generate_batch(model, tok, prompts[s:s + args.batch], budget)
-            dt = (time.time() - t) / len(outs)
-            for p, o in zip(todo[s:s + args.batch], outs):
-                stop = "eos" if o and o[-1] in ctx.stop else "budget"
-                r = {"out": o, "n_qwen": len(o) - (stop == "eos"), "stop": stop}
-                emit(score(p, cond, ctx, r, dt, think) | {"batched": args.batch})
-        return
-    if cond == "merged" and args.batch > 1:
-        raise SystemExit("batched merged decoding: use chipformer.q35.batch when it exists")
-    dec = Decoder(model, args.max_len, vocab, compile=not args.no_compile)
-    for p, ids in zip(todo, prompts):
-        t = time.time()
-        r = decode(dec, ctx, ids, budget, hook)
-        torch.cuda.synchronize()
-        emit(score(p, cond, ctx, r, time.time() - t, think))
+    from chipformer.q35.batch import BatchDecoder
+
+    max_len = args.max_len or (max(map(len, prompts)) + budget + (6144 if chip else 512))
+    max_len = -(-max_len // 1024) * 1024
+    bd = BatchDecoder(model, batch=min(args.batch, len(todo)), max_len=max_len,
+                      eos=sorted(ctx.stop), sizes=[min(args.batch, len(todo))],
+                      compile=not args.no_compile)
+    t0 = time.time()
+    print(f"batch {bd.batch}, max_len {max_len}, budget {budget}", flush=True)
+
+    def done(i, r):
+        emit(score(todo[i], cond, ctx, r, r["seconds"], think) | {"batch": bd.batch,
+                                                                  "model": mpath})
+
+    decode_all(bd, ctx, prompts, budget, hook, done)
+    wall = time.time() - t0
+    with (out_dir / "runs.log").open("a", encoding="utf-8") as f:
+        f.write(json.dumps({"data": args.data, "cond": cond, "n": len(todo), "batch": bd.batch,
+                            "wall_s": round(wall, 1), "s_per_problem": round(wall / len(todo), 2),
+                            "model": mpath, "gpu": torch.cuda.get_device_name()}) + "\n")
+    print(f"done {len(todo)} in {wall:.0f}s ({wall / len(todo):.1f} s/problem)", flush=True)
 
 
 # ---------------------------------------------------------------------------------- summary
@@ -658,9 +657,9 @@ def main() -> None:
     r.add_argument("--seed", type=int, default=0)
     r.add_argument("--model")
     r.add_argument("--out", default=str(ROOT / "dist" / "evals"))
-    r.add_argument("--budget", type=int, help="Qwen-written tokens (default 1536, thinking 8192)")
-    r.add_argument("--max-len", type=int, default=32768, help="static cache length")
-    r.add_argument("--batch", type=int, default=1)
+    r.add_argument("--budget", type=int, help="Qwen-written tokens (default 2048, thinking 8192)")
+    r.add_argument("--max-len", type=int, help="cache length (default: prompt + budget + room)")
+    r.add_argument("--batch", type=int, default=8)
     r.add_argument("--shard", help="k/m: run every m-th remaining problem from k")
     r.add_argument("--no-compile", action="store_true")
     s = sub.add_parser("summary")

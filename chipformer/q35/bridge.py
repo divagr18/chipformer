@@ -18,10 +18,10 @@ from chipformer.trace import Machine, encode_writes
 
 TEXT_BASE = spec.VOCAB_SIZE  # 8708
 HEX = list(range(TEXT_BASE, TEXT_BASE + 16))  # '0'..'9', 'a'..'f'
-NL, TR_OPEN, TR_CLOSE, TC_OPEN, TC_CLOSE, OTHER, FN_ADD, FN_MUL = range(TEXT_BASE + 16,
-                                                                     TEXT_BASE + 24)
-N_TEXT = 24
-FUNCS = {"add": FN_ADD, "mul": FN_MUL}  # tool names the circuit answers
+NL, TR_OPEN, TR_CLOSE, TC_OPEN, TC_CLOSE, OTHER, FN_ADD, FN_MUL, FN_SUB = range(
+    TEXT_BASE + 16, TEXT_BASE + 25)
+N_TEXT = 25
+FUNCS = {"add": FN_ADD, "mul": FN_MUL, "sub": FN_SUB}  # tool names the circuit answers
 PRINT_OP = 0x00FD
 MAX_PRINT = 58  # digits per print (the write counter tops out at 64)
 MAX_ARG = 24  # digits per tool-call argument
@@ -29,10 +29,11 @@ MAX_ARG = 24  # digits per tool-call argument
 # Qwen3.5 token ids of the classes (single tokens in its tokenizer)
 QWEN_TEXT = {**{TEXT_BASE + i: c for i, c in enumerate("0123456789abcdef")},
              NL: "\n", TR_OPEN: "<tool_response>", TR_CLOSE: "</tool_response>",
-             TC_OPEN: "<tool_call>", TC_CLOSE: "</tool_call>", FN_ADD: "add", FN_MUL: "mul"}
+             TC_OPEN: "<tool_call>", TC_CLOSE: "</tool_call>", FN_ADD: "add", FN_MUL: "mul",
+             FN_SUB: "sub"}
 # other single tokens Qwen generates for the same thing: it writes <function=add> as "=add" and
 # <function=mul> as "=m" "ul", not the way its tokenizer splits the text
-EXTRA_TEXT = {FN_ADD: ["=add"], FN_MUL: ["ul"]}
+EXTRA_TEXT = {FN_ADD: ["=add"], FN_MUL: ["ul"], FN_SUB: ["=sub", "ub"]}
 
 
 def is_text(t: int) -> bool:

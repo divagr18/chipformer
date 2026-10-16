@@ -24,6 +24,10 @@ idle:   jp idle                 ; PC rests here between calls (not a PRINT)
 add:    badd                    ; macro: R = A + B, v7 = length
         jp print
 
+; ---------------------------------------------------------------- sub: R = A - B (A >= B)
+sub:    bsub                    ; macro: R = A - B, v7 = length
+        jp print
+
 ; ---------------------------------------------------------------- mul: R = A * B
 mul:    bzero                   ; macro: R = 0, v7 = LA + LB
         ld i, {LEN}
@@ -56,7 +60,7 @@ pr_go:  ld i, {R_ADDR}
 """
 
 ROM, LABELS = assemble(SRC)
-OPS = {"add": LABELS["add"], "mul": LABELS["mul"]}
+OPS = {"add": LABELS["add"], "mul": LABELS["mul"], "sub": LABELS["sub"]}
 
 
 def call_writes(op: str, a: str, b: str) -> list[tuple[int, int]]:

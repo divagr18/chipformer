@@ -6,6 +6,7 @@ R_ADDR. Writes go least significant first so a carry flows from one write to the
 
     5XY1  BADD   R[0..n) = A + B, n = max(LA, LB) + 1, then V7 = n
     5XY2  BZERO  R[0..n) = 0, n = LA + LB, then V7 = n
+    5XY4  BSUB   R[0..n) = A - B (for A >= B), n = max(LA, LB) + 1, then V7 = n
     5XY3  BMAC   one schoolbook row with b = B[VX]:
                  for i = LA-1 .. 0:  R[i+VX+1] = (R[i+VX+1] + A[i] * b + carry) mod 10, carry = ..div 10
                  then R[VX] = carry
@@ -17,12 +18,12 @@ multiplication costs about LB records of LA + 2 writes instead of thousands of i
 from chipformer import spec
 from chipformer.q35.lib import bcd
 
-BADD, BZERO, BMAC = 0x1, 0x2, 0x3
+BADD, BZERO, BMAC, BSUB = 0x1, 0x2, 0x3, 0x4
 
 
 def macro_writes(cells: list[int], op: int):
     """The record for opcode ``op`` if it is a macro, else None."""
-    if op >> 12 != 5 or op & 0xF not in (BADD, BZERO, BMAC):
+    if op >> 12 != 5 or op & 0xF not in (BADD, BZERO, BMAC, BSUB):
         return None
     la, lb = cells[bcd.LEN], cells[bcd.LEN + 1]
     A = [cells[bcd.A_ADDR + i] for i in range(la)]
@@ -30,15 +31,20 @@ def macro_writes(cells: list[int], op: int):
     pc = (cells[spec.PC] + 2) & 0xFFF
     kind = op & 0xF
     w = []
-    if kind == BADD:
+    if kind in (BADD, BSUB):
         n = max(la, lb) + 1
         carry = 0
         for k in range(n):  # w-th write is digit k from the right
             a = A[la - 1 - k] if k < la else 0
             b = B[lb - 1 - k] if k < lb else 0
-            s = a + b + carry
-            w.append((bcd.R_ADDR + n - 1 - k, s % 10))
-            carry = s // 10
+            if kind == BADD:
+                s = a + b + carry
+                w.append((bcd.R_ADDR + n - 1 - k, s % 10))
+                carry = s // 10
+            else:  # carry is the borrow
+                s = a - b - carry
+                w.append((bcd.R_ADDR + n - 1 - k, s % 10))
+                carry = int(s < 0)
         w.append((spec.V + 7, n))
     elif kind == BZERO:
         n = la + lb

@@ -257,7 +257,7 @@ def build(target: Target | None = None) -> Chip8Q35:
                          + nib_lits(b2[4:], 0xE), "00EE")
     for h, name in [(5, "5XY0"), (9, "9XY0")]:
         ind[name] = c.and_(nib_lits(hib, h) + nib_lits(nb, 0), name)
-    for m, name in [(1, "BADD"), (2, "BZERO"), (3, "BMAC")]:  # bignum macros (lib/macros.py)
+    for m, name in [(1, "BADD"), (2, "BZERO"), (3, "BMAC"), (4, "BSUB")]:  # lib/macros.py
         ind[name] = c.and_(nib_lits(hib, 5) + nib_lits(nb, m), name)
     for m in [0, 1, 2, 3, 4, 5, 6, 7, 0xE]:
         ind[f"8XY{m:X}"] = c.and_(nib_lits(hib, 8) + nib_lits(nb, m), f"8XY{m:X}")
@@ -451,7 +451,7 @@ def build(target: Target | None = None) -> Chip8Q35:
                 terms += c.t_and([ind[op], one - q["loadstore"], *nib_lits(xb, v - 2)])
         if v % 2 == 1 and (v - 1) // 2 < 16:
             terms += c.t_and([ind["DXYN"], *nib_lits(nb, (v - 1) // 2)])
-        terms += c.t_eq(mx, v - 2, 0, 31, lits=[ind["BADD"]])  # n = max + 1 digits, then V7
+        terms += c.t_eq(mx, v - 2, 0, 31, lits=[ind["BADD"] + ind["BSUB"]])  # n = max + 1
         terms += c.t_eq(la_i + lb_i, v - 1, 0, 62, lits=[ind["BZERO"]])
         terms += c.t_eq(la_i, v - 1, 0, 31, lits=[ind["BMAC"]])  # LA digits, then the carry
         nw_oh.append(c.node(terms, f"nw=={v}"))
@@ -477,6 +477,7 @@ def build(target: Target | None = None) -> Chip8Q35:
         "dt_dec": dt_dec, "st_dec": st_dec, "ls_extra": [ls_extra], "i_next": i_next,
         "clip": [q["clip"]], "fd": [ind["00FD"]], "v0": v0b,
         "badd": [ind["BADD"]], "bzero": [ind["BZERO"]], "bmac": [ind["BMAC"]],
+        "bsub": [ind["BSUB"]],
         "la": lab, "lb": lbb, "row": vxb[:5],
     }
     flat = [(name, i, e) for name, vals in ctx_vals.items() for i, e in enumerate(vals)]
@@ -603,7 +604,8 @@ def build(target: Target | None = None) -> Chip8Q35:
 
     # ---------------------------------------------------------------- bignum macros
     MD = bios.MAX_DIGITS
-    kb_add, kb_zero, kb_mac = k["badd"][0], k["bzero"][0], k["bmac"][0]
+    kb_add, kb_zero, kb_mac, kb_sub = k["badd"][0], k["bzero"][0], k["bmac"][0], k["bsub"][0]
+    kb_as = kb_add + kb_sub  # BADD and BSUB share their layout
     kla, klb = from_bits(k["la"]), from_bits(k["lb"])
     krow = from_bits(k["row"])
     wi = j - c.is_val  # index of the write this token belongs to
@@ -614,8 +616,8 @@ def build(target: Target | None = None) -> Chip8Q35:
         return [c.node(c.t_eq(z, v, lo, hi, lits=list(lits)), f"{name}=={v}") for v in range(n)]
 
     lo_, hi_ = -72, 72  # bounds of index arithmetic, garbage states included (5-bit fields)
-    qa = eqs(ia, lo_, hi_, MD, "mac.ia", [kb_add + kb_mac])
-    qb = [c.node(c.t_eq(ib, v, lo_, hi_, lits=[kb_add]) + c.t_eq(krow, v, 0, 31, lits=[kb_mac]),
+    qa = eqs(ia, lo_, hi_, MD, "mac.ia", [kb_as + kb_mac])
+    qb = [c.node(c.t_eq(ib, v, lo_, hi_, lits=[kb_as]) + c.t_eq(krow, v, 0, 31, lits=[kb_mac]),
                  f"mac.ib=={v}") for v in range(MD)]
     kk2 = kla + krow - wi  # BMAC target digit i + row + 1
     qr = eqs(kk2, lo_, hi_, 2 * MD, "mac.k", [kb_mac])
@@ -649,11 +651,13 @@ def build(target: Target | None = None) -> Chip8Q35:
     wrapped = c.node(cat(c.t_and([sm_r[v], d_lt[v]]) for v in range(1, 10)), "mac.wrap")
     cout_mac = sum((v * fl_r[v] for v in range(10)), Expr()) + wrapped  # <= 9
     cout_add = c.node(c.t_ge(a_i + b_i - tok_d, 9, -15, 30), "add.cout")
+    cout_sub = c.node(c.t_ge(tok_d - a_i + b_i, 1, -15, 30), "sub.borrow")  # [d > a - b]
     cm_oh = eqs(cout_mac, 0, 10, 10, "mac.cout")
     cout_bits = [c.node(c.t_and([c.is_val, kb_mac, b_]) + c.t_and([c.is_val, kb_add, cout_add])
+                        + c.t_and([c.is_val, kb_sub, cout_sub])
                         if i == 0 else c.t_and([c.is_val, kb_mac, b_]), f"cout.b{i}")
                  for i, b_ in enumerate(onehot_bits(cm_oh, 4))]
-    macro = kb_add + kb_mac
+    macro = kb_add + kb_mac + kb_sub
     carry = c.slot_head("carry", {0: rs + c.is_val + macro - 1}, {0: one},
                         {2 + i: cout_bits[i] for i in range(4)}, rs + c.is_val + macro - 1)
     c_in = from_bits(carry)
@@ -661,9 +665,12 @@ def build(target: Target | None = None) -> Chip8Q35:
     # BADD digit: (a + b + carry) mod 10; BMAC digit: (R + a*b + carry) mod 10
     t_add = a_i + b_i + c_in  # <= 19 (<= 45)
     t_mac = s_mac + c_in  # <= 99 (<= 255)
+    t_sub = a_i - b_i - c_in  # -10 .. 9 (-30 .. 15)
     dsum = [c.node(c.t_eq(t_add, v, 0, 45, lits=[kb_add]) + c.t_eq(t_add, v + 10, 0, 45,
                                                                    lits=[kb_add])
-                   + cat(c.t_eq(t_mac, v + 10 * q_, 0, 255, lits=[kb_mac]) for q_ in range(10)),
+                   + cat(c.t_eq(t_mac, v + 10 * q_, 0, 255, lits=[kb_mac]) for q_ in range(10))
+                   + c.t_eq(t_sub, v, -30, 15, lits=[kb_sub])
+                   + c.t_eq(t_sub, v - 10, -30, 15, lits=[kb_sub]),
                    f"mac.d=={v}") for v in range(10)]
     digit_val = onehot_bits(dsum, 4)
 
@@ -672,14 +679,14 @@ def build(target: Target | None = None) -> Chip8Q35:
                 for b_ in range(13)]
 
     # what a token predicts is about the next write, index j (reads above use wi)
-    kk_add = eqs(kmx - j, lo_, hi_, MD + 1, "add.k", [kb_add])  # n - 1 - w
+    kk_add = eqs(kmx - j, lo_, hi_, MD + 1, "add.k", [kb_as])  # n - 1 - w
     kk_mac = eqs(kla + krow - j, lo_, hi_, 2 * MD, "mac.kw", [kb_mac])
     zero_k = eqs(j, 0, JMAX + 1, 2 * MD, "zero.k", [kb_zero])
     row_oh = eqs(krow, 0, 31, MD, "mac.row", [kb_mac])
-    n_add = eqs(kmx + 1, 0, 32, MD + 2, "add.n", [kb_add])
+    n_add = eqs(kmx + 1, 0, 32, MD + 2, "add.n", [kb_as])
     n_zero = eqs(kla + klb, 0, 62, 2 * MD + 1, "zero.n", [kb_zero])
-    in_add = c.node(c.t_lt(j - kmx, 1, lo_, hi_, lits=[kb_add]), "add.digit")
-    end_add = c.node(c.t_eq(j - kmx, 1, lo_, hi_, lits=[kb_add]), "add.end")
+    in_add = c.node(c.t_lt(j - kmx, 1, lo_, hi_, lits=[kb_as]), "add.digit")
+    end_add = c.node(c.t_eq(j - kmx, 1, lo_, hi_, lits=[kb_as]), "add.end")
     in_zero = c.node(c.t_lt(j - kla - klb, 0, lo_, hi_, lits=[kb_zero]), "zero.digit")
     end_zero = c.node(c.t_eq(j - kla - klb, 0, lo_, hi_, lits=[kb_zero]), "zero.end")
     in_mac = c.node(c.t_lt(j - kla, 0, lo_, hi_, lits=[kb_mac]), "mac.digit")
