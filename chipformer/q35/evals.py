@@ -53,7 +53,10 @@ KINDS = ("base", "merged", "merged_inline", "merged_plain", "pytool_inline", "py
 # (bridge.InlineScan) at "=", the exact result is injected as text " R " (oraclec: " R,RRR ")
 BIOS_KINDS = ("merged", "merged_inline")  # the prompt starts with the BIOS boot record
 TOOL_KINDS = ("merged", "pytool_inline", "pytool")
-FLAGS = ("think", "nb", "nudge", "nudge2", "fp", "tc", "mix")  # suffixes: thinking mode, <|im_start|> banned, nudge,
+FLAGS = ("think", "nb", "ne", "nudge", "nudge2", "nudge3", "fp", "tc", "mix")  # suffixes: thinking mode, <|im_start|> banned, nudge,
+# ne = <|endoftext|> banned too (Qwen ends its turn with <|im_end|>; after a printed
+# </tool_response> it sometimes writes <|endoftext|> instead of the answer)
+# nudge3 = the inline nudge with division (or, with mix, products and quotients inline)
 # fp = RoPE positions frozen on chip tokens (BatchDecoder freeze_chip_positions)
 # tc = chip tokens invisible to Qwen's layers (BatchDecoder transparent_chip)
 CONDS = ("base", "base_think", "merged", "merged_nb", "merged_nudge", "merged_nb_nudge",
@@ -61,6 +64,7 @@ CONDS = ("base", "base_think", "merged", "merged_nb", "merged_nudge", "merged_nb
          "base_nudge", "oracle_nudge", "oraclec_nudge", "oracle_nudge-close", "oracle_nudge2",
          "oracle_nudge2-close", "merged_plain", "pytool_inline", "pytool_inline_nudge", "pytool", "pytool_nudge")
 IM_START = 248045
+ENDOFTEXT = 248044
 NUDGE2 = ("Exact arithmetic: whenever you write a calculation like `a \\times b =`, `a + b =` or "
           "`a - b =` with whole numbers, its exact result is filled in right after the `=`. That "
           "number is final and correct: never write another number after it or recompute it; just "
@@ -68,11 +72,21 @@ NUDGE2 = ("Exact arithmetic: whenever you write a calculation like `a \\times b 
           "write the whole calculation and let the result appear.")
 NUDGE = ("You have tools for exact arithmetic ({names}). Use them for every arithmetic step "
          "they cover instead of calculating by hand.")
+NUDGE3 = ("Exact arithmetic: whenever you write a calculation like `a \\times b =`, `a / b =`, "
+          "`a + b =` or `a - b =` with whole numbers, its exact result is filled in right after the "
+          "`=` (a quotient that does not end shows 10 decimals, then `...`). So never do long "
+          "multiplication or long division by hand: write the whole calculation, e.g. "
+          "`918274 / 37 =`, and let the result appear.")
 # mix (a tool kind): products inline, sums and differences of big numbers through the tools
 NUDGE_MIX = ("Exact arithmetic: whenever you write a multiplication of whole numbers like "
              "`a \\times b =`, its exact result is filled in right after the `=`, so never "
              "multiply long numbers by hand: write the whole product and let the result appear. "
              "For additions and subtractions of large numbers, call the add and sub tools.")
+NUDGE_MIX3 = ("Exact arithmetic: whenever you write a multiplication or division of whole numbers "
+              "like `a \\times b =` or `a / b =`, its exact result is filled in right after the "
+              "`=` (a quotient that does not end shows 10 decimals, then `...`), so never multiply "
+              "or divide long numbers by hand: write the whole calculation and let the result "
+              "appear. For additions and subtractions of large numbers, call the add and sub tools.")
 
 
 def parse_cond(cond: str) -> tuple[str, set]:
@@ -741,8 +755,10 @@ def default_model(cond: str) -> str:
 def build_prompt(tok, question: str, cond: str, bios: list[int]) -> list[int]:
     kind, flags = parse_cond(cond)
     msgs = [{"role": "user", "content": question + SUFFIX}]
-    if "nudge" in flags or "nudge2" in flags or "mix" in flags:  # tools: use them; others: inline
-        if "mix" in flags:
+    if flags & {"nudge", "nudge2", "nudge3", "mix"}:  # tools: use them; others: inline
+        if "nudge3" in flags:  # with division
+            nudge = NUDGE_MIX3 if "mix" in flags else NUDGE3
+        elif "mix" in flags:
             nudge = NUDGE_MIX
         elif "nudge2" in flags:  # the inline nudge, plus: the filled-in number is final
             nudge = NUDGE2
@@ -862,7 +878,8 @@ def run(args) -> None:
     if "nb" in flags or kind == "merged_inline":
         gc = Path(mpath) / "generation_config.json"
         bad = json.loads(gc.read_text()).get("bad_words_ids", []) if gc.exists() else []
-        banned = sorted({w[0] for w in bad if len(w) == 1} | {IM_START})
+        banned = sorted({w[0] for w in bad if len(w) == 1} | {IM_START}
+                        | ({ENDOFTEXT} if "ne" in flags else set()))
         model.lm_head = BannedHead(model.lm_head, banned, model.lm_head.weight.shape[0])
         print(f"banned token ids {banned}", flush=True)
 
