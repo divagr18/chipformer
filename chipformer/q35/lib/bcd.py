@@ -55,7 +55,7 @@ trim:   btrim                   ; macro: drop a leading 0 (keeping one digit); r
 sub_neg: brsub trim
 
 ; ---------------------------------------------------------------- div: A / B
-; digits of an exact quotient, else DEC decimals and "..."; nothing if B starts with 0
+; digits of an exact quotient, else DEC decimals and "..."; "..." if B starts with 0
 div:    bzero                   ; P[0 .. LA+LB) = 0
         ld i, {LEN}
         ld v1, [i]              ; v0 = LA, v1 = LB
@@ -127,7 +127,10 @@ dp_go:  ld i, {R_ADDR}
         sub v0, v6
         add v0, 1
         print
-div_z:  ld v0, 0
+div_z:  ld i, {R_ADDR}            ; B starts with 0: "..." (every result prints something)
+        ld v0, 11
+        ld [i], v0
+        ld v0, 1
         print
 zeros:  db 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
 
@@ -140,7 +143,7 @@ zeros:  db 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
 GAP_LEN, GAP_R = LEN + 4, R_ADDR + 48  # data-page holes: up to R_ADDR, up to W_ADDR
 MODGCD1 = f"""
 ; ---------------------------------------------------------------- mod: A mod B
-; (A at W + 1, as for div); nothing if B starts with 0
+; (A at W + 1, as for div); "..." if B starts with 0
 mod:    call args
         sne v0, 0
         jp div_z
@@ -307,7 +310,7 @@ W_OPS = ("div", "mod", "gcd")  # A goes to W + 1: they work on it in place
 assert LABELS["sm_t"] < 0x400 and LABELS["am_t"] < 0x400, "macro targets must sit below 0x400"
 # compiled into the weights (the expression CALL record): eval's entry, the tape and its length
 # (q35-int: div, mod and gcd come first, so eval sits later than v18's 0x2CA)
-EVAL_ENTRY = 0x2CE
+EVAL_ENTRY = 0x2D4
 assert (OPS["eval"], TAPE, TLEN) == (EVAL_ENTRY, 0xC00, 0xC30), (hex(OPS["eval"]), TAPE, TLEN)
 assert W_ADDR + 1 + MAX_DIGITS + DEC <= TMP and TMP + MAX_DIGITS <= CODE2, "gcd's TMP"
 assert LABELS["code1_end"] <= A_ADDR and LABELS["eval_end"] <= TAPE, "eval's code overflows"

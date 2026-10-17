@@ -167,11 +167,11 @@ SIGNED = ("mul", "div", "gcd")  # the computer takes signed a, b for these (brid
 
 def computer_text(op: str, a: int, b: int) -> str | None:
     """Exactly what the computer prints for op(a, b) (inline or as a tool response), or None
-    if it does not answer it (signed a or b for add / sub / mod, division by 0)."""
+    if it does not answer it (signed a or b for add / sub / mod); by 0 it prints "..."."""
     if op not in SIGNED and (a < 0 or b < 0):
         return None
-    if op in ("div", "mod") and b == 0:
-        return None
+    if op in ("div", "mod") and b == 0:  # "..." (div's sign still prints)
+        return ("-" if op == "div" and (a < 0) != (b < 0) else "") + "..."
     if op == "div":
         return div_text(a, b)
     if op == "mul":  # sign and magnitude: -0 stays "-0"
@@ -743,9 +743,7 @@ def inline_fires(text: str, pred) -> list[dict]:
         machine = shown
         f = {"expr": x[0][0].strip() if x else before[-40:], "printed": shown[:60]}
         t = computer_text(*x[1:]) if x else None
-        if x and t is None and x[1] in ("div", "mod") and not x[3]:
-            continue  # by 0: prints nothing
-        ex = EXPR_RE.search(before[-300:])  # v18: a whole expression (more than one operator)
+        ex =EXPR_RE.search(before[-300:])  # v18: a whole expression (more than one operator)
         # (the single-op path wins when its "A op B =" is the whole window, signs included)
         if ex and (not x or len(x[0][0].strip()) + 2 < len(ex[0].strip())) and (
                 re.search(r"[()^{}]|\d\.\d", ex[1]) or len(re.findall(
@@ -768,7 +766,7 @@ def inline_fires(text: str, pred) -> list[dict]:
         f["echo"] = (None if not ech or not machine or f.get("appended") else
                      "same" if ech[1] == machine else "diff")
         f["reused"] = bool(machine) and machine in later
-        f["is_answer"] = (bool(machine) and machine != "..." and len(machine) < 60
+        f["is_answer"] = (bool(machine) and machine.lstrip("-") != "..." and len(machine) < 60
                           and pred is not None
                           and Fraction(Decimal(machine.removesuffix("..."))) == pred)
         out.append(f)
@@ -920,7 +918,8 @@ SELFTEST = [("mul", 4, 4), ("mul", 12345, 678), ("add", 987654321, 123456789),
             ("div", -1418261, -408), ("mul", -63075, 8808), ("sub", 5, 675),
             ("mod", 13201915, 1785), ("gcd", 1785, 13201915),
             ("calc", "4^3 - (12 + 7) * 3", None), ("calc", "20 * (-8) / (-60) * 329", None),
-            ("calc", "1.25 / (3 - 0.5)", None), ("calc", "17 - 4 * (3 + 2.5)", None)]
+            ("calc", "1.25 / (3 - 0.5)", None),
+            ("calc", "25 - 130 - 7", None)]  # negative, a chain: short (general ones run ~6k)
 
 
 def selftest(bd, ctx, tok, bios) -> None:
