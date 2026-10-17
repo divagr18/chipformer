@@ -87,9 +87,10 @@ def run_executor(c, toks, steps, tpi, dev):
 
     n = fastexec.check(c, toks[:300], dev)
     print(f"executor == IR on {n} positions ({dev})", flush=True)
-    for graph in (False, True):
-        s = fastexec.timed(c, toks, steps, graph=graph)
-        print(f"executor{' (CUDA graph)' if graph else ' (eager)':15s} {1e3 * s:7.3f} ms/token  "
+    for graph, comp in ((False, False), (True, False), (True, True)):
+        s = fastexec.timed(c, toks, steps, graph=graph, compile_=comp)
+        name = "compiled + CUDA graph" if comp else "CUDA graph" if graph else "eager"
+        print(f"executor ({name}){'':{22 - len(name)}s} {1e3 * s:7.3f} ms/token  "
               f"{1 / s:8.0f} tok/s  {1 / s / tpi:8.0f} instr/s", flush=True)
 
 

@@ -205,10 +205,13 @@ def check(c, toks, device="cpu") -> int:
     return len(toks)
 
 
-def timed(c, toks, steps=500, graph=True) -> float:
-    """Seconds per token (a CUDA graph of one step; its replays are checked against the IR)."""
+def timed(c, toks, steps=500, graph=True, compile_=False) -> float:
+    """Seconds per token (a CUDA graph of one step; its replays are checked against the IR).
+    ``compile_``: torch.compile the step first (Inductor fuses its pointwise ops)."""
     ex = Executor(c, "cuda")
     ex.reset()
+    if compile_:
+        ex.step = torch.compile(ex.step, mode="max-autotune-no-cudagraphs", dynamic=False)
     emb = ex.embed(toks[:steps + 20])
     xin = torch.zeros(ex.D, device="cuda")
     if graph:
