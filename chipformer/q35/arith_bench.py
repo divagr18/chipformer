@@ -387,6 +387,151 @@ def setup(cond: str, mpath: str, batch: int, max_len: int, fast: bool, compile_:
     return tok, model, ctx, hook, bios, bios_id, banned, bd
 
 
+def decode_rows(bd, ctx, prompts: list[list[int]], budget: int, hook, on_done,
+                chip_per_full: int = 64, chip_min: int = 2, prefetch: int = 2,
+                views_by_text: bool = False) -> None:
+    """decode_views (same rows, stop rules, forcing, KV views), scheduled for throughput:
+
+    - **Chip steps for some rows.** With skip_qwen, rows whose input is a chip token take the
+      cheap chip step (the chip layers only) while the rows on text wait, whenever at least
+      ``chip_min`` rows are on chip tokens (a chip token then costs a fraction of its slot in a
+      full step), for up to ``chip_per_full`` chip steps in a row. In the tail (no prompt
+      queued) that only delays the last rows, unless the full step reads KV views: then rows
+      that finish their traces sooner shrink the view (on v15, batch 16: 298 s with chip steps
+      in the tail vs 366 s without; with one view, 245 s without vs 335 s with). A waiting
+      row's state is untouched (the chip step restores its chip-layer states and writes no
+      Qwen KV for it), so every row sees the same token sequence as with full steps only: only
+      the interleaving across rows changes, and rows are independent (the batch size, hence
+      every GEMM kernel, stays the same). On v15, 40 of 40 problems came out token-identical
+      to decode_views, and 20 of 20 to evals.decode_all.
+    - **Prefill ahead.** Prompts are prefilled on a second CUDA stream (batch.BatchDecoder's
+      prefetcher: same modules and kernels as ``bd.prefill``, so the same bits) while the batch
+      decodes, instead of stalling every row at each refill.
+    - **Views by text length** (``views_by_text``). With transparent_chip a row's KV holds only
+      its text tokens, so the attention view can cover just those, however long the trace. Not
+      bit-identical: the attention kernel's rounding depends on the view, so Qwen's logits move
+      by up to a bf16 ulp and exact or 1-ulp ties can flip (dist/spikes/s5_tf.py: 2 of 40 v15
+      problems changed, each at a top-2 gap of 0 or 0.125). Without it the views are sized as
+      decode_views sizes them (by every token).
+    """
+    from collections import deque
+
+    import torch
+
+    from chipformer.q35.batch import _Prefetcher
+
+    queue = deque(range(len(prompts)))
+    n = bd.batch
+    bd.prefill(prompts[0])  # the batched cache copies a prefilled cache's shapes
+    level = bd._prepare(n)
+    rows, tok, pos = level[:3]
+    act = level[6]
+    graphs = bd.view_graphs.get(n)
+    views = graphs is not None and len(bd.views) > 1
+    has_chip = level[4] is not None
+    rpos = bd.rpos[n] if getattr(bd, "freeze", False) else None
+    pre = _Prefetcher(bd, prompts, range(len(prompts)), max(1, prefetch))
+    live: list = [None] * n
+    last = [0] * n
+    # KV slots each row's attention must read at its next step: its tokens so far, or with
+    # transparent_chip only its text tokens (chip tokens write the next text token's slot)
+    length = [0] * n
+    tc = getattr(bd, "transparent", False) and views_by_text
+    stats = bd.stats
+    stats.setdefault("partial_chip_steps", 0)
+
+    def admit(b):
+        while queue:
+            i = queue.popleft()
+            cache, t = pre.get(i)
+            r = E._Row(i, len(prompts[i]))
+            if r.push(t, False, ctx, budget, bd.max_len, hook):
+                pre.release(cache)
+                on_done(i, r.result())
+                continue
+            rows.load_row(b, cache, len(prompts[i]))
+            pre.release(cache)
+            bd.mark_prompt(n, b, prompts[i])  # _tc: its chip slots
+            tok[b, 0] = t
+            pos[b] = len(prompts[i])
+            if rpos is not None:
+                rpos[b] = sum(not ctx.is_chip(x) for x in prompts[i])
+            n_kv = sum(not ctx.is_chip(x) for x in prompts[i]) if tc else len(prompts[i])
+            live[b], last[b], length[b] = r, t, n_kv + 1
+            return
+        live[b] = None
+        tok[b, 0] = 0
+        pos[b] = 0
+        length[b] = 0
+
+    credit = 0  # chip steps left before the rows on text get a full step
+    try:
+        for b in range(n):
+            admit(b)
+        with torch.no_grad():
+            while any(r is not None for r in live):
+                busy = [b for b in range(n) if live[b] is not None]
+                on = [live[b] is not None and ctx.is_chip(last[b]) for b in range(n)]
+                partial = False
+                if has_chip and all(on[b] for b in busy):
+                    use_chip = True
+                elif has_chip and (queue or views) and sum(on) >= chip_min and credit > 0:
+                    use_chip = partial = True
+                    credit -= 1
+                else:
+                    use_chip = False
+                    credit = chip_per_full
+                if graphs is not None:
+                    need = max(length[b] for b in busy)
+                    v = next(x for x in bd.views if x >= need)
+                    step_fn, chip_fn = graphs[v]
+                    stats["view_sum"] += v
+                else:
+                    step_fn, chip_fn = level[3], level[4]
+                if use_chip:
+                    act.copy_(torch.tensor(on, device=act.device))
+                    pred = chip_fn(tok, pos)
+                    pos.add_(act)
+                    stats["chip_steps"] += 1
+                    stats["partial_chip_steps"] += partial
+                    step_rows = [b for b in busy if on[b]]
+                else:
+                    pred = step_fn(tok, pos)
+                    pos.add_(1)
+                    if rpos is not None:  # the input was text: the next RoPE position moves on
+                        rpos.add_(bd._is_text(tok[:, 0]))
+                    step_rows = busy
+                stats["steps"] += 1
+                pred = pred.tolist()
+                nt = list(last) if use_chip else [0] * n
+                done = []
+                for b in step_rows:
+                    r = live[b]
+                    forced = bool(r.forced)
+                    t = r.forced.popleft() if forced else pred[b]
+                    nt[b] = t
+                    length[b] += not (tc and ctx.is_chip(last[b]))
+                    stats["tokens"] += 1
+                    if r.push(t, forced, ctx, budget, bd.max_len, hook):
+                        done.append(b)
+                if use_chip:  # waiting rows keep their input token
+                    for b in range(n):
+                        if live[b] is None:
+                            nt[b] = 0
+                tok.copy_(torch.tensor(nt, device=tok.device)[:, None])
+                last = nt
+                idle = [b for b in range(n) if live[b] is None]
+                if idle:
+                    pos[idle] = 0
+                    if rpos is not None:
+                        rpos[idle] = 0
+                for b in done:
+                    on_done(live[b].i, live[b].result())
+                    admit(b)
+    finally:
+        pre.close()
+
+
 def decode_views(bd, ctx, prompts: list[list[int]], budget: int, hook, on_done) -> None:
     """evals.decode_all (same rows, stop rules, forcing, chip steps), except that each step's
     attention reads only the smallest captured KV view covering every live row (BatchDecoder
@@ -549,12 +694,18 @@ def run(args) -> None:
                                                "n_qwen", "n_chip", "seconds")}
                          | {"calls": len(rec["calls"]), "fires": len(rec["inline"])}), flush=True)
 
-    decode_views(bd, ctx, prompts, budget, hook, done)
+    if args.chip_per_full and bd.skip_qwen:
+        decode_rows(bd, ctx, prompts, budget, hook, done, chip_per_full=args.chip_per_full,
+                    chip_min=args.chip_min, views_by_text=args.views_by_text)
+    else:
+        decode_views(bd, ctx, prompts, budget, hook, done)
     wall = time.time() - t0
     with (out / "runs.log").open("a", encoding="utf-8") as f:
         f.write(json.dumps({"cond": cond, "data": counts, "n": len(todo), "batch": bd.batch,
                             "wall_s": round(wall, 1), "s_per_problem": round(wall / len(todo), 2),
-                            "view": args.view, "stats": bd.stats, "model": mpath, "bios": bios_id, "budget": budget,
+                            "view": args.view, "chip_per_full": args.chip_per_full,
+                            "views_by_text": args.views_by_text, "stats": bd.stats,
+                            "model": mpath, "bios": bios_id, "budget": budget,
                             "gpu": torch.cuda.get_device_name()}) + "\n")
     print(f"done {len(todo)} in {wall:.0f}s ({wall / len(todo):.1f} s/problem)", flush=True)
 
@@ -1017,7 +1168,16 @@ def main() -> None:
     r.add_argument("--fast", action="store_true", default=True)
     r.add_argument("--tag")
     r.add_argument("--view", type=int, default=1024,
-                   help="attention KV view granularity (bit-identical; 0 = whole cache)")
+                   help="attention KV view granularity (0 = whole cache; the view can move "
+                   "Qwen's attention rounding by a bf16 ulp, dist/spikes/s5_tf.py)")
+    r.add_argument("--chip-per-full", type=int, default=64,
+                   help="decode_rows: chip steps in a row for the rows on chip tokens before a "
+                   "full step (same tokens as decode_views; 0 = decode_views)")
+    r.add_argument("--chip-min", type=int, default=2,
+                   help="decode_rows: rows on chip tokens needed for a chip step")
+    r.add_argument("--views-by-text", action="store_true",
+                   help="decode_rows under tc: size KV views by text tokens only (faster; Qwen's "
+                   "attention rounds differently per view: bf16 logit near-ties can flip)")
     i = sub.add_parser("identity")
     i.add_argument("--cond", default="merged_inline")
     i.add_argument("--model")

@@ -1059,7 +1059,12 @@ def run(args) -> None:
         emit(score(todo[i], cond, ctx, r, r["seconds"], think)
              | {"batch": bd.batch, "model": mpath, "bios": bios_id, "banned": banned})
 
-    decode_all(bd, ctx, prompts, budget, hook, done)
+    if bd.skip_qwen:  # --fast: chip steps for the rows on chip tokens, prefill ahead (same bits)
+        from chipformer.q35.arith_bench import decode_rows
+
+        decode_rows(bd, ctx, prompts, budget, hook, done)
+    else:
+        decode_all(bd, ctx, prompts, budget, hook, done)
     wall = time.time() - t0
     with (out_dir / "runs.log").open("a", encoding="utf-8") as f:
         f.write(json.dumps({"data": args.data, "cond": cond, "n": len(todo), "batch": bd.batch,
