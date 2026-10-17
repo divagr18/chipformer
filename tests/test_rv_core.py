@@ -102,3 +102,18 @@ def test_refresh_after_63(circ):
     src = "_start: " + "\n".join(f"addi a0, a0, {i % 7}" for i in range(70)) + "\necall"
     toks = run_check(circ, assemble(src))
     assert any(S.family(t)[0] == "R" for t in toks)
+
+
+@pytest.mark.parametrize("skip", [5, 40, 133])
+def test_snapshot_mid_run(circ, skip):
+    """A snapshot taken mid-run (n > 0, live registers and RAM) continues exactly."""
+    prog = program("call")
+    m = ref.Machine.from_program(prog)
+    for _ in range(skip):
+        m.record()
+    assert 0 < m.n < S.N_MAX
+    core.snapshot(circ, m)
+    toks = m.run()
+    mat = ir.evaluate(circ, toks, check=True, kernel=True)
+    pred = core.predictions(circ, mat)
+    assert all(pred[i] == toks[i + 1] for i in range(len(toks) - 1))

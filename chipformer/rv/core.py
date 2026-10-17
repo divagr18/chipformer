@@ -114,6 +114,7 @@ def build(target: Target | None = None) -> RvCore:
                      [{"data": {2: isJR}, "ref": one - isJR, "a": 110 * commit + 238 * isJR}],
                      tiny=2.0**-90)
     c.tables["count"] = c.nodes[-1]
+    c.nodes[-1].levels = "decay"  # a snapshot at n > 0 holds 2^-n
     ((pv1, pv2, _pv3),) = thead(c, "prev", {0: one}, {0: one},
                                [{"data": {2: Chan(isV, (0, 1, 0, 0)), 3: Chan(isV, (0, 0, 1, 0)),
                                           4: Chan(isV, (0, 0, 0, 1))}, "ref": one}])

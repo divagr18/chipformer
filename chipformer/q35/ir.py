@@ -97,7 +97,7 @@ class Head:
     vx: list[VHead] = field(default_factory=list)  # further value heads of this key head
     # initial state (a snapshot the host injects): per value head, row -> state row. "bit" rows
     # hold 0 / A_BIT data; "byte" rows (read-only tables) hold integers 0..255 and must be read
-    # with a 2-hot query (see kernel_check)
+    # with a 2-hot query (see kernel_check); "decay" rows hold A_BIT * 2^-n (a halving counter)
     init: list | None = None
     levels: str = "bit"
 
@@ -378,6 +378,8 @@ def eval_ffn(node: FFN, m: np.ndarray, chip: np.ndarray, check: bool) -> None:
             require(is_bf16(ideal), "residual add", ideal)
     m[:, node.out] = ideal
 BYTE_LEVELS = np.arange(256.0)
+# a decay counter's row (2^-n of a set bit after n halvings), as a snapshot taken at n > 0 holds it
+DECAY_LEVELS = np.array([0.0] + [A_BIT * 2.0**-k for k in range(127)])
 RMS_EPS = 1e-6  # Qwen3.5 rms_norm_eps (the gated output norm)
 
 
@@ -458,7 +460,8 @@ def eval_head(node: Head, m: np.ndarray, chip: np.ndarray, check: bool,
             if check and state:
                 rows = np.stack(list(state.values()))
                 data = np.delete(rows, REF_COLS, 1)
-                ok = np.isin(data, BYTE_LEVELS if node.levels == "byte" else [0.0, A_BIT])
+                ok = np.isin(data, BYTE_LEVELS if node.levels == "byte" else
+                             DECAY_LEVELS if node.levels == "decay" else [0.0, A_BIT])
                 require(ok, f"initial state data ({node.levels})", data)
                 ref = rows[:, list(REF_COLS)]
                 require((ref == 0) | (ref == A_REF), "initial state ballast column", ref)
