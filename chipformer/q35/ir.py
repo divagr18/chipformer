@@ -228,6 +228,117 @@ class Graph:
         top = max((n.level for n in self.nodes), default=0)
         return (top + 1) // 2
 
+    def reschedule(self, unit_cap: int | None = None) -> None:
+        """Place every node again by list scheduling: sublayer by sublayer, the ready nodes on
+        the longest remaining path go first (the build-time placement is greedy in build order,
+        so a node off the critical path can take the room a critical one needed). Nodes named
+        ``exit.*`` go to the first MLP sublayer above all others, as at build time.
+
+        A dim several nodes write (``into``) keeps its build-order meaning: a reader sees the
+        writes built before it and none built after, and later writers never go below the
+        dim's first writer. ``unit_cap`` (default: the target's) caps FFN units per sublayer.
+        """
+        cap_units = self.target.intermediate if unit_cap is None else unit_cap
+        nodes = self.nodes
+        n = len(nodes)
+
+        def outs(nd):
+            if isinstance(nd, FFN):
+                return [nd.out]
+            return [d for vh in nd.vheads() for _, d, _ in vh.out]
+
+        def reads_of(nd):
+            if isinstance(nd, FFN):
+                es = [e for _, a, b in nd.terms for e in (a, b)]
+            else:
+                es = [c.expr for ch in (nd.q, nd.k) for c in ch.values()]
+                for vh in nd.vheads():
+                    es += [c.expr for c in vh.v.values()] + [vh.a, *vh.z.values()]
+                    es += [] if vh.beta is None else [vh.beta]
+            return {d for e in es for d in e.terms if d != ONE}
+
+        writes = [outs(nd) for nd in nodes]
+        writers: dict[int, list[int]] = {}
+        for i, ws in enumerate(writes):
+            for d in ws:
+                writers.setdefault(d, []).append(i)
+        strict = [set() for _ in range(n)]  # i -> nodes that must be strictly below i
+        loose = [set() for _ in range(n)]  # i -> nodes that must be at i's level or below
+        for i, nd in enumerate(nodes):
+            for d in reads_of(nd):
+                for w in writers.get(d, []):
+                    if w < i:
+                        strict[i].add(w)
+                    elif w > i:
+                        loose[w].add(i)  # a later writer must not show up in i's input
+            for d in writes[i]:
+                first = writers[d][0]
+                if first != i:
+                    loose[i].add(first)
+        exits = {i for i, nd in enumerate(nodes) if nd.name.startswith("exit.")}
+        # longest remaining path in sublayers: a successor of the other kind can sit one
+        # sublayer up, one of the same kind two (a loose one: in the same sublayer)
+        is_head = [isinstance(nd, Head) for nd in nodes]
+        succ = [[] for _ in range(n)]
+        for i in range(n):
+            for p in strict[i]:
+                succ[p].append((i, 1 if is_head[i] != is_head[p] else 2))
+            for p in loose[i] - strict[i]:
+                succ[p].append((i, 1 if is_head[i] != is_head[p] else 0))
+        tail = [0] * n
+        for i in reversed(range(n)):  # build order is topological for these edges
+            tail[i] = max((g + tail[s] for s, g in succ[i]), default=0)
+        level = [None] * n
+        units: dict[int, int] = {}
+        heads: dict[int, int] = {}
+        todo = set(range(n)) - exits
+        sub = 1
+        while todo:
+            assert sub <= 4 * n + 4, "reschedule: a node never fits"
+            odd = sub % 2 == 1
+            placed = True
+            while placed:  # a node placed here can make a later writer of its dim ready here
+                placed = False
+                cand = {i for i in todo if is_head[i] == odd
+                        and all(level[p] is not None and level[p] < sub for p in strict[i])}
+                ready = set()
+                grew = True
+                while grew:  # loose predecessors: placed already, or ready here too
+                    grew = False
+                    for i in cand - ready:
+                        if all((level[p] is not None and level[p] <= sub) or p in ready
+                               for p in loose[i]):
+                            ready.add(i)
+                            grew = True
+                for i in sorted(ready, key=lambda i: (-tail[i], i)):
+                    if not all(level[p] is not None and level[p] <= sub for p in loose[i]):
+                        continue  # its loose predecessor did not fit here
+                    if odd:
+                        if heads.get(sub, 0) + 1 > self.target.key_heads:
+                            continue
+                        heads[sub] = heads.get(sub, 0) + 1
+                    else:
+                        need = len(nodes[i].terms)
+                        if units.get(sub, 0) + need > cap_units:
+                            continue
+                        units[sub] = units.get(sub, 0) + need
+                    level[i] = sub
+                    todo.discard(i)
+                    placed = True
+            sub += 1
+        top = max((lv for lv in level if lv is not None), default=0)
+        for i in sorted(exits):
+            lo = max([top] + [level[p] for p in strict[i]]) + 1
+            lo += lo % 2  # an MLP sublayer
+            level[i] = lo
+            units[lo] = units.get(lo, 0) + len(nodes[i].terms)
+        assert len({level[i] for i in exits}) <= 1, "exit nodes in different sublayers"
+        for i, nd in enumerate(nodes):
+            nd.level = level[i]
+        for d, ws in writers.items():
+            self.dims[d].level = max(level[w] for w in ws)
+        self.units, self.heads = units, heads
+
     def stats(self) -> dict[str, int]:
         return {
             "layers": self.n_layers(),

@@ -165,6 +165,32 @@ class Circ(Graph):
             n2.append(self.node(terms, f"{name}.n2[{x}]"))
         return n0, n1, n2
 
+    def add12_bits(self, a_lo, a_hi_oh: list, d, d_max: int, name: str,
+                   a_lo_max: int = 255) -> list:
+        """The 12 bits of (A + d) mod 4096 (as add12, but each bit is one dim: a bit's node
+        sums the units of the nibble values that have it, so 12 dims instead of 48)."""
+        lo_hi = a_lo_max + d_max
+        L = a_lo + d
+
+        def nib_terms(x, div):
+            terms = []
+            for k in range(0, lo_hi // (16 * div) + 1):
+                a = div * (16 * k + x)
+                terms += self.t_in(L, a, a + div, 0, lo_hi)
+            return terms
+
+        def n2_terms(x):
+            return (self.t_lt(L, 256, 0, lo_hi, lits=[a_hi_oh[x]])
+                    + self.t_ge(L, 256, 0, lo_hi, lits=[a_hi_oh[(x - 1) % 16]]))
+
+        out = []
+        for nib, terms_of in enumerate([lambda x: nib_terms(x, 1), lambda x: nib_terms(x, 16),
+                                        n2_terms]):
+            for j in range(4):
+                terms = [t for x in range(16) if x >> j & 1 for t in terms_of(x)]
+                out.append(self.node(terms, f"{name}.b{4 * nib + j}"))
+        return out
+
     # --- heads ----------------------------------------------------------------
 
     def slot_head(self, name, keys: dict, queries: dict, data: dict, ref, a=0,
