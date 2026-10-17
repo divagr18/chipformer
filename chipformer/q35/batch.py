@@ -19,10 +19,23 @@ How it stays equal to ``model.generate(do_sample=False)`` on one prompt:
 
 What can still differ from batch 1 is floating-point rounding in Qwen's own text arithmetic
 (GEMM kernels for M = 1 and M = B accumulate in different orders); the circuit's arithmetic is
-exact either way. ``dist/spikes/b1_batch.py`` checks the outputs against ``generate``.
+exact either way (``torch.backends.cuda.matmul.allow_bf16_reduced_precision_reduction`` must be
+False, see ``fast.exact_matmuls``).
 
-The decode step (embedding, all layers, the full-vocabulary head and the argmax) is one
-``torch.compile`` graph with CUDA graphs, per batch size.
+Decoding modes (each step is a CUDA graph per batch size, captured once):
+
+- ``compile=True`` (default): Inductor kernels. Fastest; at batch 1 it matches
+  ``generate(cache_implementation="static")`` (which also compiles) only while the graph is the
+  same as HF's (no compaction), since any change shifts Inductor's fusion and Qwen's rounding.
+- ``compile=False, kv_len="generate"``: eager kernels, attending over exactly generate's static
+  cache length (``len(prompt) + max_new``; the attention result depends on it). At batch 1 this
+  is bit-identical to ``generate(cache_implementation="static", disable_compile=True)``, also
+  with ``fast.compact`` and ``skip_qwen`` (dist/spikes/b22_eager.py).
+
+Options: ``skip_qwen`` (chip-token inputs run only the chip layers; Qwen's layers are exact
+no-ops there), ``freeze_chip_positions`` (RoPE counts only non-chip tokens), ``run(hook=...)``
+(token forcing / custom stops), generation_config ``bad_words_ids`` are honored. Prompts are
+prefilled ahead on a second stream (``prefetch``) while the batch decodes.
 """
 
 import time
@@ -469,6 +482,17 @@ class BatchDecoder:
         self.ready.add(n)
         return level
 
+    def _view_graph(self, n: int, v: int):
+        """[text step, chip step] graphs of batch size ``n`` whose attention reads ``v`` slots."""
+        graphs = self.view_graphs[n]
+        if v not in graphs:
+            rows, tok, pos = self.levels[n][:3]
+            rows.view = v
+            g = self._capture(self.raw[n][0], tok, pos, warm=False)
+            rows.view = self.max_len
+            graphs[v] = [g, graphs[self.max_len][1]]
+        return graphs[v]
+
     def _capture(self, fn, tok, pos, warm: bool = True):
         """``fn(tok, pos)`` as a CUDA graph over the level's static buffers; the returned
         callable takes the same (ignored: always those buffers) arguments. ``warm=False``
@@ -521,6 +545,12 @@ class BatchDecoder:
             self.prefill(prompts[0])  # the batched cache copies a prefilled cache's shapes
         self._prepare(self.batch)
         lens = [len(p) + max_new for p in prompts] if self.kv_exact else None
+        # record every graph now (all batch sizes, and generate-length views): capturing
+        # mid-run would race the prefetch thread's allocations
+        for m in self.sizes:
+            self._prepare(m)
+            for v in sorted(set(lens or [])) if m in self.view_graphs else []:
+                self._view_graph(m, min(v, self.max_len))
         pre = _Prefetcher(self, prompts, range(len(prompts)), max(1, self.prefetch), lens)
         try:
             return self._run(prompts, max_new, on_done, pre, hook)
@@ -596,13 +626,7 @@ class BatchDecoder:
             step_fn, chip_fn = step, chip
             if n in self.view_graphs and self.kv_exact:  # generate's cache length
                 v = max((plen[b] + max_new for b in range(n) if live[b] is not None), default=0)
-                v = min(max(v, 1), self.max_len)
-                if v not in self.view_graphs[n]:
-                    rows.view = v
-                    g = self._capture(self.raw[n][0], tok, pos, warm=False)
-                    rows.view = self.max_len
-                    self.view_graphs[n][v] = [g, self.view_graphs[n][self.max_len][1]]
-                step_fn, chip_fn = self.view_graphs[n][v]
+                step_fn, chip_fn = self._view_graph(n, min(max(v, 1), self.max_len))
             elif n in self.view_graphs:  # the smallest attention view covering every live row
                 need = 1 + max((plen[b] + len(gen[b]) for b in range(n) if live[b] is not None),
                                default=0)
