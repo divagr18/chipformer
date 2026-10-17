@@ -10,8 +10,8 @@ jump target in the instruction itself, T = 0x200 + 2 * XY.
     5XY2  BZERO  R[0..n) = 0, n = LA + LB, then V7 = n
     5XY4  BSUB   R[0..n) = A - B mod 10^n, n = max(LA, LB) + 1, then V0 and I as BADD;
                  PC = T if A >= B, else the next instruction
-    5XY7  BRSUB  R[0..n) = B - A (for B >= A), then V0 and I as BADD (V0 = 0 for a tool call:
-                 MODE bit 1 clear), MODE |= 8 (the print starts with " -"); PC = T
+    5XY7  BRSUB  R[0..n) = B - A (for B >= A), then V0 and I as BADD, MODE |= 8 (the print
+                 starts with " -"); PC = T
     5X03  BMUL   one schoolbook row of A * B; VX = rows done, row r = LB - 1 - VX:
                  for i = LA-1 .. 0:  R[i+r+1] = (R[i+r+1] + A[i] * B[r] + carry) mod 10, carry = ..div 10
                  then R[r] = carry, VX += 1, and after the last row V0 = LA + LB - z,
@@ -33,9 +33,10 @@ divisor B and the quotient's digits in P (bcd.R_ADDR; P[t] for t <= LA, P[t + 1]
                  with q estimated from the window's top 3 digits and B's top 2 (q <= true + 2)
     5XY6  BADB   the add-back after an estimate that was too big: W[t-LB .. t] += B, P[.] -= 1
 
-Both end with VF = 1 (negative: add back), 2 (done, exact), 3 (done, DEC decimals and a
+Both end with VF = 1 (negative: add back), 2 (done, exact), 3 (done, DS decimals and a
 remainder) or 0 (next digit, VX = t + 1). BDIV repeats itself (PC unchanged) on 0 and BADB on 1,
-so a division needs loop instructions only around its add-backs.
+so a division needs loop instructions only around its add-backs. DS = mem[bcd.DSTOP] (div:
+DEC; mod and gcd: 0, the remainder of the integer part).
 """
 
 from chipformer import spec
@@ -90,7 +91,7 @@ def _div_record(cells: list[int], op: int, kind: int) -> list[tuple[int, int]]:
     # BDIV: negative if the top digit borrowed; BADB: still negative unless it carried out
     neg = v < 0 if kind == BDIV else v < 10
     zero = not neg and not any(digits)
-    flag = 1 if neg else 2 if zero and t >= la else 3 if t == la + bcd.DEC else 0
+    flag = 1 if neg else 2 if zero and t >= la else 3 if t == la + cells[bcd.DSTOP] else 0
     w.append((spec.V + x, t + (flag == 0)))
     w.append((spec.V + 15, flag))
     pc = cells[spec.PC]
@@ -129,7 +130,7 @@ def macro_writes(cells: list[int], op: int):
                 carry = int(s < 0)
         mode = cells[bcd.MODE]
         z = int(w[-1][1] == 0)  # the top digit, R[0]
-        w.append((spec.V, n - z if kind != BRSUB or mode & 1 else 0))
+        w.append((spec.V, n - z))
         w.append((spec.I, bcd.R_ADDR + z))
         if kind == BRSUB:
             w.append((bcd.MODE, mode | 8))

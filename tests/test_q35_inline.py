@@ -13,7 +13,10 @@ BS = chr(92)
 WORDS = {" ": B.SPACE, " =": B.EQ, "=": B.EQ, " +": B.PLUS, "+": B.PLUS, " -": B.MINUS,
          "-": B.MINUS2, "−": B.MINUS2, " ×": B.TIMES, "*": B.TIMES, " *": B.TIMES, " " + BS: B.BSL, "times": B.TIMESW,
          ",": B.COMMA, "$": B.DOLLAR, " $": B.SDOLLAR, "$$": B.DDOLLAR, " $$": B.SDDOLLAR, "(": B.LPAREN, "\n": B.NL, "\n\n": B.WS,
-         "/": B.DIV, " /": B.DIV, "÷": B.DIV, "div": B.FN_DIV, ".": B.PERIOD}
+         "/": B.DIV, " /": B.DIV, "÷": B.DIV, "div": B.FN_DIV, ".": B.PERIOD,
+         "(-": B.LPMINUS, " (-": B.SLPMINUS, ")": B.RPAREN, ")/": B.DIV, ")=": B.EQ,
+         " mod": B.MODOP, " %": B.MODOP, "mod": B.FN_MOD, "b": B.HEX[11], "gcd": B.FN_GCD,
+         " gcd": B.FN_GCD}
 
 
 def classes(tokens: list[str]) -> list[int]:
@@ -63,8 +66,27 @@ CASES = [
     ([" ", "20", " +", " ", "30", " +", " ", "40", " ="], []),  # chains are Qwen's
     ([" ", "20", *TIMES, "30", " +", " ", "40", " ="], []),  # precedence
     (["}", *TIMES, "30", " +", " ", "40", " ="], []),  # operator before the first number
-    (["-", "50", *TIMES, "30", " ="], []),  # negative
-    ([" ", "50", *TIMES, "-", "30", " ="], []),
+    (["-", "50", *TIMES, "30", " ="], []),  # "-" after a letter: an operator
+    ([" ", "50", *TIMES, "-", "30", " ="], [("mul", "50", "30")]),  # signed
+    (["\n", "-", "5000", *TIMES, "30", " ="], [("mul", "5000", "30")]),
+    (["\n", "-", " ", "50", *TIMES, "30", " ="], [("mul", "50", "30")]),  # a list's "- "
+    (["x", " -", " ", "12", *TIMES, "34", " ="], []),  # x - 12 * 34: "-" is an operator
+    ([" ", "12", " -", "34", *TIMES, "5", " ="], []),
+    (["\n", "-", "1418261", " /", " (-", "408", ")", " ="], [("div", "1418261", "408")]),
+    (["$", "(-", "1418261", ")/", "(-", "408", ")", " ="], [("div", "1418261", "408")]),
+    (["f", "(-", "3000", ")", *TIMES, "4", " ="], []),  # f(-3000): not a number's sign
+    ([" ", "=", " -", "5", " +", " ", "1234567", " ="], []),  # add / sub: unsigned only
+    ([" ", "1234567", " -", " -", "5", " ="], []),
+    (["\n", "-", "1234", " mod", " ", "56", " ="], []),
+    ([" ", "1785", " mod", " ", "13", " ="], [("mod", "1785", "13")]),
+    ([" ", "1785", " %", " ", "13", " ="], [("mod", "1785", "13")]),
+    ([" ", "1785", " " + BS, "mod", " ", "13", " ="], [("mod", "1785", "13")]),
+    ([" ", "1785", " " + BS, "b", "mod", " ", "13", " ="], [("mod", "1785", "13")]),
+    ([" ", "1785", " ", "mod", " ", "13", " ="], []),  # "mod" without a backslash
+    ([" ", "gcd", "(", "1785", ",", " ", "13201915", ")", " ="], [("gcd", "1785", "13201915")]),
+    (["$", BS, "gcd", "(", "1785", ",", " ", "-", "35", ")=", "$"], [("gcd", "1785", "35")]),
+    ([" ", "1785", " gcd", "(", "12", ",", " ", "35", ")", " ="], []),  # gcd after a number
+    ([" ", "gcd", "(", "1785", ",", "35", ")", " ="], []),  # "1785,35" is one number
     (["(", "50", " +", " ", "30", ")", " ="], []),
     ([" ", "12", *TIMES, "3", " ="], []),  # small: Qwen's own
     ([" ", "5", " +", " ", "7", " ="], []),
@@ -119,6 +141,30 @@ def test_div_prints():
     assert printed(bm) == " "
 
 
+def test_signed_mod_gcd_prints():
+    for tokens, want in [
+            (["\n", "-", "1418261", " /", " (-", "408", ")", " ="], " 3476.1299019607...."),
+            (["$", "-", "2548", " /", " ", "52", " ="], " -49$"),
+            ([" ", "12", *TIMES, "-", "34", " ="], " -408."),
+            ([" (-", "1234", ")", *TIMES, "(-", "5", ")", " ="], " 6170."),
+            (["\n", "-", "1", " /", " ", "3000", " ="], " -0.0003333333...."),
+            (["\n", "-", "1234", " /", " ", "0", " ="], " "),  # by zero: nothing, no sign
+            ([" ", "1785", " mod", " ", "13", " ="], " 4."),
+            ([" ", "1785", " mod", " ", "1785", " ="], " 0."),
+            ([" ", "17", " mod", " ", "5000", " ="], " 17."),
+            ([" ", "00017", " mod", " ", "5000", " ="], " 17."),
+            ([" ", "1785", " mod", " ", "0", " ="], " "),
+            ([" ", "gcd", "(", "1785", ",", " ", "13201915", ")", " ="], " 5."),
+            ([" ", "gcd", "(", "13201915", ",", " ", "1785", ")", " ="], " 5."),
+            ([" ", "gcd", "(", "1234", ",", " ", "0", ")", " ="], " 1234."),
+            ([" ", "gcd", "(", "0", ",", " ", "1234", ")", " ="], " 1234."),
+            ([" ", "gcd", "(", "123456789012", ",", " ", "987654321098", ")", " ="], " 2."),
+            ([" ", "gcd", "(", "2", "0" * 23, ",", " ", "4", "0" * 20, ")", " ="],
+             " 4" + "0" * 20 + ".")]:
+        bm, calls = run(tokens)
+        assert len(calls) == 1 and printed(bm) == want, (tokens, printed(bm))
+
+
 def test_negative_sub_prints_minus():
     bm, calls = run([" ", "3000", " -", " ", "5000", " ="])
     assert calls == [("sub", "3000", "5000")] and printed(bm) == " -2000."
@@ -160,11 +206,18 @@ def test_circuit_with_tool_calls(circuit):
         bm.step()
     assert printed(bm).endswith("???3.1415929203..." + tail)
     check(circuit, bm)
-    bm.tool_call("sub", "5", "675")  # a tool call below 0 prints nothing
+    bm.tool_call("sub", "5", "675")  # below 0: " -" instead of the newline
     while not bm.halted:
         bm.step()
-    # div's closing tags, then tags but no digits
-    assert printed(bm).endswith("..." + tail + "?" * (6 + len(B.TOOL_TAIL)))
+    assert printed(bm).endswith("..." + tail + "??" + " -670" + tail)
+    for op, x, y, want in [("div", "-1418261", "-408", "3476.1299019607..."),
+                           ("mul", "-63075", "8808", " -555564600"), ("div", "-5", "0", "?"),
+                           ("mod", "13201915", "1785", "55"), ("gcd", "1785", "13201915", "5"),
+                           ("gcd", "-12", "18", "6")]:
+        bm.tool_call(op, x, y)
+        while not bm.halted:
+            bm.step()
+        assert printed(bm).endswith(want + tail), (op, x, y, printed(bm)[-40:])
     check(circuit, bm)
 
 
@@ -190,7 +243,8 @@ def test_circuit_fuzz(circuit):
     rng = random.Random(5)
     pool = ([B.HEX[d] for d in range(10)] * 4 + [B.SPACE] * 4
             + [B.EQ, B.PLUS, B.MINUS, B.MINUS2, B.DIV, B.TIMES, B.BSL, B.TIMESW, B.COMMA, B.DOLLAR, B.LPAREN,
-               B.NL, B.OTHER, B.OTHER])
+               B.NL, B.OTHER, B.OTHER, B.LPMINUS, B.SLPMINUS, B.RPAREN, B.MODOP, B.FN_MOD,
+               B.FN_GCD, B.HEX[11]])
     fired = 0
     for _ in range(12):
         bm = B.BridgeMachine(bcd.ROM, bcd.QUIRKS)
@@ -199,9 +253,15 @@ def test_circuit_fuzz(circuit):
         for _ in range(60):
             if rng.random() < 0.15:  # plant an expression
                 a, b = str(rng.randrange(1, 10**rng.randint(1, 5))), str(rng.randrange(10**rng.randint(1, 4)))
-                op = rng.choice([" +", " -", "-", "*", TIMES, "/", [" " + chr(92), "div", " "]])
-                stream += [B.SPACE, *classes([a]), *classes(op if isinstance(op, list) else [op]),
-                           B.SPACE, *classes([b]), B.EQ]
+                op = rng.choice([" +", " -", "-", "*", TIMES, "/", [" " + chr(92), "div", " "],
+                                 " mod", [" " + chr(92), "b", "mod", " "], "gcd"])
+                sa, sb = rng.choice([[], ["-"], [" (-"]]), rng.choice([[], ["-"], ["(-"]])
+                if op == "gcd":
+                    stream += classes([" ", "gcd", "(", *sa, a, ",", " ", *sb, b, ")", " ="])
+                else:
+                    stream += [B.SPACE, *classes([*sa, a]),
+                               *classes(op if isinstance(op, list) else [op]),
+                               B.SPACE, *classes([*sb, b]), B.EQ]
             stream.append(rng.choice(pool))
         fired += len(bm.qwen(stream))
         check(circuit, bm)
