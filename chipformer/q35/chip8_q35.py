@@ -574,7 +574,7 @@ def build(target: Target | None = None) -> Chip8Q35:
         "badd": [ind["BADD"]], "bzero": [ind["BZERO"]], "bmul": [ind["BMUL"]],
         "bsub": [ind["BSUB"]], "brsub": [ind["BRSUB"]], "pc2": pc2,
         "la": lab, "lb": lbb, "vx": vxb[:5], "first": [mul_first], "last": [mul_last],
-        "vx1": vx_inc,
+        "vx1": vx_inc, "stay": [stay],
     }
     # the macros' digit chain is the deepest path: its entries get a head of their own, so no
     # later entry holds them up
@@ -775,7 +775,8 @@ def build(target: Target | None = None) -> Chip8Q35:
     # (BSUB's PC write reads the final borrow)
     # (at a VAL token wi = j - 1; written so, is_val is not in both the value and the literals,
     # whose weights would add up to a non-bf16 257)
-    dig_w = c.node(c.t_lt(j - 1 - kmx, 1, lo_, hi_, lits=[c.is_val, kb_as])
+    # (BADD / BSUB / BRSUB: not their top digit either, so the carry into it stays: it is R[0])
+    dig_w = c.node(c.t_lt(j - 1 - kmx, 0, lo_, hi_, lits=[c.is_val, kb_as])
                    + c.t_lt(j - 1 - kla, 0, lo_, hi_, lits=[c.is_val, kb_mac]), "macro.digit_w")
     carry = c.slot_head("carry", {0: rs + dig_w + macro - 1}, {0: one},
                         {2 + i: cout_bits[i] for i in range(4)}, rs + dig_w + macro - 1)
@@ -805,8 +806,10 @@ def build(target: Target | None = None) -> Chip8Q35:
     kk_mac = eqs(kla + krow - j, lo_, hi_, 2 * MD, "mac.kw", [kb_mac])
     zero_k = eqs(j, 0, JMAX + 1, 2 * MD, "zero.k", [kb_zero])
     row_oh = eqs(krow, -32, 31, MD, "mac.row", [kb_mac])
-    n_add = eqs(kmx + 1, 0, 32, MD + 2, "add.n", [kb_as])
-    n_zero = eqs(kla + klb, 0, 62, 2 * MD + 1, "zero.n", [kb_zero + kb_mac])
+    # V0 = n - [R[0] == 0] = max + carry into the top digit, I = R_ADDR + 1 - carry
+    n_add = eqs(kmx + c_in, 0, 47, MD + 2, "add.n", [kb_as])
+    i_add = [one - carry[0]] + [bios.R_ADDR >> b_ & 1 for b_ in range(1, 12)]
+    n_zero = eqs(kla + klb, 0, 62, 2 * MD + 1, "zero.n", [kb_zero])
     in_add = c.node(c.t_lt(j - kmx, 1, lo_, hi_, lits=[kb_as]), "add.digit")
     end_add = c.node(c.t_eq(j - kmx, 1, lo_, hi_, lits=[kb_as]), "add.end")  # V0 = n
     end_add2 = c.node(c.t_eq(j - kmx, 2, lo_, hi_, lits=[kb_as]), "add.end2")  # I = R
@@ -818,6 +821,12 @@ def build(target: Target | None = None) -> Chip8Q35:
     mul_vx = c.node(c.t_eq(j - kla, 1, lo_, hi_, lits=[kb_mac]), "mul.vx")  # VX += 1
     mul_v0 = c.node(c.t_eq(j - kla, 2, lo_, hi_, lits=[kb_mac, k["last"][0]]), "mul.v0")
     mul_i = c.node(c.t_eq(j - kla, 3, lo_, hi_, lits=[kb_mac, k["last"][0]]), "mul.i")
+    # the last row's R[0] = carry is its own VAL token: keep [it is 0] for V0 and I
+    mul_endv = c.node(c.t_eq(j - 1 - kla, 0, lo_, hi_, lits=[c.is_val, kb_mac]), "mul.endv")
+    (mul_z,) = c.slot_head("mul.top0", {0: rs + mul_endv}, {0: one},
+                           {2: c.and_([one - b_ for b_ in c.vb[:4]], "val==0")}, rs + mul_endv)
+    n_mul = eqs(kla + klb - mul_z, -1, 62, 2 * MD + 1, "mul.n", [kb_mac])
+    i_mul = [mul_z] + [bios.R_ADDR >> b_ & 1 for b_ in range(1, 12)]
     v7 = spec.V + 7
 
     # machine records (not inside a print or a CALL record)
@@ -839,7 +848,8 @@ def build(target: Target | None = None) -> Chip8Q35:
     case([at_val, nfd, not_tick, is_pc, one - kb_sub], 0, k["next_pc"])
     case([at_val, nfd, not_tick, is_pc, kb_sub, one - carry[0]], 0, k["next_pc"])  # T
     case([at_val, nfd, not_tick, is_pc, kb_sub, carry[0]], 0, k["pc2"])  # borrowed: on
-    case([at_addr, nfd, not_tick, is_pc], 1, spec.PC)
+    case([at_addr, nfd, not_tick, is_pc, one - k["stay"][0]], 1, spec.PC)
+    case([at_addr, nfd, not_tick, is_pc, k["stay"][0]], 2, 0)  # PC stays: no PC write
     case([at_addr, nfd, not_tick, is_end], 2, 0)
     case([at_val, nfd, in_tick, jeq(0)], 0, k["dt_dec"])
     case([at_addr, nfd, in_tick, jeq(0)], 1, spec.DT)
@@ -852,7 +862,7 @@ def build(target: Target | None = None) -> Chip8Q35:
     case([at_val, nfd, end_add, one - kb_rsub], 0, onehot_bits(n_add, 6))
     case([at_val, nfd, end_add, kb_rsub, mode], 0, onehot_bits(n_add, 6))  # tool call: 0
     case([at_addr, nfd, end_add2], 1, spec.I)
-    case([at_val, nfd, end_add2], 0, bios.R_ADDR)
+    case([at_val, nfd, end_add2], 0, i_add)
     case([at_addr, nfd, end_rsub], 1, bios.MODE)
     case([at_val, nfd, end_rsub], 0, [mode, mode_d, mode_dd, 1])
     case([at_addr, nfd, in_zero], 1, addr_bits(zero_k, bios.R_ADDR))
@@ -865,9 +875,9 @@ def build(target: Target | None = None) -> Chip8Q35:
     case([at_addr, nfd, mul_vx], 1, onehot_bits(k["x"], 4) + [0] * 8 + [1])  # V + x
     case([at_val, nfd, mul_vx], 0, k["vx1"])
     case([at_addr, nfd, mul_v0], 1, V)
-    case([at_val, nfd, mul_v0], 0, onehot_bits(n_zero, 6))
+    case([at_val, nfd, mul_v0], 0, onehot_bits(n_mul, 6))
     case([at_addr, nfd, mul_i], 1, spec.I)
-    case([at_val, nfd, mul_i], 0, bios.R_ADDR)
+    case([at_val, nfd, mul_i], 0, i_mul)
 
 
     # a print: STEP, then NL <tool_response> NL digits NL </tool_response> NL as text tokens.

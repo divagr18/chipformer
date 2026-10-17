@@ -5,20 +5,23 @@ They live in CHIP-8's unused 5XYN space (5XY0 is the usual skip) and work on the
 R_ADDR. Writes go least significant first so a carry flows from one write to the next. T is a
 jump target in the instruction itself, T = 0x200 + 2 * XY.
 
-    5XY1  BADD   R[0..n) = A + B, n = max(LA, LB) + 1, then V0 = n, I = R_ADDR; PC = T
+    5XY1  BADD   R[0..n) = A + B, n = max(LA, LB) + 1, then V0 = n - z, I = R_ADDR + z
+                 (z = [R[0] == 0]: the print skips a leading zero); PC = T
     5XY2  BZERO  R[0..n) = 0, n = LA + LB, then V7 = n
-    5XY4  BSUB   R[0..n) = A - B mod 10^n, n = max(LA, LB) + 1, then V0 = n, I = R_ADDR;
+    5XY4  BSUB   R[0..n) = A - B mod 10^n, n = max(LA, LB) + 1, then V0 and I as BADD;
                  PC = T if A >= B, else the next instruction
-    5XY7  BRSUB  R[0..n) = B - A (for B >= A), then V0 = n (0 for a tool call: MODE bit 1
-                 clear), I = R_ADDR, MODE |= 8 (the print starts with " -"); PC = T
+    5XY7  BRSUB  R[0..n) = B - A (for B >= A), then V0 and I as BADD (V0 = 0 for a tool call:
+                 MODE bit 1 clear), MODE |= 8 (the print starts with " -"); PC = T
     5X03  BMUL   one schoolbook row of A * B; VX = rows done, row r = LB - 1 - VX:
                  for i = LA-1 .. 0:  R[i+r+1] = (R[i+r+1] + A[i] * B[r] + carry) mod 10, carry = ..div 10
-                 then R[r] = carry, VX += 1, and after the last row V0 = LA + LB, I = R_ADDR;
-                 PC stays (the next row) until the last row
+                 then R[r] = carry, VX += 1, and after the last row V0 = LA + LB - z,
+                 I = R_ADDR + z (z = [R[0] == 0]); PC stays (the next row) until the last row
     5X13  BMUL0  the first row (VX = 0): the same with R read as 0 (no BZERO needed); PC = the
                  next instruction (a BMUL), or the one after it if LB = 1
     5008  BTRIM  if mem[I] == 0, V0 >= 2 and I is in the result: V0 -= 1, I += 1, PC stays;
                  else PC = the next instruction (strips leading zeros before a PRINT)
+
+A record whose PC stays has no PC write (the circuit fetches from the unchanged PC).
 
 Each record's values come from the state before the record plus the carry chain inside it, so a
 multiplication costs LB records of LA + 4 writes.
@@ -64,8 +67,9 @@ def macro_writes(cells: list[int], op: int):
                 w.append((bcd.R_ADDR + n - 1 - k, s % 10))
                 carry = int(s < 0)
         mode = cells[bcd.MODE]
-        w.append((spec.V, n if kind != BRSUB or mode & 1 else 0))
-        w.append((spec.I, bcd.R_ADDR))
+        z = int(w[-1][1] == 0)  # the top digit, R[0]
+        w.append((spec.V, n - z if kind != BRSUB or mode & 1 else 0))
+        w.append((spec.I, bcd.R_ADDR + z))
         if kind == BRSUB:
             w.append((bcd.MODE, mode | 8))
         new_pc = nxt if kind == BSUB and carry else target(op)
@@ -88,7 +92,8 @@ def macro_writes(cells: list[int], op: int):
         w.append((spec.V + x, (d + 1) & 0xFF))
         last = d + 1 == lb
         if last:
-            w += [(spec.V, la + lb), (spec.I, bcd.R_ADDR)]
+            z = int(carry == 0)  # R[0]
+            w += [(spec.V, la + lb - z), (spec.I, bcd.R_ADDR + z)]
         new_pc = ((nxt + 2) & 0xFFF if last else nxt) if first else nxt if last else pc
     else:  # BTRIM
         i, v0 = cells[spec.I], cells[spec.V]
@@ -96,4 +101,4 @@ def macro_writes(cells: list[int], op: int):
         if z:
             w = [(spec.V, v0 - 1), (spec.I, i + 1)]
         new_pc = pc if z else nxt
-    return w + [(spec.PC, new_pc)]
+    return w if new_pc == pc else w + [(spec.PC, new_pc)]

@@ -21,7 +21,7 @@ MAX_DIGITS = 24
 QUIRKS = ("loadstore",)  # FX55/FX65 leave I unchanged
 
 
-SRC = f"""
+SRC = """
 idle:   jp idle                 ; PC rests here between calls (not a PRINT)
 
 ; ---------------------------------------------------------------- add: R = A + B

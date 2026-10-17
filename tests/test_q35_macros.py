@@ -58,7 +58,7 @@ def test_btrim_only_reads_the_result():
                          (bcd.R_ADDR + 2 * bcd.MAX_DIGITS, 3, False)]:
         cells[spec.I], cells[spec.V], cells[spec.PC] = i, v0, 0x210
         w = macro_writes(cells, 0x5008)
-        want = [(spec.V, v0 - 1), (spec.I, i + 1), (spec.PC, 0x210)] if trims else [(spec.PC, 0x212)]
+        want = [(spec.V, v0 - 1), (spec.I, i + 1)] if trims else [(spec.PC, 0x212)]  # stays: no PC
         assert w == want, (i, v0, w)
 
 
@@ -89,7 +89,7 @@ def test_circuit_macros(circuit):
             bm.step()
         bm.text(2)
     assert fired >= 8
-    n, bad, bad_owner = Q.check_bridge(circuit, bm.tokens, bm.generated, B.owner_expected(bm))
+    _n, bad, bad_owner = Q.check_bridge(circuit, bm.tokens, bm.generated, B.owner_expected(bm))
     assert not bad and not bad_owner, (bad[:5], bad_owner[:5])
 
 
@@ -111,7 +111,7 @@ def test_circuit_random_sessions(circuit):
                 while not bm.halted:
                     bm.step()
             bm.text(3)
-        n, bad, bad_owner = Q.check_bridge(circuit, bm.tokens, bm.generated, B.owner_expected(bm))
+        _n, bad, bad_owner = Q.check_bridge(circuit, bm.tokens, bm.generated, B.owner_expected(bm))
         assert not bad and not bad_owner, (bad[:5], bad_owner[:5])
     assert fired >= 2
 
