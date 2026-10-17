@@ -1,7 +1,7 @@
 """Text benchmarks: is a merged Qwen3.5 + CHIP-8 checkpoint as capable as its base on pure text?
 
     python -m chipformer.q35.text_eval run MODEL --name NAME [--attn sdpa|eager] [--tokenizer BASE]
-    python -m chipformer.q35.text_eval table dist/evals [--ref base]
+    python -m chipformer.q35.text_eval table [dist/evals/text] [--ref base]
 
 ``run`` evaluates one checkpoint and writes ``OUT/NAME/TASK.json`` (per-item records; a task whose
 file exists is skipped, so a killed run resumes). ``table`` compares every run against ``--ref``.
@@ -433,7 +433,7 @@ def ppl_table(data, names, ref, summary):
                                         for a, b in zip(data[ref]["ppl"], data[n]["ppl"])])
                 s.update(dnll=float(d.mean()), dnll_ci95=[float(dl), float(dh)],
                          abs_dnll=float(np.abs(d).mean()), top1_agreement=float(agree.mean()))
-                cell += (f"<br>dNLL {d.mean():+.2e} [{dl:+.1e}, {dh:+.1e}], |dNLL| "
+                cell += (f"<br>dNLL {d.mean():+.2e} [{dl:+.1e}, {dh:+.1e}], mean abs dNLL "
                          f"{np.abs(d).mean():.2e}, top-1 agree {100 * agree.mean():.2f}%")
             summary.setdefault(n, {}).setdefault("ppl", {})[f"{lo}-{hi}"] = s
             cells.append(cell)
@@ -577,7 +577,7 @@ def table(args):
                 if n != args.ref:
                     d, dlo, dhi, p = paired_diff(v, [bool(it[key]) for it in ref])
                     s.update(diff=d, diff_ci95=[dlo, dhi], mcnemar_p=p)
-                    cell += f"<br>Δ {100 * d:+.1f} [{100 * dlo:+.1f}, {100 * dhi:+.1f}] p={p:.2f}"
+                    cell += f"<br>diff {100 * d:+.1f} [{100 * dlo:+.1f}, {100 * dhi:+.1f}] p={p:.2f}"
                 summary.setdefault(n, {}).setdefault(task, {})[metric] = s
                 cells.append(cell)
             lines.append(f"| {task} | {metric} (n={len(ref)}) | " + " | ".join(cells) + " |")
@@ -612,10 +612,10 @@ def main() -> None:
     r.add_argument("--attn", default="sdpa")
     r.add_argument("--tokenizer", default=None, help="shared tokenizer (the base checkpoint)")
     r.add_argument("--tasks", default=",".join(TASKS))
-    r.add_argument("--out", default="dist/evals")
+    r.add_argument("--out", default="dist/evals/text")
     r.add_argument("--mem-gb", type=float, default=20.0, help="per-process GPU memory cap")
     t = sub.add_parser("table")
-    t.add_argument("dir", nargs="?", default="dist/evals")
+    t.add_argument("dir", nargs="?", default="dist/evals/text")
     t.add_argument("--ref", default="base")
     args = ap.parse_args()
     run(args) if args.cmd == "run" else table(args)
