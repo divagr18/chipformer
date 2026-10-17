@@ -11,7 +11,7 @@ from chipformer.q35.lib import bcd
 
 BS = chr(92)
 WORDS = {" ": B.SPACE, " =": B.EQ, "=": B.EQ, " +": B.PLUS, "+": B.PLUS, " -": B.MINUS,
-         "-": B.MINUS, " ×": B.TIMES, "*": B.TIMES, " *": B.TIMES, " " + BS: B.BSL, "times": B.TIMESW,
+         "-": B.MINUS2, "−": B.MINUS2, " ×": B.TIMES, "*": B.TIMES, " *": B.TIMES, " " + BS: B.BSL, "times": B.TIMESW,
          ",": B.COMMA, "$": B.DOLLAR, " $": B.SDOLLAR, "$$": B.DDOLLAR, " $$": B.SDDOLLAR, "(": B.LPAREN, "\n": B.NL, "\n\n": B.WS}
 
 
@@ -38,7 +38,7 @@ def printed(bm) -> str:
     out = []
     for t, g in zip(bm.tokens, bm.generated):
         if g and B.is_text(t):
-            close = {B.SPACE: " ", B.PERIOD: ".", B.DOLLAR: "$", B.DDOLLAR: "$$"}
+            close = {B.SPACE: " ", B.MINUS: " -", B.PERIOD: ".", B.DOLLAR: "$", B.DDOLLAR: "$$"}
             out.append(close[t] if t in close else str(B.HEX.index(t)) if t in B.HEX else "?")
     return "".join(out)
 
@@ -49,9 +49,12 @@ CASES = [
     ([" ", "1", ",", "234", ",", "567", *TIMES, "8", " ="], [("mul", "1234567", "8")]),
     ([" ", "37", " ×", " ", "43", " ="], [("mul", "37", "43")]),
     ([" ", "37", "*", "43", "="], [("mul", "37", "43")]),
-    ([" ", " $", " ", "300", " +", " ", "4", " ="], [("add", "300", "4")]),
-    ([" ", "100", " -", " ", "30", " ="], [("sub", "100", "30")]),
-    ([" ", "25", " -", " ", "1", ",", "786", ",", "338", " ="], []),  # surely negative: Qwen's
+    ([" ", " $", " ", "3000", " +", " ", "400", " ="], [("add", "3000", "400")]),
+    ([" ", " $", " ", "300", " +", " ", "4", " ="], []),  # small add / sub: Qwen's own
+    ([" ", "10000", " -", " ", "30", " ="], [("sub", "10000", "30")]),
+    ([" ", "100", " -", " ", "30", " ="], []),
+    ([" ", "25", " -", " ", "1", ",", "786", ",", "338", " ="], [("sub", "25", "1786338")]),
+    ([" ", "2500", "−", "17860", " ="], [("sub", "2500", "17860")]),
     (["\n\n", "42450", " *", " ", "8376", " ="], [("mul", "42450", "8376")]),
     ([" ", "2", ".", "55", *TIMES, "300", " ="], []),  # decimal
     (["x", "^", "22", " +", " ", "100", " ="], []),  # not a plain first number
@@ -90,13 +93,17 @@ def test_scan_prints_and_chains():
     assert calls == [("mul", "12", "34")] and printed(bm) == " 408."
     bm = B.BridgeMachine(bcd.ROM, bcd.QUIRKS)
     bm.text(3)
-    calls = bm.qwen(classes([" $$", " ", "300", " +", " ", "4", " ="]))
-    assert calls == [("add", "300", "4")] and printed(bm) == " 304$$"
+    calls = bm.qwen(classes([" $$", " ", "3000", " +", " ", "4000", " ="]))
+    assert calls == [("add", "3000", "4000")] and printed(bm) == " 7000$$"
 
 
-def test_negative_sub_prints_nothing():
-    bm, calls = run([" ", "30", " -", " ", "50", " ="])
-    assert calls == [("sub", "30", "50")] and printed(bm) == " "
+def test_negative_sub_prints_minus():
+    bm, calls = run([" ", "3000", " -", " ", "5000", " ="])
+    assert calls == [("sub", "3000", "5000")] and printed(bm) == " -2000."
+    bm, calls = run(["$", "21", " -", " ", "97000", " ="])
+    assert calls == [("sub", "21", "97000")] and printed(bm) == " -96979$"
+    bm, calls = run([" ", "4567", " -", " ", "4567", " ="])
+    assert printed(bm) == " 0."
 
 
 @pytest.fixture(scope="module")
@@ -123,8 +130,12 @@ def test_circuit_with_tool_calls(circuit):
     bm.tool_call("add", "576", "99")
     while not bm.halted:
         bm.step()
-    bm.qwen(classes([" ", "675", " -", " ", "5", " =", "."]))
-    assert printed(bm) == " 576$???675??? 670."  # ? = the tool response's tags and newlines
+    bm.qwen(classes([" ", "675", " -", " ", "5000", " =", "."]))
+    assert printed(bm) == " 576$???675??? -4325."  # ? = the tool response's tags and newlines
+    bm.tool_call("sub", "5", "675")  # a tool call below 0 prints nothing
+    while not bm.halted:
+        bm.step()
+    assert printed(bm).endswith(".??????")  # tags and newlines, no digits
     check(circuit, bm)
 
 
@@ -149,7 +160,7 @@ def test_circuit_fuzz(circuit):
     the reference does, and the records and prints that follow are exact."""
     rng = random.Random(5)
     pool = ([B.HEX[d] for d in range(10)] * 4 + [B.SPACE] * 4
-            + [B.EQ, B.PLUS, B.MINUS, B.TIMES, B.BSL, B.TIMESW, B.COMMA, B.DOLLAR, B.LPAREN,
+            + [B.EQ, B.PLUS, B.MINUS, B.MINUS2, B.TIMES, B.BSL, B.TIMESW, B.COMMA, B.DOLLAR, B.LPAREN,
                B.NL, B.OTHER, B.OTHER])
     fired = 0
     for _ in range(12):
@@ -158,8 +169,8 @@ def test_circuit_fuzz(circuit):
         stream = []
         for _ in range(60):
             if rng.random() < 0.15:  # plant an expression
-                a, b = str(rng.randrange(1, 10**rng.randint(1, 5))), str(rng.randrange(10**3))
-                op = rng.choice([" +", " -", "*", TIMES])
+                a, b = str(rng.randrange(1, 10**rng.randint(1, 5))), str(rng.randrange(10**rng.randint(1, 4)))
+                op = rng.choice([" +", " -", "-", "*", TIMES])
                 stream += [B.SPACE, *classes([a]), *classes(op if isinstance(op, list) else [op]),
                            B.SPACE, *classes([b]), B.EQ]
             stream.append(rng.choice(pool))

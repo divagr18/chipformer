@@ -13,10 +13,21 @@ from chipformer import spec
 from chipformer.q35.lib.asm import assemble
 
 A_ADDR, B_ADDR, LEN, R_ADDR = 0x600, 0x620, 0x640, 0x660
-MODE = LEN + 2  # 1: an inline call (prints " digits"), 0: a tool call (<tool_response>)
+# 0: a tool call (<tool_response>); 1: an inline call (" digits"), | 2 inside "$", | 4 inside
+# "$$", | 8 the result is negative (set by sub)
+MODE = LEN + 2
+S_ADDR = 0x6A0  # scratch for swapping A and B
 T10, MUL, DIV, MOD = 0x700, 0x710, 0x780, 0x800
 MAX_DIGITS = 24
 QUIRKS = ("loadstore",)  # FX55/FX65 leave I unchanged
+
+
+def _copy(src: int, dst: int) -> str:  # 24 digits, 12 registers at a time
+    return "".join(f"        ld i, {src + h}\n        ld vb, [i]\n        ld i, {dst + h}\n"
+                   f"        ld [i], vb\n" for h in (0, 12))
+
+
+SWAP = _copy(A_ADDR, S_ADDR) + _copy(B_ADDR, A_ADDR) + _copy(S_ADDR, B_ADDR)
 
 SRC = f"""
 idle:   jp idle                 ; PC rests here between calls (not a PRINT)
@@ -55,11 +66,18 @@ print1: ld i, {R_ADDR}
 pr_all: ld v0, v7
         print
 
-; ---------------------------------------------------------------- sub: A < B prints nothing
+; ---------------------------------------------------------------- sub: A < B
+; inline: R = B - A and MODE |= 8 (the print starts with " -"); a tool call prints nothing
 sub_chk: ld i, {R_ADDR}
         ld v0, [i]
         se v0, 9                ; R[0] = 9 iff the subtraction borrowed out
         jp print1
+        ld i, {MODE}
+        ld v0, [i]
+        ld v1, 1
+        and v1, v0
+        se v1, 0
+        jp sub_neg
         ld v0, 0
         print
 
@@ -82,6 +100,19 @@ pr_go:  ld i, {R_ADDR}
         ld v0, v7
         sub v0, v6
         print
+
+; ---------------------------------------------------------------- inline A - B < 0: B - A
+sub_neg: ld v1, 8
+        or v0, v1
+        ld [i], v0              ; MODE |= 8 (I is still MODE)
+        ld i, {LEN}
+        ld v1, [i]              ; v0 = LA, v1 = LB
+        ld v2, v0
+        ld v0, v1
+        ld v1, v2
+        ld [i], v1              ; swap the lengths
+{SWAP}        bsub                    ; R = B - A
+        jp print1
 
 """
 

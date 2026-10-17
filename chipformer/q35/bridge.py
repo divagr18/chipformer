@@ -27,7 +27,9 @@ SPACE, EQ, PLUS, MINUS, TIMES, BSL, TIMESW, COMMA, DOLLAR, LPAREN, WS = range(TE
 # classes may have no other spellings; " $", " $$" and "\$" (currency) are their own classes
 SDOLLAR, DDOLLAR, SDDOLLAR, CURR, PERIOD = range(TEXT_BASE + 36, TEXT_BASE + 41)
 DOLLARS = (DOLLAR, SDOLLAR, DDOLLAR, SDDOLLAR, CURR)  # all neutral, all may precede a number
-N_TEXT = 41
+# " -" starts a negative inline result, so its other spellings ("-", "−") are their own class
+MINUS2 = TEXT_BASE + 41
+N_TEXT = 42
 FUNCS = {"add": FN_ADD, "mul": FN_MUL, "sub": FN_SUB}  # tool names the circuit answers
 PRINT_OP = 0x00FD
 MAX_PRINT = 58  # digits per print (the write counter tops out at 64)
@@ -40,19 +42,20 @@ QWEN_TEXT = {**{TEXT_BASE + i: c for i, c in enumerate("0123456789abcdef")},
              FN_SUB: "sub", SPACE: " ", EQ: " =", PLUS: " +", MINUS: " -", TIMES: " \u00d7",
              BSL: " \\", TIMESW: "times", COMMA: ",", DOLLAR: "$", LPAREN: "(",
              WS: "\n\n", SDOLLAR: " $", DDOLLAR: "$$", SDDOLLAR: " $$", CURR: " \\$",
-             PERIOD: "."}
+             PERIOD: ".", MINUS2: "-"}
 # other single tokens Qwen generates for the same thing: it writes <function=add> as "=add" and
 # <function=mul> as "=m" "ul", not the way its tokenizer splits the text
 # (never for a class the circuit prints: the tied lm_head rows would tie)
 EXTRA_TEXT = {FN_ADD: ["=add"], FN_MUL: ["ul"], FN_SUB: ["=sub", "ub"], EQ: ["="], PLUS: ["+"],
-              MINUS: ["-", " \u2212", "\u2212"], TIMES: ["\u00d7", " *", "*"], BSL: ["\\"],
+              MINUS2: [" \u2212", "\u2212"], TIMES: ["\u00d7", " *", "*"], BSL: ["\\"],
               TIMESW: ["cdot"], CURR: ["\\$"], LPAREN: [" ("],
               WS: ["\n\n\n", "\n\n\n\n", "  ", "   ", "    ", "     ", " \n", " \n\n"]}
-INLINE_OPS = {PLUS: "add", MINUS: "sub", TIMES: "mul"}  # and TIMESW right after BSL: mul
+INLINE_OPS = {PLUS: "add", MINUS: "sub", MINUS2: "sub", TIMES: "mul"}  # and TIMESW after BSL
 # Inline calls need at least this many digits in A and B together. Qwen gets small ones right,
 # and right after a trace its conv window holds chip tokens instead of the "=", so a short
-# printed result can read to it like the start of a new expression.
-INLINE_MIN_DIGITS = 4
+# printed result can read to it like the start of a new expression. Qwen also adds and
+# subtracts numbers of a few digits reliably, so those stay its own.
+INLINE_MIN_DIGITS = {"mul": 4, "add": 7, "sub": 7}
 
 
 def is_text(t: int) -> bool:
@@ -65,9 +68,9 @@ def readout(cells: list[int]) -> list[int]:
     i, n = cells[spec.I], min(cells[spec.V], MAX_PRINT)
     digits = [HEX[cells[(i + k) & 0xFFF] & 15] for k in range(n)]
     mode = cells[bcd.MODE]
-    if mode & 1:  # an inline call: " digits" and a closer (the math's "$"/"$$", else ".")
-        close = DDOLLAR if mode & 4 else DOLLAR if mode & 2 else PERIOD
-        return [SPACE, *digits, close] if digits else [SPACE]
+    if mode & 1:  # an inline call: " digits" (" -digits" below 0) and a closer (the math's
+        close = DDOLLAR if mode & 4 else DOLLAR if mode & 2 else PERIOD  # "$"/"$$", else ".")
+        return [MINUS if mode & 8 else SPACE, *digits, close] if digits else [SPACE]
     return [NL, TR_OPEN, NL, *digits, NL, TR_CLOSE, NL]
 
 
@@ -76,7 +79,7 @@ class InlineScan:
 
     Text since the last *breaker* token (anything but digits, spaces, operators, "=", "$", "(",
     a backslash, or a comma right after a digit) must be exactly: digits, one operator, digits,
-    then "=", with at least INLINE_MIN_DIGITS digits in the two numbers together. A comma
+    then "=", with at least INLINE_MIN_DIGITS[op] digits in the two numbers together. A comma
     between digits joins them (1,234). The first number must start after a
     space, newline, other whitespace, "$", "(" or a chip token, so "2.5 * 3 =" and "x^2 + 1 =" are left alone.
     Chip tokens are breakers too. Fed every token of the stream, in order.
@@ -147,8 +150,7 @@ class InlineScan:
             self.op, self.op_ok = ("mul" if tw_op else INLINE_OPS[t]), self.p == 1
         if (t == EQ and not self.in_call and self.p == 2 and self.nops == 1 and self.op_ok
                 and self.a_safe and self.lens[1] and self.lens[2] and self.op
-                and self.lens[1] + self.lens[2] >= INLINE_MIN_DIGITS
-                and not (self.op == "sub" and self.lens[1] < self.lens[2])):
+                and self.lens[1] + self.lens[2] >= INLINE_MIN_DIGITS[self.op]):
             a = "".join(str(self.digits[1, w]) for w in range(self.lens[1]))
             b = "".join(str(self.digits[2, w]) for w in range(self.lens[2]))
             return self.op, a, b
