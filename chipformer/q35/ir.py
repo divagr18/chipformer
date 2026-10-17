@@ -338,7 +338,18 @@ def evaluate(g: Graph, tokens: list[int], check: bool = True,
                 eval_head(node, m, chip, check, carry, i)
         except ExactnessError as e:
             raise ExactnessError(f"{node.name}: {e}") from None
+    if check:
+        # every RMSNorm divides by the ballast alone: other residual values must vanish next to
+        # it (x^2 far below m * 2^80)
+        big = np.abs(m[:, 1:]).max(0) if m.shape[0] else np.zeros(0)
+        if len(big) and big.max() > RESIDUAL_MAX:
+            d = int(big.argmax()) + 1
+            raise ExactnessError(f"{g.dims[d].name}: residual value {big[d - 1]!r} would move "
+                                 f"the norms (> {RESIDUAL_MAX})")
     return m
+
+
+RESIDUAL_MAX = 2.0**28  # x^2 <= 2^56 is lost in fp32 next to the ballast's m * 2^80
 
 
 def eval_ffn(node: FFN, m: np.ndarray, chip: np.ndarray, check: bool) -> None:

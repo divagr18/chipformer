@@ -89,7 +89,7 @@ def hf_model(c, vocab_tokens: list[int], dtype=None):
     norm = torch.full((lay.hidden,), -1.0)
     for e in c.code:
         norm[lay.dim(next(iter(e.terms)))] = tiny.code_gain(lay)
-    for e in c.store.yc:
+    for e in (c.store.yc if c.store is not None else []):
         norm[lay.dim(next(iter(e.terms)))] = ID_GAIN * tiny.code_gain(lay)
     check_bf16("final norm", norm)
     sd["model.norm.weight"] = norm.to(dtype)

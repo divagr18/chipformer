@@ -165,7 +165,7 @@ def row(e: Expr, lay: Layout, out: torch.Tensor, w: float = 1.0) -> None:
 
 def check_bf16(name: str, t: torch.Tensor) -> None:
     b = t.to(torch.bfloat16).to(t.dtype)
-    bad = (b != t).nonzero()
+    bad = ((b != t) | ~torch.isfinite(b)).nonzero()  # (a weight beyond bf16 rounds to inf)
     if len(bad):
         i = tuple(bad[0].tolist())
         raise ValueError(f"{name}: weight {t[i].item()!r} at {i} is not a bf16 value")

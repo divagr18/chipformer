@@ -246,8 +246,9 @@ def neg(terms):
     return [(-coef, a, b) for coef, a, b in terms]
 
 
-XS = 64  # counters come out as x = 2^(XS - n): large n stays a normal float in the residual,
-# and the thresholds' weights 2^(m + 2 - XS) stay inside bf16 after the norm's scale
+XS = 26  # counters come out as x = 2^(XS - n): large n stays a normal float in the residual and
+# the thresholds' gate weights 2^(m + 2 - XS) * K / (norm scale ~2^-36) <= 2^124 stay inside bf16
+# (m <= 106), while x^2 <= 2^52 vanishes next to the ballast's square (~2^84) of every RMSNorm
 
 
 def counter(c, name, reset, count, tiny=2.0**-118):
