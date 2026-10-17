@@ -173,7 +173,7 @@ def pick_hidden(base: int, n_chip: int) -> tuple[int, int]:
 
 
 def build_merged(src, dst, hidden: int | None = None, m: int | None = None,
-                 mute_qwen: bool = True):
+                 mute_qwen: bool = True, overlay: bool = True):
     """Write Qwen3.5 + the CHIP-8 circuit as one checkpoint ("v2" layout); returns (circuit,
     layout).
 
@@ -181,6 +181,9 @@ def build_merged(src, dst, hidden: int | None = None, m: int | None = None,
     class (chip token, or one of bridge.py's text classes); the last chip sublayer clears all
     of it, leaving each token's Qwen part, mu (1 on chip tokens), the output code and tau, so
     Qwen's layers see their usual input on text and a muted, empty token at chip positions.
+
+    With ``overlay`` the circuit dims that only chip tokens need live in Qwen's dims
+    (overlay.py), which makes the checkpoint much narrower.
     """
     from safetensors.torch import save_file
     from transformers import AutoTokenizer
@@ -198,10 +201,16 @@ def build_merged(src, dst, hidden: int | None = None, m: int | None = None,
     keep = set(c.keep)
     code = [next(iter(e.terms)) for e in c.code]
     tau, mu = next(iter(c.tau.terms)), next(iter(c.mu.terms))
-    alloc = allocate(c, None, keep, inter)
+    plan = None
+    if overlay:
+        from chipformer.q35 import overlay as ov
+
+        plan = ov.build(c, keep)
+        print(plan.summary(), flush=True)
+    alloc = allocate(c, None, keep, inter, overlay=plan.dims if plan else None, overlay_cap=d0)
     if hidden is None:
         hidden, m = pick_hidden(d0, 1 + alloc.n_slots)
-    lay = Layout(hidden=hidden, off=d0, m=m, slots=alloc.slots)
+    lay = Layout(hidden=hidden, off=d0, m=m, slots=alloc.slots, over=alloc.over)
     assert d0 + m + 1 + alloc.n_slots <= hidden, (alloc.n_slots, hidden)
     lay.scale  # noqa: B018 - asserts m * B^2 / hidden is a power of 4
 
@@ -223,7 +232,7 @@ def build_merged(src, dst, hidden: int | None = None, m: int | None = None,
         dev = "cuda" if torch.cuda.is_available() else "cpu"
         sinks = fit_anti_sink(src, dev)
         mute(sd, tc, n0, lay.dim(mu), hidden**0.5, sinks=sinks, first=n_chip)
-    layers = emit_layers(c, lay, tc, 0, TEXT, alloc, keep)
+    layers = emit_layers(c, lay, tc, 0, TEXT, alloc, keep, chip=c.mu)
     sd.update({k: v.to(torch.bfloat16) for k, v in layers.items()})
     del layers
 
@@ -292,7 +301,8 @@ def build_merged(src, dst, hidden: int | None = None, m: int | None = None,
     meta = {"layout": "v2", "chip_token_offset": v0, "chip_vocab": spec.VOCAB_SIZE,
             "chip_layers": n_chip, "qwen_layers_from": n_chip, "hidden": hidden,
             "chip_dims_offset": d0, "ballast_dims": m, "circuit": c.stats(),
-            "slots": alloc.n_slots, "muted": mute_qwen,
+            "slots": alloc.n_slots, "overlay_slots": len(alloc.final_over),
+            "overlay": plan.summary() if plan else None, "muted": mute_qwen,
             "text_ids": {str(k): v for k, v in text_ids.items()}}
     (dst / "chipformer.json").write_text(json.dumps(meta, indent=2))
     return c, lay
@@ -307,8 +317,11 @@ def main() -> None:
     ap.add_argument("--hidden", type=int, default=None)
     ap.add_argument("--ballast", type=int, default=None)
     ap.add_argument("--no-mute", action="store_true", help="leave Qwen's layers active on chip tokens")
+    ap.add_argument("--no-overlay", action="store_true",
+                    help="give every circuit dim its own dim (the v15 layout, much wider)")
     args = ap.parse_args()
-    c, lay = build_merged(args.src, args.out, args.hidden, args.ballast, not args.no_mute)
+    c, lay = build_merged(args.src, args.out, args.hidden, args.ballast, not args.no_mute,
+                          not args.no_overlay)
     print(f"{args.out}: hidden {lay.hidden}, {c.n_layers()} chip layers, {c.stats()}")
 
 

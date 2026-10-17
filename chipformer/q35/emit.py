@@ -5,6 +5,9 @@ merged model):
 
     [ballast x m] [tau] [IR dims 1..n-1] [unused]
 
+With an overlay (overlay.py), circuit dims that live only on chip tokens use Qwen's dims instead,
+from ``off - 1`` down, next to the chip region.
+
 Chip tokens carry ``B`` in every ballast dim. With m * B^2 / hidden a power of 4, every RMSNorm
 on a chip token divides by exactly sqrt(m / hidden) * B, so a residual value x reaches the
 projections as x * c with c = sqrt(hidden / m) / B, a power of 2; weights carry 1 / c. The IR
@@ -27,6 +30,7 @@ class Layout:
     m: int = 1  # ballast dims
     log2_ballast: int = 40
     slots: dict[int, int] | None = None  # IR dim -> residual slot, when slots are reused
+    over: dict[int, int] | None = None  # IR dim -> overlay slot (the Qwen dim off - 1 - slot)
 
     @property
     def ballast(self) -> float:
@@ -46,6 +50,8 @@ class Layout:
 
     def dim(self, d: int) -> int:
         """Residual index of IR dim d >= 1."""
+        if self.over and d in self.over:
+            return self.off - 1 - self.over[d]
         if self.slots is not None:
             return self.off + self.m + 1 + self.slots[d]
         return self.off + self.m + d
@@ -65,6 +71,8 @@ class Alloc:
     subtract: dict[int, int] = field(default_factory=dict)  # FFN-defined dim -> old dim
     clears: dict[int, list[int]] = field(default_factory=dict)  # MLP level -> old dims
     final: list[int] = field(default_factory=list)  # each slot's last owner
+    over: dict[int, int] = field(default_factory=dict)  # overlay dims -> overlay slot
+    final_over: list[int] = field(default_factory=list)  # each overlay slot's last owner
 
 
 def reads(n) -> list[int]:
@@ -74,11 +82,14 @@ def reads(n) -> list[int]:
     return [d for e in exprs for d in e.terms]
 
 
-def allocate(g: Graph, clearable: set[int] | None, keep: set[int], unit_cap: int) -> Alloc:
+def allocate(g: Graph, clearable: set[int] | None, keep: set[int], unit_cap: int,
+             overlay: set[int] | None = None, overlay_cap: int = 0) -> Alloc:
     """Assign slots; dims in ``keep`` are never handed over (outputs read by the lm_head).
 
     A handover clears the old value with one "a-form" unit, -x * relu(ONE), exact for any bf16
-    x, so every dim is clearable unless ``clearable`` restricts it.
+    x, so every dim is clearable unless ``clearable`` restricts it. Dims in ``overlay`` go to
+    a second pool of at most ``overlay_cap`` slots (Qwen's dims, see overlay.py), and only share
+    slots with each other; once it is full they fall back to the chip region.
     """
     top = max(n.level for n in g.nodes) + 1
     last = {d: g.dims[d].level for d in range(1, len(g.dims))}
@@ -90,27 +101,33 @@ def allocate(g: Graph, clearable: set[int] | None, keep: set[int], unit_cap: int
         last[d] = top
     units = dict(g.units)
     slots: dict[int, int] = {}
-    owner: list[int] = []  # slot -> current dim
+    pools: tuple[list[int], list[int]] = ([], [])  # slot -> current dim: chip region, overlay
     a = Alloc(slots, 0)
 
     def take(d, level, by_ffn):
-        for s, o in enumerate(owner):
-            if o in keep or (clearable is not None and o not in clearable):
-                continue
-            born = g.dims[o].level  # the old value must already be in the sublayer's input
-            if by_ffn and last[o] <= level and born < level and units.get(level, 0) < unit_cap:
-                units[level] = units.get(level, 0) + 1
-                a.subtract[d] = o
-            elif not by_ffn and last[o] <= level - 1 and born < level - 1 and level >= 3                     and units.get(level - 1, 0) < unit_cap:
-                units[level - 1] = units.get(level - 1, 0) + 1
-                a.clears.setdefault(level - 1, []).append(o)
-            else:
-                continue
-            owner[s] = d
-            slots[d] = s
-            return
-        slots[d] = len(owner)
-        owner.append(d)
+        for pool in (1, 0) if overlay is not None and d in overlay else (0,):
+            owner = pools[pool]
+            for s, o in enumerate(owner):
+                if o in keep or (clearable is not None and o not in clearable):
+                    continue
+                born = g.dims[o].level  # the old value must already be in the sublayer's input
+                if (by_ffn and last[o] <= level and born < level
+                        and units.get(level, 0) < unit_cap):
+                    units[level] = units.get(level, 0) + 1
+                    a.subtract[d] = o
+                elif (not by_ffn and last[o] <= level - 1 and born < level - 1 and level >= 3
+                      and units.get(level - 1, 0) < unit_cap):
+                    units[level - 1] = units.get(level - 1, 0) + 1
+                    a.clears.setdefault(level - 1, []).append(o)
+                else:
+                    continue
+                owner[s] = d
+                (a.over if pool else slots)[d] = s
+                return
+            if pool == 0 or len(owner) < overlay_cap:
+                (a.over if pool else slots)[d] = len(owner)
+                owner.append(d)
+                return
 
     for d in sorted(g.token_fns):
         take(d, 0, False)
@@ -124,8 +141,9 @@ def allocate(g: Graph, clearable: set[int] | None, keep: set[int], unit_cap: int
     for level in sorted(defined):
         for d, by_ffn in defined[level]:
             take(d, level, by_ffn)
-    a.n_slots = len(owner)
-    a.final = list(owner)
+    a.n_slots = len(pools[0])
+    a.final = list(pools[0])
+    a.final_over = list(pools[1])
     return a
 
 
@@ -180,11 +198,14 @@ def clearable_dims(g: Graph, traces: list[list[int]]) -> set[int]:
 
 
 def emit_layers(g: Graph, lay: Layout, tc: dict, first: int, prefix: str,
-                alloc: Alloc | None = None, keep: set[int] | None = None) -> dict:
+                alloc: Alloc | None = None, keep: set[int] | None = None,
+                chip: Expr | None = None) -> dict:
     """Weights of the chip layers, named ``{prefix}layers.{first + i}.*``.
 
     With ``keep``, the MLP sublayer of the nodes named ``exit.*`` also clears every chip dim
     except ``keep`` (and the ballast), so nothing of the circuit is left for later layers.
+    Overlay slots hold Qwen's embedding on text tokens: their handovers and exit clears are
+    gated by ``chip`` (1 on chip tokens, 0 on text) instead of ONE, so text keeps it.
     """
     h, nk, nv = tc["hidden_size"], tc["linear_num_key_heads"], tc["linear_num_value_heads"]
     inter = tc["intermediate_size"]
@@ -198,8 +219,10 @@ def emit_layers(g: Graph, lay: Layout, tc: dict, first: int, prefix: str,
     if keep is not None:
         exit_level = max(n.level for n in g.nodes if n.name.startswith("exit."))
         assert all(n.level < exit_level for n in g.nodes if not n.name.startswith("exit."))
-        live = alloc.final if alloc else list(range(1, len(g.dims)))
+        live = (alloc.final + alloc.final_over) if alloc else list(range(1, len(g.dims)))
         exit_clear = [d for d in live if d not in keep]
+    over = alloc.over if alloc else {}
+    assert chip is not None or not over, "an overlay needs the chip-token gate"
     for L in range(g.n_layers()):
         p = f"{prefix}layers.{first + L}."
         qkv = torch.zeros(2 * nk * HD + nv * HD, h, dtype=f32)
@@ -227,17 +250,22 @@ def emit_layers(g: Graph, lay: Layout, tc: dict, first: int, prefix: str,
             for col, d, w in n.out:
                 ow[lay.dim(d), vh * HD + col] += w
         one = Expr({ONE: 1})
+
+        def clear_gate(d):
+            return chip if d in over else one
+
         units = []  # (coef, a, b, output dim)
         for n in g.nodes:
             if not (isinstance(n, FFN) and n.level == 2 * L + 2):
                 continue
             units += [(coef, a, b, n.out) for coef, a, b in n.terms]
             if alloc and n.out in alloc.subtract:  # hand the slot over: remove the old value
-                units.append((-1, Expr({alloc.subtract[n.out]: 1}), one, n.out))
-        units += [(-1, Expr({o: 1}), one, o) for o in (alloc.clears.get(2 * L + 2, [])
-                                                       if alloc else [])]
+                old = alloc.subtract[n.out]
+                units.append((-1, Expr({old: 1}), clear_gate(old), n.out))
+        units += [(-1, Expr({o: 1}), clear_gate(o), o)
+                  for o in (alloc.clears.get(2 * L + 2, []) if alloc else [])]
         if exit_level == 2 * L + 2:
-            units += [(-1, Expr({o: 1}), one, o) for o in exit_clear]
+            units += [(-1, Expr({o: 1}), clear_gate(o), o) for o in exit_clear]
         assert len(units) <= inter, (L, len(units), inter)
         for u, (coef, a, b, d) in enumerate(units):
             row(b, lay, gate[u], K)
