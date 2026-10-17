@@ -164,10 +164,17 @@ class Src:
         """A jump target below 0x400 for BADD / BSUB, forwarding to ``target``."""
         return self.pads.setdefault(target, f"pad_{len(self.pads)}")
 
-    def source(self, features) -> str:
-        """The source of a profile: the blocks of these features, and what they use."""
-        blocks = [b for f, b in self.blocks if f in features and f != "core"]
-        pool = [b for f, b in self.blocks if f == "core"]
+    def source(self, features, swap=None) -> str:
+        """The source of a profile: the blocks of these features, and what they use.
+        ``swap`` maps a block's first label to a function rewriting its lines."""
+        swap = swap or {}
+
+        def sw(b):
+            m = re.match(r"([A-Za-z_][\w.]*):", b[0]) if b else None
+            return swap[m[1]](b) if m and m[1] in swap else b
+
+        blocks = [sw(b) for f, b in self.blocks if f in features and f != "core"]
+        pool = [sw(b) for f, b in self.blocks if f == "core"]
 
         def code(bs):  # the identifiers the code uses (comments left out)
             return set(re.findall(r"[A-Za-z_][\w.]*", "\n".join(
@@ -2421,14 +2428,16 @@ def call_writes(op: str, a, b="0", mode: int = 0, frac: int = 0,
 
 
 def run(op: str, a, b="0", mode: int = 0, frac: int = 0, neg: bool = False,
-        limit: int = 400_000):
-    """Run one call on the reference (BridgeMachine with the library ROM): (the printed
-    cells as text, the trace tokens from the CALL record to the print, the machine)."""
+        limit: int = 400_000, machine=None):
+    """Run one call on the reference (BridgeMachine with the library ROM; or ``machine`` =
+    (a machine class, a ROM)): (the printed cells as text, the trace tokens from the CALL
+    record to the print, the machine)."""
     from chipformer import spec
     from chipformer.q35 import bridge as Bq
     from chipformer.trace import encode_writes
 
-    bm = Bq.BridgeMachine(ROMS[PROFILE_OF[op]], bcd.QUIRKS)
+    cls, rom = machine or (Bq.BridgeMachine, ROMS[PROFILE_OF[op]])
+    bm = cls(rom, bcd.QUIRKS)
     bm.text(3)
     n0 = len(bm.tokens)
     w = call_writes(op, a, b, mode, frac, neg)

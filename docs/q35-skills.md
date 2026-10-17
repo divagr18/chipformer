@@ -338,3 +338,62 @@ at 100% up to its digit limits.
 7. **8-bit BIOS maths.** Digit estimates (sqrt, Briggs normalisation) work on values up to 999
    in 8-bit registers. Use the 10H + L split as the circuit does, or two-register arithmetic, and
    fuzz the boundaries.
+
+## 9. Status: the BIOS-only library (measured)
+
+`lib/mathlib.py` implements every routine in §3's P3-P5 rows, plus gcd, lcm, mod and floor-div,
+on today's macros and plain CHIP-8, with no circuit change. `lib/macros_next.py` holds reference
+semantics for three proposed macros. `lib/mathlib_next.py` is the same library using them.
+
+**Exactness.** All 19 entries match Python (integers, `math`, `decimal` at 80 digits) on 3,720
+random cases, 0 wrong (`tests/test_q35_mathlib.py` keeps a seeded subset, edge cases and trace
+budgets). Truncated decimals are compared digit for digit.
+
+**ROM.** The routines total about 4.5 KB, more than CHIP-8's free address space even after moving
+the slots to 0x0A0-0x1FF and the print buffer to 0x000. So the library builds two profiles behind
+one fixed jump table at 0x2AE:
+- `numbers`: pow, fact, npr, ncr, idiv, mod, gcd, lcm, spf, to_base, from_base, isqrt, sqrt.
+  2,375 nonzero bytes, 526 free.
+- `analysis`: log10, ln, log2, logb, exp10, exp. 2,574 nonzero bytes, 214 free.
+
+An entry outside the loaded profile prints "...". The boot record grows by about 2 tokens per
+ROM byte (prefill only).
+
+**Trace tokens.** The table shows this doc's example sizes. "BIOS" uses today's macros; "+macros"
+adds BMOV, BSDIV and BSHAD. Both print the same.
+
+| call | §3 estimate | BIOS | +macros |
+|---|---|---|---|
+| 7^20 / 2^64 / 3^100 | 1.3k / 1-1.5k / 4k | 3.3k / 3.7k / 6.8k | 2.4k / 2.6k / 5.1k |
+| 20! | 0.8k (BSMAD) | 10.7k | 7.9k |
+| C(50, 25) | 1.8k | 41k | 38k |
+| gcd of 12-digit numbers | 2.8k (BMOV) | 43k | 34k |
+| 12 / 4 digit mod | 250 | 1.0k | 1.0k |
+| spf of a prime near 10^6 | 20k (BSDIV) | 366k | 366k |
+| 12 digits to binary / hex | 1.4k / 0.4k | 12.4k / 16k | 6.2k / 6.4k |
+| 24 bits to decimal | ~0.7k | 7.4k | 7.2k |
+| sqrt, 6 digits to 10 decimals | 4-5k | 7.9k | 7.9k |
+| log10 / ln (12 digits) | 14k BIOS, 3.5k BSHAD | 26k / 28k | 11k / 12k |
+| log_7 | 2 logs + div | 58k | 26k |
+| e^x / 10^x | as log | 35k / 28k | 18k / 15k |
+
+**Where the tokens go.** These figures come from profiling by routine:
+- Copies of a result into A or B take 35-55% of pow, fact and gcd.
+- The y copy in Briggs' loop takes 45% of log10.
+- dvm's setup is 50-70% of gcd, ncr and spf: zeroing W, copying the dividend, closing the
+  quotient gap and trimming.
+- Digit conversion of small factors is 25% of fact.
+
+**Proposed macros, in order of savings:**
+1. **BSHAD 5XYE.** Briggs' whole pseudo-division as one repeating instruction (Y = 0), and exp's
+   multiply-up (Y = 1). It cuts log, exp and logb to 41-50%.
+2. **BSDIV 5X09.** Short division in place by 2-25. It cuts to_base to 43%, and would run the small
+   primes of spf at one record each.
+3. **BMOV 5X0B.** Moves the result at I/V0 into A or B. It cuts pow, fact and gcd to 74-82%.
+
+**What these three leave.** The remaining costs need a fourth macro. The best candidate is an
+integer mode for BDIV, which would stop at the units digit and write the quotient contiguously.
+Together with a BMOV into W, it would remove dvm's setup, its gap move and the 10-digit pad.
+That is the largest remaining cost in gcd, lcm, ncr, spf, idiv and mod. After it come BSMAD
+(fact, from_base) and a summing variant of BSHAD for log's sum of `CNT[k] L_k`, which is about 40%
+of log10 once BSHAD lands.
