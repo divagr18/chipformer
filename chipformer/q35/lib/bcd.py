@@ -13,6 +13,7 @@ from chipformer import spec
 from chipformer.q35.lib.asm import assemble
 
 A_ADDR, B_ADDR, LEN, R_ADDR = 0x600, 0x620, 0x640, 0x660
+MODE = LEN + 2  # 1: an inline call (prints " digits"), 0: a tool call (<tool_response>)
 T10, MUL, DIV, MOD = 0x700, 0x710, 0x780, 0x800
 MAX_DIGITS = 24
 QUIRKS = ("loadstore",)  # FX55/FX65 leave I unchanged
@@ -26,7 +27,7 @@ add:    badd                    ; macro: R = A + B, v7 = length
 
 ; ---------------------------------------------------------------- sub: R = A - B (A >= B)
 sub:    bsub                    ; macro: R = A - B, v7 = length
-        jp print1
+        jp sub_chk
 
 ; ---------------------------------------------------------------- mul: R = A * B
 mul:    bzero                   ; macro: R = 0, v7 = LA + LB
@@ -52,6 +53,14 @@ print1: ld i, {R_ADDR}
         add v0, 0xff
         print                   ; R[1..v7)
 pr_all: ld v0, v7
+        print
+
+; ---------------------------------------------------------------- sub: A < B prints nothing
+sub_chk: ld i, {R_ADDR}
+        ld v0, [i]
+        se v0, 9                ; R[0] = 9 iff the subtraction borrowed out
+        jp print1
+        ld v0, 0
         print
 
 ; ---------------------------------------------------------------- print R[0..v7), no leading 0s
@@ -83,9 +92,9 @@ OPS = {"add": LABELS["add"], "mul": LABELS["mul"], "sub": LABELS["sub"]}
 assert OPS == {"add": 0x202, "sub": 0x206, "mul": 0x20A}, OPS
 
 
-def call_writes(op: str, a: str, b: str) -> list[tuple[int, int]]:
-    """The writes of a CALL record: the arguments' digits, their lengths, then PC."""
+def call_writes(op: str, a: str, b: str, mode: int = 0) -> list[tuple[int, int]]:
+    """The writes of a CALL record: the arguments' digits, their lengths, the mode, then PC."""
     da, db = [int(ch) for ch in a], [int(ch) for ch in b]
     assert 1 <= len(da) <= MAX_DIGITS and 1 <= len(db) <= MAX_DIGITS, (a, b)
     w = [(A_ADDR + i, d) for i, d in enumerate(da)] + [(B_ADDR + i, d) for i, d in enumerate(db)]
-    return w + [(LEN, len(da)), (LEN + 1, len(db)), (spec.PC, OPS[op])]
+    return w + [(LEN, len(da)), (LEN + 1, len(db)), (MODE, mode), (spec.PC, OPS[op])]

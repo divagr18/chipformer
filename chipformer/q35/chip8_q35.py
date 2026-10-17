@@ -112,6 +112,7 @@ def build(target: Target | None = None) -> Chip8Q35:
     regs += [(f"key{k:X}", spec.KEYS + k, 1) for k in range(16)]
     regs += [(f"q.{q}", spec.QUIRKS + i, 1) for i, q in enumerate(spec.QUIRK_NAMES)]
     regs += [("LA", bios.LEN, 5), ("LB", bios.LEN + 1, 5)]  # bignum argument lengths
+    regs += [("MODE", bios.MODE, 1)]  # the current call is inline
     keys, data, col, blocks = {127: Chan(c.is_boot)}, {}, 2, {}
     for slot, (name, cell, nb) in enumerate(regs):
         keys[slot] = c.write_key(cell)
@@ -127,6 +128,7 @@ def build(target: Target | None = None) -> Chip8Q35:
     pcb, ib, spb, dtb, stb, rngb, v0b = (R[k] for k in ("PC", "I", "SP", "DT", "ST", "RNG", "V0"))
     keyb = [R[f"key{k:X}"][0] for k in range(16)]
     lab, lbb = R["LA"], R["LB"]
+    mode = R["MODE"][0]
     q = {name: R[f"q.{name}"][0] for name in spec.QUIRK_NAMES}
 
     # ------------------------------------------------------------ micro-step counter
@@ -148,31 +150,50 @@ def build(target: Target | None = None) -> Chip8Q35:
     (in_tick,) = c.slot_head("in_tick", {0: rs + c.is_tick}, {0: one}, {2: c.is_tick},
                              rs + c.is_tick)
 
-    # ------------------------------------------------------------ tool-call capture
-    # Inside <tool_call> ... </tool_call> the circuit keeps the routine's name and the digits of
-    # each argument (runs of digit tokens, in order) for the CALL record it writes afterwards.
-    is_dig = sum((c.text[B.HEX[v]] for v in range(10)), Expr())
-    dvb = [sum((c.text[B.HEX[v]] for v in range(10) if v >> i & 1), Expr()) for i in range(4)]
-    fns = {op: c.text[cls] for op, cls in B.FUNCS.items()}
+    # ------------------------------------------------------------ argument capture
+    # Tool calls: inside <tool_call> ... </tool_call> the circuit keeps the routine's name and
+    # the digits of each argument (runs of digit tokens, in order) for the CALL record.
+    # Inline: outside tool calls it keeps the same for "A op B" since the last breaker token, and
+    # answers at "=" (bridge.InlineScan is the reference).
+    T = c.text
+    is_dig = sum((T[B.HEX[v]] for v in range(10)), Expr())
+    dvb = [sum((T[B.HEX[v]] for v in range(10) if v >> i & 1), Expr()) for i in range(4)]
+    fns = {op: T[cls] for op, cls in B.FUNCS.items()}
     fn_any = sum(fns.values(), Expr())
     (in_call,) = c.slot_head("in_call", {0: tco + tcc + rs}, {0: one}, {2: tco}, tco + tcc + rs)
-    (prev_dig,) = c.slot_head("prev_digit", {0: one}, {0: one}, {2: Chan(is_dig, (0, 1, 0, 0))},
-                              one)
-    run_start = c.and_([is_dig, one - prev_dig, in_call], "arg.start")
-    cont = c.and_([is_dig, prev_dig, in_call], "arg.cont")
-    (xp,) = c.slot_head("arg.count", {0: tco, 1: one - tco}, {0: one - tco, 1: one - tco},
-                        {2: tco}, one - tco, 110 * run_start + 238 * tco, tiny=2.0**-90)
+    safe = T[B.SPACE] + T[B.NL] + T[B.DOLLAR] + T[B.LPAREN] + c.mu  # may precede a first number
+    prev_cols = {2: Chan(is_dig, (0, 1, 0, 0)), 3: Chan(is_dig, (0, 0, 1, 0)),
+                 4: Chan(T[B.COMMA], (0, 1, 0, 0)), 5: Chan(T[B.BSL], (0, 1, 0, 0)),
+                 6: Chan(safe, (0, 1, 0, 0)), 7: Chan(c.is_text, (0, 1, 0, 0))}
+    prev_dig, prev2_dig, prev_cm, prev_bs, prev_safe, prev_text = c.slot_head(
+        "prev", {0: one}, {0: one}, prev_cols, one)
+    cont = c.node(c.t_and([is_dig, prev_dig]) + c.t_and([is_dig, prev_cm, prev2_dig]), "arg.cont")
+    run_start = c.node(c.t_and([is_dig, one - prev_dig, one - prev_cm])
+                       + c.t_and([is_dig, prev_cm, one - prev2_dig]), "arg.start")
+    tw_op = c.and_([T[B.TIMESW], prev_bs], "times.op")  # \\times, \\cdot
+    inl = {"add": T[B.PLUS], "sub": T[B.MINUS], "mul": T[B.TIMES] + tw_op}
+    op_tok = sum(inl.values(), Expr())
+    comma_join = c.and_([T[B.COMMA], prev_dig], "comma.join")
+    neutral = (is_dig + T[B.SPACE] + T[B.DOLLAR] + T[B.LPAREN] + T[B.BSL] + T[B.EQ] + op_tok
+               + comma_join)
+    brk = one - neutral  # chip tokens included
+    reset = c.node(c.t_and([tco]) + c.t_and([brk - tco, one - in_call]), "arg.reset")
+    (xp,) = c.slot_head("arg.count", {0: reset, 1: one - reset}, {0: one - reset, 1: one - reset},
+                        {2: reset}, one - reset, 110 * run_start + 238 * reset, tiny=2.0**-90)
     (xd,) = c.slot_head("digit.count", {0: run_start, 1: one - run_start},
                         {0: one - run_start, 1: one - run_start}, {2: run_start},
                         one - run_start, 110 * cont + 238 * run_start, tiny=2.0**-90)
+    (xo,) = c.slot_head("op.count", {0: brk, 1: one - brk}, {0: one - brk, 1: one - brk},
+                        {2: brk}, one - brk, 110 * op_tok + 238 * brk, tiny=2.0**-90)
 
     def thermo(xv, gate, n, name):  # [count > m] for m < n, from x = 2^-count
         return [c.node([(1, one - gate, 7 * one - 8 * 2**m * xv),
                         (-1, one - gate, 6 * one - 8 * 2**m * xv)], f"{name}>{m}")
                 for m in range(n)]
 
-    cp = thermo(xp, tco, 3, "p")  # p = argument number (1, 2)
+    cp = thermo(xp, reset, 3, "p")  # p = argument number (1, 2)
     cd = thermo(xd, run_start, B.MAX_ARG + 1, "d")  # d = digit index within the argument
+    co = thermo(xo, brk, 2, "ops")  # operators since the last breaker
 
     def peq(v):
         return cp[v - 1] - cp[v]
@@ -181,7 +202,8 @@ def build(target: Target | None = None) -> Chip8Q35:
         return (one if w == 0 else cd[w - 1]) - cd[w]
 
     # lengths and the routine: slots 0/1 = length of argument 1/2 (rewritten at every digit),
-    # slot 2 = the routine (at its name token), slot 127 = ballast (at <tool_call>)
+    # slot 2 = the routine (at its name token, or the inline operator) and whether it came right
+    # after the first argument, slot 127 = ballast
     len_bits = [sum((deq(w) for w in range(B.MAX_ARG) if (w + 1) >> i & 1), Expr())
                 for i in range(5)]
     data = {}
@@ -190,11 +212,21 @@ def build(target: Target | None = None) -> Chip8Q35:
             data[2 + 5 * (a_ - 1) + i] = is_dig + peq(a_) + len_bits[i] - 2
     ops = list(B.FUNCS)
     for i, op in enumerate(ops):
-        data[12 + i] = fns[op]
-    lk = {0: is_dig + in_call + peq(1) - 2, 1: is_dig + in_call + peq(2) - 2,
-          2: fn_any + in_call - 1, 127: tco}
-    out = c.slot_head("call.args", lk, {0: one, 1: one, 2: one, 127: one}, data, tco)
+        data[12 + i] = fns[op] + inl[op]
+    at_fn = c.node(c.t_and([fn_any, in_call]) + c.t_and([op_tok, one - in_call]), "op.at")
+    data[12 + len(ops)] = at_fn + peq(1) - 1
+    lk = {0: is_dig + peq(1) - 1, 1: is_dig + peq(2) - 1, 2: at_fn, 127: brk - fn_any}
+    out = c.slot_head("call.args", lk, {0: one, 1: one, 2: one, 127: one}, data, brk - fn_any)
     la_bits, lb_bits, op_oh = out[0:5], out[5:10], out[10:10 + len(ops)]
+    op_ok = out[10 + len(ops)]
+    (a_safe,) = c.slot_head("a.safe", {0: run_start + peq(1) - 1}, {0: one}, {2: prev_safe},
+                            run_start + peq(1) - 1)
+    la_, lb_ = from_bits(la_bits), from_bits(lb_bits)
+    trig = c.and_([T[B.EQ], one - in_call, peq(2), co[0] - co[1], op_ok, a_safe,
+                   c.node(c.t_ge(la_, 1, 0, 31), "la>0"), c.node(c.t_ge(lb_, 1, 0, 31), "lb>0"),
+                   sum(op_oh, Expr())], "inline.trig")
+    # 1 from an inline trigger until the next text token: the mode of the CALL record
+    (inline_mode,) = c.slot_head("inline.mode", {0: c.is_text}, {0: one}, {2: trig}, c.is_text)
 
     # ------------------------------------------------------------ display bytes ("old")
     disp_q = {}
@@ -507,8 +539,8 @@ def build(target: Target | None = None) -> Chip8Q35:
     kI_lo = from_bits(k["I"][:8])
     i_j = bits12(c.add12(kI_lo, k["Ihi"], j, JMAX + 1, "I+j"))
     # vread address: I + j (FX65), I + j // 2 (DXYN) or I + j - 3 (the digits of a print)
-    d = c.node([(1, k["fx65"][0], j), (1, k["dxyn"][0], row_i), (1, k["fd"][0], j - 3 * one)],
-               "vec_off")
+    d = c.node([(1, k["fx65"][0], j), (1, k["dxyn"][0], row_i),
+                (1, k["fd"][0], j - 3 * one + 2 * mode)], "vec_off")
     qa = c.add12(kI_lo, k["Ihi"], d, JMAX + 1, "vread_addr")
     vread = [Expr() for _ in range(8)]
     ram_read = k["fx65"][0] + k["dxyn"][0] + k["fd"][0]
@@ -567,18 +599,22 @@ def build(target: Target | None = None) -> Chip8Q35:
     # At </tool_call> (with a known routine) the circuit writes the arguments' digits to RAM,
     # their lengths, then PC = the routine, then STEP; the machine then runs the routine.
     op_valid = sum(op_oh, Expr())
-    (calling,) = c.slot_head("calling", {0: tcc + rs}, {0: one}, {2: tcc + op_valid - 1},
-                             tcc + rs)
+    # a tool call starts its record at </tool_call>; an inline one predicts STEP at "=" and starts
+    # at that STEP (so j can stay a plain token-feature counter)
+    call_val = c.node(c.t_and([tcc, op_valid]) + c.t_and([rs, inline_mode, prev_text]), "call.v")
+    (calling,) = c.slot_head("calling", {0: tcc + rs + trig}, {0: one}, {2: call_val + trig},
+                             tcc + rs + trig)
+    neq = one - T[B.EQ]
     la, lb = from_bits(la_bits), from_bits(lb_bits)
     za, zz = j - la, j - la - lb
     in_a = c.node(c.t_lt(za, 0, -B.MAX_ARG, JMAX + 1), "call.in_a")
     in_b = c.node(c.t_ge(za, 0, -B.MAX_ARG, JMAX + 1)
                   + c.t_ge(zz, 0, -2 * B.MAX_ARG, JMAX + 1, -1), "call.in_b")
-    ez = [c.node(c.t_eq(zz, v, -2 * B.MAX_ARG, JMAX + 1), f"call.e{v}") for v in range(4)]
+    ez = [c.node(c.t_eq(zz, v, -2 * B.MAX_ARG, JMAX + 1), f"call.e{v}") for v in range(5)]
     q_a = [c.and_([jeq(w), in_a], f"call.qa{w}") for w in range(B.MAX_ARG)]
     q_b = [c.node(c.t_eq(za, w, -B.MAX_ARG, JMAX + 1, lits=[in_b]), f"call.qb{w}")
            for w in range(B.MAX_ARG)]
-    keys = {32 * (a_ - 1) + w: is_dig + in_call + peq(a_) + deq(w) - 3
+    keys = {32 * (a_ - 1) + w: is_dig + peq(a_) + deq(w) - 2
             for a_ in (1, 2) for w in range(B.MAX_ARG)}
     query = {**{w: q_a[w] for w in range(B.MAX_ARG)},
              **{32 + w: q_b[w] for w in range(B.MAX_ARG)}}
@@ -590,17 +626,20 @@ def build(target: Target | None = None) -> Chip8Q35:
     b_addr = [bios.B_ADDR >> i & 1 if i >= 5 else b_addr[i] for i in range(13)]
     entry = [sum((op_oh[k_] for k_, op in enumerate(ops) if bios.OPS[op] >> i & 1), Expr())
              for i in range(12)]
-    case([at_addr, calling, in_a], 1, a_addr)
+    case([trig], 2, 0)
+    case([at_addr, calling, neq, in_a], 1, a_addr)
     case([at_val, calling, in_a], 0, digit_bits)
-    case([at_addr, calling, in_b], 1, b_addr)
+    case([at_addr, calling, neq, in_b], 1, b_addr)
     case([at_val, calling, in_b], 0, digit_bits)
-    case([at_addr, calling, ez[0]], 1, bios.LEN)
+    case([at_addr, calling, neq, ez[0]], 1, bios.LEN)
     case([at_val, calling, ez[0]], 0, la_bits)
-    case([at_addr, calling, ez[1]], 1, bios.LEN + 1)
+    case([at_addr, calling, neq, ez[1]], 1, bios.LEN + 1)
     case([at_val, calling, ez[1]], 0, lb_bits)
-    case([at_addr, calling, ez[2]], 1, spec.PC)
-    case([at_val, calling, ez[2]], 0, entry)
-    case([at_addr, calling, ez[3]], 2, 0)
+    case([at_addr, calling, neq, ez[2]], 1, bios.MODE)
+    case([at_val, calling, ez[2]], 0, [inline_mode])
+    case([at_addr, calling, neq, ez[3]], 1, spec.PC)
+    case([at_val, calling, ez[3]], 0, entry)
+    case([at_addr, calling, neq, ez[4]], 2, 0)
 
     # ---------------------------------------------------------------- bignum macros
     MD = bios.MAX_DIGITS
@@ -743,15 +782,21 @@ def build(target: Target | None = None) -> Chip8Q35:
                       + c.t_and([big, jeq(lim + dz)]), name)
 
     nl_end, trc, nl_last = zj(3, "print.nl1"), zj(4, "print.trc"), zj(5, "print.nl2")
-    # [3 <= j < 3 + n] = [j >= 3] - [j >= 3 + n]
-    digit = c.node(c.t_and([cnt[2]]) + c.t_ge(z, 3, -255, JMAX + 1, -1, lits=[small])
-                   + c.t_and([big, cnt[lim + 2]], -1), "print.digit")
-    upto = c.node(c.t_lt(z, 6, -255, JMAX + 1, lits=[small])
-                  + c.t_and([big, one - cnt[lim + 5]]), "print.upto")
+    # tool call: [3 <= j < 3 + n] = [j >= 3] - [j >= 3 + n]; inline: [1 <= j < 1 + n]
+    tool = one - mode
+    digit = c.node(c.t_and([cnt[2], tool]) + c.t_ge(z, 3, -255, JMAX + 1, -1, lits=[small, tool])
+                   + c.t_and([big, tool, cnt[lim + 2]], -1)
+                   + c.t_and([cnt[0], mode]) + c.t_ge(z, 1, -255, JMAX + 1, -1, lits=[small, mode])
+                   + c.t_and([big, mode, cnt[lim]], -1), "print.digit")
+    upto = c.node(c.t_lt(z, 6, -255, JMAX + 1, lits=[small, tool])
+                  + c.t_and([big, tool, one - cnt[lim + 5]])
+                  + c.t_lt(z, 1, -255, JMAX + 1, lits=[small, mode])
+                  + c.t_and([big, mode, one - cnt[lim]]), "print.upto")
     in_print = [k["fd"][0], c.is_step + c.is_text, one - calling]
-    code = {cls: TEXT_CODE + cls - B.TEXT_BASE for cls in (B.NL, B.TR_OPEN, B.TR_CLOSE)}
-    for lits, cls in [([jeq(0)], B.NL), ([jeq(1)], B.TR_OPEN), ([jeq(2)], B.NL),
-                      ([nl_end], B.NL), ([trc], B.TR_CLOSE), ([nl_last], B.NL)]:
+    code = {cls: TEXT_CODE + cls - B.TEXT_BASE for cls in (B.NL, B.TR_OPEN, B.TR_CLOSE, B.SPACE)}
+    for lits, cls in [([tool, jeq(0)], B.NL), ([tool, jeq(1)], B.TR_OPEN), ([tool, jeq(2)], B.NL),
+                      ([tool, nl_end], B.NL), ([tool, trc], B.TR_CLOSE), ([tool, nl_last], B.NL),
+                      ([mode, jeq(0)], B.SPACE)]:
         case(in_print + lits, 2, code[cls])
     case(in_print + [digit], 2, list(vread[:4]) + [1])  # TEXT_CODE + low nibble
     # who predicts the next token: the circuit on chip tokens and inside a print, else Qwen

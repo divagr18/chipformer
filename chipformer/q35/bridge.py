@@ -20,7 +20,10 @@ TEXT_BASE = spec.VOCAB_SIZE  # 8708
 HEX = list(range(TEXT_BASE, TEXT_BASE + 16))  # '0'..'9', 'a'..'f'
 NL, TR_OPEN, TR_CLOSE, TC_OPEN, TC_CLOSE, OTHER, FN_ADD, FN_MUL, FN_SUB = range(
     TEXT_BASE + 16, TEXT_BASE + 25)
-N_TEXT = 25
+# inline arithmetic ("37 \\times 43 =", see inline_scan)
+SPACE, EQ, PLUS, MINUS, TIMES, BSL, TIMESW, COMMA, DOLLAR, LPAREN = range(TEXT_BASE + 25,
+                                                                       TEXT_BASE + 35)
+N_TEXT = 35
 FUNCS = {"add": FN_ADD, "mul": FN_MUL, "sub": FN_SUB}  # tool names the circuit answers
 PRINT_OP = 0x00FD
 MAX_PRINT = 58  # digits per print (the write counter tops out at 64)
@@ -30,10 +33,15 @@ MAX_ARG = 24  # digits per tool-call argument
 QWEN_TEXT = {**{TEXT_BASE + i: c for i, c in enumerate("0123456789abcdef")},
              NL: "\n", TR_OPEN: "<tool_response>", TR_CLOSE: "</tool_response>",
              TC_OPEN: "<tool_call>", TC_CLOSE: "</tool_call>", FN_ADD: "add", FN_MUL: "mul",
-             FN_SUB: "sub"}
+             FN_SUB: "sub", SPACE: " ", EQ: " =", PLUS: " +", MINUS: " -", TIMES: " \u00d7",
+             BSL: " \\", TIMESW: "times", COMMA: ",", DOLLAR: "$", LPAREN: "("}
 # other single tokens Qwen generates for the same thing: it writes <function=add> as "=add" and
 # <function=mul> as "=m" "ul", not the way its tokenizer splits the text
-EXTRA_TEXT = {FN_ADD: ["=add"], FN_MUL: ["ul"], FN_SUB: ["=sub", "ub"]}
+# (never for a class the circuit prints: the tied lm_head rows would tie)
+EXTRA_TEXT = {FN_ADD: ["=add"], FN_MUL: ["ul"], FN_SUB: ["=sub", "ub"], EQ: ["="], PLUS: ["+"],
+              MINUS: ["-", " \u2212", "\u2212"], TIMES: ["\u00d7", " *", "*"], BSL: ["\\"],
+              TIMESW: ["cdot"], DOLLAR: [" $", "$$", " $$", " \\$", "\\$"], LPAREN: [" ("]}
+INLINE_OPS = {PLUS: "add", MINUS: "sub", TIMES: "mul"}  # and TIMESW right after BSL: mul
 
 
 def is_text(t: int) -> bool:
@@ -41,9 +49,80 @@ def is_text(t: int) -> bool:
 
 
 def readout(cells: list[int]) -> list[int]:
+    from chipformer.q35.lib import bcd
+
     i, n = cells[spec.I], min(cells[spec.V], MAX_PRINT)
     digits = [HEX[cells[(i + k) & 0xFFF] & 15] for k in range(n)]
+    if cells[bcd.MODE] & 1:  # an inline call: just " digits"
+        return [SPACE, *digits]
     return [NL, TR_OPEN, NL, *digits, NL, TR_CLOSE, NL]
+
+
+class InlineScan:
+    """Which "A op B =" the circuit answers: the reference for its capture logic.
+
+    Text since the last *breaker* token (anything but digits, spaces, operators, "=", "$", "(",
+    a backslash, or a comma right after a digit) must be exactly: digits, one operator, digits,
+    then "=". A comma between digits joins them (1,234). The first number must start after a
+    space, newline, "$", "(" or a chip token, so "2.5 * 3 =" and "x^2 + 1 =" are left alone.
+    Chip tokens are breakers too. Fed every token of the stream, in order.
+    """
+
+    def __init__(self):
+        self.prev = self.prev2 = None  # None: no token yet (treated like a chip token)
+        self.p = self.nops = self.d = 0
+        self.lens = {1: 0, 2: 0}
+        self.digits = {}
+        self.op, self.op_ok, self.a_safe, self.in_call = None, False, False, False
+
+    def feed(self, t: int):
+        """Returns (op, a, b) if the circuit takes over after token t, else None."""
+        prev, prev2 = self.prev, self.prev2
+        self.prev, self.prev2 = t, prev
+        text = is_text(t)
+        dig = text and t in HEX[:10]
+
+        def isd(x):
+            return x is not None and x in HEX[:10]
+
+        if t in (TC_OPEN, TC_CLOSE) or t in (spec.STEP, spec.BOOT):
+            self.in_call = t == TC_OPEN
+        cont = dig and (isd(prev) or (prev == COMMA and isd(prev2)))
+        run_start = dig and not cont
+        tw_op = t == TIMESW and prev == BSL
+        op_tok = t in INLINE_OPS or tw_op
+        neutral = text and (dig or op_tok or t in (SPACE, DOLLAR, LPAREN, BSL, EQ)
+                            or (t == COMMA and isd(prev)))
+        brk = not neutral
+        if t == TC_OPEN or (brk and not self.in_call):
+            self.p = 0
+        if run_start:
+            self.p += 1
+            self.d = 0
+            if self.p == 1:
+                self.a_safe = prev is not None and (not is_text(prev) or prev in (SPACE, NL, DOLLAR,
+                                                                                LPAREN))
+        elif cont:
+            self.d += 1
+        if brk:
+            self.nops = 0
+        if op_tok:
+            self.nops += 1
+        if dig and self.p in (1, 2):
+            self.lens[self.p] = self.d + 1 if self.d < MAX_ARG else 0
+            if self.d < MAX_ARG:
+                self.digits[self.p, self.d] = HEX.index(t)
+        fn = {FN_ADD: "add", FN_MUL: "mul", FN_SUB: "sub"}.get(t)
+        if fn and self.in_call:
+            self.op, self.op_ok = fn, self.p == 1
+        if op_tok and not self.in_call:
+            self.op, self.op_ok = ("mul" if tw_op else INLINE_OPS[t]), self.p == 1
+        if (t == EQ and not self.in_call and self.p == 2 and self.nops == 1 and self.op_ok
+                and self.a_safe and self.lens[1] and self.lens[2] and self.op):
+            a = "".join(str(self.digits[1, w]) for w in range(self.lens[1]))
+            b = "".join(str(self.digits[2, w]) for w in range(self.lens[2]))
+            return self.op, a, b
+        return None
 
 
 class BridgeMachine(Machine):
@@ -52,6 +131,28 @@ class BridgeMachine(Machine):
     def __init__(self, rom: bytes, quirks=None):
         super().__init__(rom, quirks)
         self.halted = False
+        self.scan = InlineScan()
+        for t in self.tokens:
+            self.scan.feed(t)
+
+    def _emit(self, tokens: list[int], generated: bool) -> None:
+        self.fired = None
+        for t in tokens:
+            self.fired = self.scan.feed(t)
+        super()._emit(tokens, generated)
+
+    def qwen(self, classes: list[int]) -> list[tuple[str, str, str]]:
+        """Qwen writes these text tokens one at a time; wherever the circuit answers an inline
+        "A op B =", it takes over (STEP, the CALL record, the routine, the print)."""
+        calls = []
+        for t in classes:
+            self._emit([t], False)
+            if self.fired:
+                calls.append(self.fired)
+                self._call(*self.fired, mode=1)
+                while not self.halted:
+                    self.step()
+        return calls
 
     def step(self):
         if self.halted:
@@ -77,7 +178,6 @@ class BridgeMachine(Machine):
     def tool_call(self, op: str, a: str, b: str) -> None:
         """Qwen calls a library routine with its native syntax; the circuit then writes the
         CALL record (the arguments into RAM, PC = the routine) and the machine runs it."""
-        from chipformer.q35.lib import bcd
 
         def lit(n):
             return [OTHER] * n
@@ -87,9 +187,14 @@ class BridgeMachine(Machine):
                 + [NL] + lit(3) + [NL] + lit(3) + [NL] + db + [NL] + lit(3) + [NL] + lit(3)
                 + [NL, TC_CLOSE])
         self._emit(text, False)
-        w = bcd.call_writes(op, a, b)
+        self._call(op, a, b, mode=0)
+
+    def _call(self, op: str, a: str, b: str, mode: int) -> None:
+        from chipformer.q35.lib import bcd
+
+        w = bcd.call_writes(op, a, b, mode)
         self.emu.apply(w)
-        self._emit(encode_writes(w) + [spec.STEP], True)
+        self._emit([spec.STEP] * mode + encode_writes(w) + [spec.STEP], True)
         self.halted = False
 
 
