@@ -128,7 +128,8 @@ class InlineScan:
             self.op, self.op_ok = ("mul" if tw_op else INLINE_OPS[t]), self.p == 1
         if (t == EQ and not self.in_call and self.p == 2 and self.nops == 1 and self.op_ok
                 and self.a_safe and self.lens[1] and self.lens[2] and self.op
-                and self.lens[1] + self.lens[2] >= INLINE_MIN_DIGITS):
+                and self.lens[1] + self.lens[2] >= INLINE_MIN_DIGITS
+                and not (self.op == "sub" and self.lens[1] < self.lens[2])):
             a = "".join(str(self.digits[1, w]) for w in range(self.lens[1]))
             b = "".join(str(self.digits[2, w]) for w in range(self.lens[2]))
             return self.op, a, b
