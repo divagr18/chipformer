@@ -117,5 +117,19 @@ def test_circuit_random_sessions(circuit):
 
 
 def test_ops_are_fixed():
-    assert {k: v for k, v in bcd.OPS.items() if k != "div"} == {"add": 0x202, "sub": 0x206,
-                                                                  "mul": 0x20A}
+    assert {k: v for k, v in bcd.OPS.items() if k in ("add", "sub", "mul")} == {
+        "add": 0x202, "sub": 0x206, "mul": 0x20A}
+
+
+def test_bld_bsta():
+    """BLD copies VX cells from I into A (B), with the length; BSTA stores A at I."""
+    from chipformer import spec
+
+    cells = [0] * spec.NUM_CELLS
+    cells[0x900:0x905] = [3, 1, 4, 1, 5]
+    cells[spec.I], cells[spec.V + 2], cells[spec.PC] = 0x900, 4, 0x300
+    w = macro_writes(cells, 0x521B)  # bld b, v2
+    assert w == [(bcd.B_ADDR + j, v) for j, v in enumerate([3, 1, 4, 1])] + [
+        (bcd.LEN + 1, 4), (spec.PC, 0x302)]
+    cells[bcd.A_ADDR:bcd.A_ADDR + 3], cells[bcd.LEN] = [9, 8, 7], 3
+    assert macro_writes(cells, 0x500C) == [(0x900, 9), (0x901, 8), (0x902, 7), (spec.PC, 0x302)]

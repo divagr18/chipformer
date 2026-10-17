@@ -23,7 +23,7 @@ def classes(tokens: list[str]) -> list[int]:
         if t.isdigit():
             out += [B.HEX[int(ch)] for ch in t]
         else:
-            out.append(WORDS.get(t, B.OTHER))
+            out.append(WORDS.get(t, B.CLASS_OF.get(t, B.OTHER)))
     return out
 
 
@@ -46,6 +46,7 @@ def printed(bm) -> str:
 
 
 TIMES = [" " + BS, "times", " "]
+EV = "eval"  # a whole expression (test_q35_expr.py)
 CASES = [
     (["$", "12", *TIMES, "34", " =", " "], [("mul", "12", "34")]),
     ([" ", "1", ",", "234", ",", "567", *TIMES, "8", " ="], [("mul", "1234567", "8")]),
@@ -58,13 +59,13 @@ CASES = [
     ([" ", "25", " -", " ", "1", ",", "786", ",", "338", " ="], [("sub", "25", "1786338")]),
     ([" ", "2500", "−", "17860", " ="], [("sub", "2500", "17860")]),
     (["\n\n", "42450", " *", " ", "8376", " ="], [("mul", "42450", "8376")]),
-    ([" ", "2", ".", "55", *TIMES, "300", " ="], []),  # decimal
+    ([" ", "2", ".", "55", *TIMES, "300", " ="], [EV]),  # decimal: an expression
     (["x", "^", "22", " +", " ", "100", " ="], []),  # not a plain first number
-    ([" ", "20", " +", " ", "30", " +", " ", "40", " ="], []),  # chains are Qwen's
-    ([" ", "20", *TIMES, "30", " +", " ", "40", " ="], []),  # precedence
+    ([" ", "20", " +", " ", "30", " +", " ", "40", " ="], [EV]),  # chains: expressions
+    ([" ", "20", *TIMES, "30", " +", " ", "40", " ="], [EV]),
     (["}", *TIMES, "30", " +", " ", "40", " ="], []),  # operator before the first number
     (["-", "50", *TIMES, "30", " ="], []),  # negative
-    ([" ", "50", *TIMES, "-", "30", " ="], []),
+    ([" ", "50", *TIMES, "-", "30", " ="], [EV]),
     (["(", "50", " +", " ", "30", ")", " ="], []),
     ([" ", "12", *TIMES, "3", " ="], []),  # small: Qwen's own
     ([" ", "5", " +", " ", "7", " ="], []),
@@ -87,7 +88,7 @@ CASES = [
 @pytest.mark.parametrize("tokens,want", CASES)
 def test_scan(tokens, want):
     _bm, calls = run(tokens)
-    assert calls == want
+    assert [EV if c[0] == EV else c for c in calls] == want
 
 
 def test_scan_prints_and_chains():

@@ -53,10 +53,11 @@ KINDS = ("base", "merged", "merged_inline", "merged_plain", "pytool_inline", "py
 # (bridge.InlineScan) at "=", the exact result is injected as text " R " (oraclec: " R,RRR ")
 BIOS_KINDS = ("merged", "merged_inline")  # the prompt starts with the BIOS boot record
 TOOL_KINDS = ("merged", "pytool_inline", "pytool")
-FLAGS = ("think", "nb", "ne", "nudge", "nudge2", "nudge3", "fp", "tc", "mix")  # suffixes: thinking mode, <|im_start|> banned, nudge,
+FLAGS = ("think", "nb", "ne", "nudge", "nudge2", "nudge3", "nudge4", "fp", "tc", "mix", "calc")  # suffixes: thinking mode, <|im_start|> banned, nudge,
 # ne = <|endoftext|> banned too (Qwen ends its turn with <|im_end|>; after a printed
 # </tool_response> it sometimes writes <|endoftext|> instead of the answer)
 # nudge3 = the inline nudge with division (or, with mix, products and quotients inline)
+# nudge4 = the inline nudge for whole expressions (v18); calc = the calc(expression) tool too
 # fp = RoPE positions frozen on chip tokens (BatchDecoder freeze_chip_positions)
 # tc = chip tokens invisible to Qwen's layers (BatchDecoder transparent_chip)
 CONDS = ("base", "base_think", "merged", "merged_nb", "merged_nudge", "merged_nb_nudge",
@@ -77,6 +78,12 @@ NUDGE3 = ("Exact arithmetic: whenever you write a calculation like `a \\times b 
           "`=` (a quotient that does not end shows 10 decimals, then `...`). So never do long "
           "multiplication or long division by hand: write the whole calculation, e.g. "
           "`918274 / 37 =`, and let the result appear.")
+NUDGE4 = ("Exact arithmetic: whenever you write a whole calculation followed by `=`, its exact "
+          "value is filled in right after the `=`. It can be one line of whole numbers and "
+          "decimals with +, -, \\times, /, ^ and brackets, e.g. `(3.5 + 12) \\times 48 / 7 =` or "
+          "`20 \\times (-8) / (-60) =` (a quotient that does not end shows 10 decimals, then "
+          "`...`). So never calculate by hand or step by step: write the whole calculation at "
+          "once and let the result appear.")
 # mix (a tool kind): products inline, sums and differences of big numbers through the tools
 NUDGE_MIX = ("Exact arithmetic: whenever you write a multiplication of whole numbers like "
              "`a \\times b =`, its exact result is filled in right after the `=`, so never "
@@ -141,14 +148,37 @@ PY_TOOLS = {"add": lambda a, b: a + b, "mul": lambda a, b: a * b,
             "sub": lambda a, b: a - b, "div": _div}
 
 
-def tools():
+def tools(flags=()):
     from chipformer.q35 import demo
 
-    return demo.TOOLS
+    return demo.TOOLS + ([demo.CALC_TOOL] if "calc" in flags else [])
 
 
 def tool_names():
-    return [t["function"]["name"] for t in tools()]
+    return [t["function"]["name"] for t in tools(("calc",))]
+
+
+def expr_value(s: str):
+    """The exact value of an expression as Qwen writes it (LaTeX operators, ^{}, commas between
+    digits, "$"), or None."""
+    s = re.sub(r"(?<=\d),(?=\d)", "", s)
+    s = s.replace("\\times", "*").replace("\\cdot", "*").replace("\\div", "/").replace("×", "*")
+    s = s.replace("÷", "/").replace("−", "-").replace("{", "(").replace("}", ")").replace("$", "")
+    s = s.replace("**", "^").replace("^", "**")
+    s = re.sub(r"([\d)])\s*\(", r"\1*(", s)
+    if not re.fullmatch(r"[\d.\s+\-*/()]+", s):
+        return None
+    s = re.sub(r"\d+(?:\.\d*)?", lambda m: f"Fraction('{m[0]}')", s)
+    try:
+        return eval(s, {"Fraction": Fraction})  # noqa: S307 (digits and operators only)
+    except (ZeroDivisionError, SyntaxError, TypeError, ValueError, OverflowError):
+        return None
+
+
+def value_text(v: Fraction) -> str:
+    """How the computer prints a value (eval / div): the digits, "-" first if negative."""
+    t = div_text(abs(v.numerator), v.denominator)
+    return "-" + t if v < 0 else t
 
 
 # ---------------------------------------------------------------------------------- datasets
@@ -285,6 +315,8 @@ def fmt(v) -> str:
 
 def true_result(op: str, args: dict):
     """Exact value of a call by the tool's definition, or None if it is not a valid call."""
+    if op == "calc":
+        return expr_value(args.get("expression") or "")
     a, b = args.get("a"), args.get("b")
     if op not in PY_TOOLS or a is None or b is None:
         return None
@@ -612,6 +644,8 @@ USER_TURN = re.compile(r"<\|im_start\|>\s*user(?!\s*<tool_response>)")
 
 INLINE_RE = re.compile(r"(\d[\d,]*)[\s$(]*(\+|-|−|×|\*|\\times|\\cdot|/|÷|\\div)[\s$(]*"
                        r"(\d[\d,]*)[\s$(]*=\s*$")
+# v18: the expression the circuit took (the text since a breaker; bridge.ExprScan decides)
+EXPR_RE = re.compile(r"((?:[\d.,+\-−×*/÷()^{}$\s]|\\times|\\cdot|\\div)+?)\s*=\s*$")
 INLINE_OPS = {"+": "add", "-": "sub", "−": "sub", "×": "mul", "*": "mul",
               "\\times": "mul", "\\cdot": "mul", "/": "div", "÷": "div", "\\div": "div"}
 
@@ -631,11 +665,23 @@ def inline_fires(text: str, pred) -> list[dict]:
         if before.rstrip().endswith("</tool_call>") or m.end() == len(text):
             continue  # a tool call, or a run cut off by the budget / context before its print
         e = INLINE_RE.search(before[-200:])
-        # v13+ prints A - B < 0 as " -digits" (before: nothing)
+        # v13+ prints A - B < 0 as " -digits" (before: nothing); v18 prints "..." when it can't
         shown = ("-" if "-" in m[1] else "") + m[2].replace(",", "")
+        if not shown and text[m.end():].startswith("..."):
+            shown = "..."
         machine = shown
         f = {"expr": e[0].strip() if e else before[-40:], "printed": shown[:60]}
-        if e:
+        x = EXPR_RE.search(before[-300:])  # v18: a whole expression (more than one operator)
+        if x and (re.search(r"[()^{}]|\d\.\d", x[1]) or len(re.findall(
+                r"[+\-*/×÷−]|\\times|\\cdot|\\div", x[1])) >= 2) and (
+                v := expr_value(x[1])) is not None:
+            t = value_text(v)
+            exact = shown.startswith(t)
+            machine = t if exact else shown
+            f |= {"expr": x[0].strip(), "op": "expr", "true": t, "exact": exact,
+                  "gave_up": shown == "...",
+                  "appended": shown[len(t):][:60] if exact else ""}
+        elif e:
             a, b = int(e[1].replace(",", "")), int(e[3].replace(",", ""))
             op = INLINE_OPS[e[2]]
             if op == "div" and not b:
@@ -653,7 +699,8 @@ def inline_fires(text: str, pred) -> list[dict]:
         f["echo"] = (None if not ech or not machine or f.get("appended") else
                      "same" if ech[1] == machine else "diff")
         f["reused"] = bool(machine) and machine in later
-        f["is_answer"] = (bool(machine) and len(machine) < 60 and pred is not None
+        f["is_answer"] = (bool(machine) and machine != "..." and len(machine) < 60
+                          and pred is not None
                           and Fraction(Decimal(machine.removesuffix("..."))) == pred)
         out.append(f)
     return out
@@ -690,12 +737,17 @@ def judge(p: dict, text: str, think: bool) -> dict:
         ia, ib = int_arg(c["args"].get("a")), int_arg(c["args"].get("b"))
         valid = (c["op"] in tool_names() and ia is not None and ib is not None
                  and (c["op"] != "sub" or ia >= ib))
+        if c["op"] == "calc":
+            valid = v is not None
         resp = (c["response"] or "").strip()
         rv = num_arg(resp) if resp else None
         e = {"op": c["op"], "a": c["args"].get("a"), "b": c["args"].get("b"), "valid": valid,
              "response": c["response"], "true": fmt(v) if v is not None else None,
              "exact": (resp == div_text(ia, ib) if c["op"] == "div" and valid and ib
+                       else resp == value_text(v) if c["op"] == "calc" and valid
                        else rv is not None and v is not None and rv == v)}
+        if c["op"] == "calc":
+            e["a"] = c["args"].get("expression")
         if "steps" in p and v is not None:
             e["in_gold_steps"] = v in gold_steps
         if want_calls and v is not None:
@@ -755,21 +807,23 @@ def default_model(cond: str) -> str:
 def build_prompt(tok, question: str, cond: str, bios: list[int]) -> list[int]:
     kind, flags = parse_cond(cond)
     msgs = [{"role": "user", "content": question + SUFFIX}]
-    if flags & {"nudge", "nudge2", "nudge3", "mix"}:  # tools: use them; others: inline
-        if "nudge3" in flags:  # with division
+    if flags & {"nudge", "nudge2", "nudge3", "nudge4", "mix"}:  # tools: use them; others: inline
+        if "nudge4" in flags:  # whole expressions (v18)
+            nudge = NUDGE4
+        elif "nudge3" in flags:  # with division
             nudge = NUDGE_MIX3 if "mix" in flags else NUDGE3
         elif "mix" in flags:
             nudge = NUDGE_MIX
         elif "nudge2" in flags:  # the inline nudge, plus: the filled-in number is final
             nudge = NUDGE2
         elif kind in TOOL_KINDS:
-            nudge = NUDGE.format(names=", ".join(tool_names()))
+            nudge = NUDGE.format(names=", ".join(t["function"]["name"] for t in tools(flags)))
         else:
             from chipformer.q35 import demo
 
             nudge = demo.NUDGE
         msgs.insert(0, {"role": "system", "content": nudge})
-    ids = tok.apply_chat_template(msgs, tools=tools() if kind in TOOL_KINDS else None,
+    ids = tok.apply_chat_template(msgs, tools=tools(flags) if kind in TOOL_KINDS else None,
                                   add_generation_prompt=True, return_tensors="pt",
                                   enable_thinking="think" in flags)["input_ids"][0].tolist()
     return (bios if kind in BIOS_KINDS else []) + ids
@@ -791,17 +845,23 @@ class BannedHead(torch.nn.Module):
 
 
 SELFTEST = [("mul", 4, 4), ("mul", 12345, 678), ("add", 987654321, 123456789),
-            ("sub", 1000000, 1), ("sub", 5000, 4321), ("div", 1000000, 7), ("div", 8352, 48)]
+            ("sub", 1000000, 1), ("sub", 5000, 4321), ("div", 1000000, 7), ("div", 8352, 48),
+            ("calc", "(12 + 7) * 3 - 4^3", None), ("calc", "20 * (-8) / (-60) * 329", None),
+            ("calc", "1.25 / (3 - 0.5)", None)]
 
 
 def selftest(bd, ctx, tok, bios) -> None:
     """Before a merged run: Qwen calls each tool on known operands and every call it makes
     must print the exact result. Catches a BIOS that does not match the circuit (the routine
     entry points are compiled into the weights) or inexact kernels."""
+    from chipformer.q35.lib import bcd
+
     sym = {"add": "+", "mul": "*", "sub": "-", "div": "/"}
-    cases = [c for c in SELFTEST if c[0] in tool_names()]
-    prompts = [build_prompt(tok, f"Use the {op} tool to compute {a} {sym[op]} {b}.", "merged", bios)
-               for op, a, b in cases]
+    calc = "eval" in bcd.OPS  # v18
+    cases = [c for c in SELFTEST if c[0] != "calc" or calc]
+    prompts = [build_prompt(tok, f"Use the calc tool to compute {a}." if op == "calc" else
+                            f"Use the {op} tool to compute {a} {sym[op]} {b}.",
+                            "merged_calc" if calc else "merged", bios) for op, a, b in cases]
     got = {}
     decode_all(bd, ctx, prompts, 400, None, lambda i, r: got.__setitem__(i, r))
     bad, n = [], 0
@@ -812,7 +872,8 @@ def selftest(bd, ctx, tok, bios) -> None:
                 continue
             n += 1
             want = (div_text(int_arg(c["args"]["a"]), int_arg(c["args"]["b"]))
-                    if c["op"] == "div" else fmt(v))  # div truncates: 10 decimals, then "..."
+                    if c["op"] == "div" else value_text(v) if c["op"] == "calc"
+                    else fmt(v))  # div truncates: 10 decimals, then "..."
             if (c["response"] or "").strip() != want:
                 bad.append((c["op"], c["args"], c["response"], want))
     print(f"selftest: {n} calls, {len(bad)} wrong {bad}", flush=True)

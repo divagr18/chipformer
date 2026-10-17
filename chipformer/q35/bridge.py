@@ -31,7 +31,31 @@ DOLLARS = (DOLLAR, SDOLLAR, DDOLLAR, SDDOLLAR, CURR)  # all neutral, all may pre
 MINUS2 = TEXT_BASE + 41
 # division: "/" (" /", "÷"), the tool name "div" (also "\div"), and "..." after an inexact quotient
 DIV, FN_DIV, ELLIPSIS = range(TEXT_BASE + 42, TEXT_BASE + 45)
-N_TEXT = 45
+# " (" is its own class (the space makes it a safe start for an expression)
+SLPAREN = TEXT_BASE + 45
+# Expressions (v18): Qwen fuses brackets with operators (")/(", "*(-", "))"), so every token an
+# expression is made of is a class of its own, which the circuit stores on the tape as one code;
+# the BIOS evaluator expands a code into its symbols (EXPR_SYMS). Input-only: several spellings
+# are fine. (expansion, spellings, spaced) - spaced spellings start with a space, which makes them
+# a safe start without a safe token before them.
+SYMS = "0123456789.+-*/()^"  # the evaluator's symbols, codes 0..17
+EXPR_CLASSES = [
+    (")", [")", " )"]), ("^", ["^", " ^", "**"]), ("((", ["(("]), ("((", [" (("], True),
+    ("(((", ["((("]), ("(((", [" ((("], True), ("(-", ["(-"]), ("(-", [" (-"], True),
+    ("((-", ["((-"]), ("))", ["))", "})", "}}"]), (")))", [")))"]), (")^", [")^", ")**"]),
+    (")+", [")+"]), (")-", [")-"]), (")*", [")*"]), (")/", [")/"]), ("))*", ["))*"]),
+    ("))/", ["))/"]), ("))+", ["))+"]), ("))-", ["))-"]), ("))^", ["))^"]),
+    ("^(", ["^(", "**(", "^{"]), ("^-", ["^-", "**-"]), ("^(-", ["^{-"]), ("-(", ["-("]),
+    ("-(", [" -("], True), ("+(", ["+("]), ("*(", ["*("]), ("/(", ["/("]), ("*(-", ["*(-"]),
+    ("*((", ["*(("]), (")*(", [")*(", ")("]), (")/(", [")/("]), (")-(", [")-("]),
+    (")+(", [")+("]), ("))/(", ["))/("]), ("))*(", ["))*("]), ("/-", ["/-"]), ("+-", ["+-"]),
+    ("*-", ["*-"]), ("--", ["--"]), ("(", ["{"]), (")", ["}"]), ("(", ["$(", " $("], True),
+]
+EXPR_BASE = TEXT_BASE + 46
+EXPR = list(range(EXPR_BASE, EXPR_BASE + len(EXPR_CLASSES)))
+DLPAREN = EXPR[-1]  # "$(": also opens the math the result closes ("$")
+FN_CALC = EXPR_BASE + len(EXPR_CLASSES)  # the tool calc(expression)
+N_TEXT = 47 + len(EXPR_CLASSES)
 FUNCS = {"add": FN_ADD, "mul": FN_MUL, "sub": FN_SUB, "div": FN_DIV}  # tool names it answers
 PRINT_OP = 0x00FD
 MAX_PRINT = 58  # digits per print (the write counter tops out at 64)
@@ -44,14 +68,43 @@ QWEN_TEXT = {**{TEXT_BASE + i: c for i, c in enumerate("0123456789abcdef")},
              FN_SUB: "sub", SPACE: " ", EQ: " =", PLUS: " +", MINUS: " -", TIMES: " \u00d7",
              BSL: " \\", TIMESW: "times", COMMA: ",", DOLLAR: "$", LPAREN: "(",
              WS: "\n\n", SDOLLAR: " $", DDOLLAR: "$$", SDDOLLAR: " $$", CURR: " \\$",
-             PERIOD: ".", MINUS2: "-", DIV: "/", FN_DIV: "div", ELLIPSIS: "..."}
+             PERIOD: ".", MINUS2: "-", DIV: "/", FN_DIV: "div", ELLIPSIS: "...", SLPAREN: " (",
+             FN_CALC: "calc",
+             **{cls: e[1][0] for cls, e in zip(EXPR, EXPR_CLASSES)}}
 # other single tokens Qwen generates for the same thing: it writes <function=add> as "=add" and
 # <function=mul> as "=m" "ul", not the way its tokenizer splits the text
 # (never for a class the circuit prints: the tied lm_head rows would tie)
 EXTRA_TEXT = {FN_ADD: ["=add"], FN_MUL: ["ul"], FN_SUB: ["=sub", "ub"], EQ: ["="], PLUS: ["+"],
               MINUS2: [" \u2212", "\u2212"], DIV: [" /", "\u00f7"], TIMES: ["\u00d7", " *", "*"], BSL: ["\\"],
-              TIMESW: ["cdot"], CURR: ["\\$"], LPAREN: [" ("],
-              WS: ["\n\n\n", "\n\n\n\n", "  ", "   ", "    ", "     ", " \n", " \n\n"]}
+              TIMESW: ["cdot"], CURR: ["\\$"], FN_CALC: ["alc"],
+              WS: ["\n\n\n", "\n\n\n\n", "  ", "   ", "    ", "     ", " \n", " \n\n"],
+              **{cls: e[1][1:] for cls, e in zip(EXPR, EXPR_CLASSES) if len(e[1]) > 1}}
+def _codes():
+    """Tape code of every class an expression is made of, and the expansions of the codes."""
+    single = {**{HEX[d]: d for d in range(10)}, PERIOD: 10, PLUS: 11, MINUS: 12, MINUS2: 12,
+              TIMES: 13, TIMESW: 13, DIV: 14, FN_DIV: 14, LPAREN: 15, SLPAREN: 15}
+    multi = []
+    for cls, e in zip(EXPR, EXPR_CLASSES):
+        if len(e[0]) == 1:
+            single[cls] = SYMS.index(e[0])
+        else:
+            if e[0] not in multi:
+                multi.append(e[0])
+            single[cls] = len(SYMS) + multi.index(e[0])
+    return single, multi
+
+
+TAPE_CODE, MULTI = _codes()  # class -> code; code len(SYMS) + i expands to MULTI[i]
+EXPANSION = {**{i: s for i, s in enumerate(SYMS)}, **{len(SYMS) + i: s for i, s in enumerate(MULTI)}}
+SPACED = {SLPAREN} | {cls for cls, e in zip(EXPR, EXPR_CLASSES) if len(e) > 2}
+# may start an expression: a number, a bracket or a minus
+STARTS = {*HEX[:10], MINUS, MINUS2, LPAREN, SLPAREN} | {
+    cls for cls, e in zip(EXPR, EXPR_CLASSES) if e[0][0] in "(-"}
+TAPE_MAX = 48  # tape cells (the CALL record writes TAPE_MAX + 3 <= JMAX)
+EXPR_MIN_DIGITS = 4  # an expression fires with at least this many digits
+CLASS_OF = {**{s: cls for cls, s in QWEN_TEXT.items()},
+            **{s: cls for cls, ss in EXTRA_TEXT.items() for s in ss}}  # Qwen token -> class
+assert len(CLASS_OF) == len(QWEN_TEXT) + sum(map(len, EXTRA_TEXT.values())), "a token in 2 classes"
 INLINE_OPS = {PLUS: "add", MINUS: "sub", MINUS2: "sub", TIMES: "mul", DIV: "div"}
 # and after a backslash: TIMESW ("\times", "\cdot") mul, FN_DIV ("\div") div
 BSL_OPS = {TIMESW: "mul", FN_DIV: "div"}
@@ -78,6 +131,20 @@ def readout(cells: list[int]) -> list[int]:
         close = DDOLLAR if mode & 4 else DOLLAR if mode & 2 else PERIOD  # "$"/"$$", else ".")
         return [MINUS if mode & 8 else SPACE, *digits, close] if digits else [SPACE]
     return [NL, TR_OPEN, NL, *digits, NL, TR_CLOSE, NL]
+
+
+def prev_safe(prev) -> bool:
+    """May a first number (or an expression) start right after this token?"""
+    return prev is None or not is_text(prev) or prev in (SPACE, NL, LPAREN, SLPAREN, WS, *DOLLARS)
+
+
+def opener_kind(prev, prev2) -> int:
+    """The math a first number sits in: 1 right after "$" (maybe and a space), 2 after "$$"."""
+
+    def kind(x):
+        return 1 if x in (DOLLAR, SDOLLAR) else 2 if x in (DDOLLAR, SDDOLLAR) else 0
+
+    return kind(prev) or (kind(prev2) if prev == SPACE else 0)
 
 
 class InlineScan:
@@ -121,7 +188,7 @@ class InlineScan:
         run_start = dig and not cont
         tw_op = t in BSL_OPS and prev == BSL
         op_tok = t in INLINE_OPS or tw_op
-        neutral = text and (dig or op_tok or t in (SPACE, LPAREN, BSL, EQ, *DOLLARS)
+        neutral = text and (dig or op_tok or t in (SPACE, LPAREN, SLPAREN, BSL, EQ, *DOLLARS)
                             or (t == COMMA and isd(prev)))
         brk = not neutral
         after_eq = prev == EQ and not brk and not self.in_call  # a fresh window after "="
@@ -130,13 +197,8 @@ class InlineScan:
         elif run_start:
             self.p += 1
             if self.p == 1:
-                self.a_safe = prev is not None and (not is_text(prev) or prev in (
-                    SPACE, NL, LPAREN, WS, *DOLLARS))
-
-                def kind(x):
-                    return 1 if x in (DOLLAR, SDOLLAR) else 2 if x in (DDOLLAR, SDDOLLAR) else 0
-
-                self.opener = kind(prev) or (kind(prev2) if prev == SPACE else 0)
+                self.a_safe = prev_safe(prev)
+                self.opener = opener_kind(prev, prev2)
         if run_start:
             self.d = 0
         elif cont:
@@ -163,6 +225,79 @@ class InlineScan:
         return None
 
 
+class ExprScan:
+    """Which whole expressions the circuit evaluates: the reference for its tape capture.
+
+    Outside tool calls, every token of an expression is stored on the tape (as its TAPE_CODE)
+    since the last *reset*: a breaker (anything but stored tokens, spaces, "$", a backslash or a
+    comma right after a digit) or "=". Stored: digits, a "." right after a digit, operators
+    (also "\\times", "\\cdot", "\\div"), brackets and the fused EXPR classes. At "=" it fires if
+    the window starts well (a number, a bracket or a minus, after a safe token or with a space
+    of its own), has a bracket, power or "." or at least two operator tokens, has at least
+    EXPR_MIN_DIGITS digits and at most TAPE_MAX tokens, and the single-op path does not fire.
+    """
+
+    def __init__(self):
+        self.prev = self.prev2 = None
+        self.in_call = self.calc = False
+        self.reset()
+        self.flags = None  # (start, opener) of the window, as of its last stored token
+        self.tape = []
+        self.n = 0  # the tape's length (0 after <tool_call>)
+
+    def reset(self):
+        self.count = self.digits = self.ops = 0
+        self.special = False
+
+    def stored(self, t, prev) -> bool:
+        if t in TAPE_CODE and t not in (TIMESW, FN_DIV, PERIOD):
+            return True
+        return (t in (TIMESW, FN_DIV) and prev == BSL) or (t == PERIOD and prev in HEX[:10])
+
+    def feed(self, t: int, fast_fired: bool = False):
+        """Returns (tape codes, mode) if the circuit evaluates an expression at token t."""
+        prev, prev2 = self.prev, self.prev2
+        self.prev, self.prev2 = t, prev
+        # a tool call calc(expression): its tape is every stored token since <tool_call>
+        tool = t == TC_CLOSE and self.calc and 1 <= self.n
+        if t == TC_OPEN:
+            self.calc, self.n = False, 0
+        if t == FN_CALC:
+            self.calc = True
+        if t in (TC_OPEN, TC_CLOSE) or t in (spec.STEP, spec.BOOT):
+            self.in_call = t == TC_OPEN
+        st = is_text(t) and self.stored(t, prev)
+        neutral = st or (is_text(t) and (t in (SPACE, BSL, *DOLLARS)
+                                         or (t == COMMA and prev in HEX[:10])))
+        brk = not neutral and t != EQ
+        if (brk and not self.in_call) or (t == EQ and not self.in_call) or t == TC_OPEN:
+            self.reset()
+        if brk:
+            self.flags = None
+        if st:
+            self.count += 1
+            if self.count == 1:
+                ok = t in STARTS and (prev_safe(prev) or t in SPACED)
+                self.start = (ok, 1 if t == DLPAREN else opener_kind(prev, prev2))
+            self.digits += t in HEX[:10]
+            ops = EXPANSION[TAPE_CODE[t]]
+            self.ops += any(ch in "+-*/^" for ch in ops)
+            self.special |= any(ch in "()^." for ch in ops)
+            self.n = self.count if self.count <= TAPE_MAX else 0
+            if self.count <= TAPE_MAX:
+                del self.tape[self.count - 1:]
+                self.tape.append(TAPE_CODE[t])
+            self.flags = (self.start[0] and self.count <= TAPE_MAX
+                          and (self.special or self.ops >= 2)
+                          and self.digits >= EXPR_MIN_DIGITS, self.start[1], self.count)
+        if tool:
+            return self.tape[:self.n], 0
+        if t == EQ and not self.in_call and not fast_fired and self.flags and self.flags[0]:
+            opener, n = self.flags[1], self.flags[2]
+            return self.tape[:n], 1 | (2 if opener else 0) | (4 if opener == 2 else 0)
+        return None
+
+
 class BridgeMachine(Machine):
     """Reference trace for the v2 circuit: machine records, prints, and Qwen's text."""
 
@@ -170,26 +305,35 @@ class BridgeMachine(Machine):
         super().__init__(rom, quirks)
         self.halted = False
         self.scan = InlineScan()
+        self.escan = ExprScan()
         for t in self.tokens:
-            self.scan.feed(t)
+            self.escan.feed(t, self.scan.feed(t) is not None)
 
     def _emit(self, tokens: list[int], generated: bool) -> None:
-        self.fired = None
+        self.fired = self.efired = None
         for t in tokens:
             self.fired = self.scan.feed(t)
+            self.efired = self.escan.feed(t, self.fired is not None)
         super()._emit(tokens, generated)
 
-    def qwen(self, classes: list[int]) -> list[tuple[str, str, str]]:
+    def qwen(self, classes: list[int]) -> list[tuple]:
         """Qwen writes these text tokens one at a time; wherever the circuit answers an inline
-        "A op B =", it takes over (STEP, the CALL record, the routine, the print)."""
+        "A op B =" or an expression, it takes over (STEP, the CALL record, the routine, the
+        print). Expressions are listed as ("eval", tape codes)."""
         calls = []
         for t in classes:
             self._emit([t], False)
             if self.fired:
                 calls.append(self.fired)
                 self._call(*self.fired, mode=self.scan.mode())
-                while not self.halted:
-                    self.step()
+            elif self.efired:
+                tape, mode = self.efired
+                calls.append(("eval", tuple(tape)))
+                self._ecall(tape, mode)
+            else:
+                continue
+            while not self.halted:
+                self.step()
         return calls
 
     def step(self):
@@ -226,6 +370,26 @@ class BridgeMachine(Machine):
                 + [NL, TC_CLOSE])
         self._emit(text, False)
         self._call(op, a, b, mode=0)
+
+    def _ecall(self, tape: list[int], mode: int) -> None:
+        from chipformer.q35.lib import bcd
+
+        w = bcd.eval_writes(tape, mode)
+        self.emu.apply(w)
+        self._emit([spec.STEP] * bool(mode) + encode_writes(w) + [spec.STEP], True)
+        self.halted = False
+
+    def calc_call(self, classes: list[int]) -> tuple:
+        """Qwen calls calc(expression) with its native syntax (the expression's text classes);
+        the circuit writes the CALL record and the machine runs eval."""
+        text = ([TC_OPEN, NL, OTHER, OTHER, EQ, FN_CALC, OTHER, NL, OTHER, OTHER, EQ, OTHER,
+                 OTHER, NL] + list(classes) + [NL, OTHER, OTHER, OTHER, NL, OTHER, OTHER, OTHER,
+                                               NL, TC_CLOSE])
+        self._emit(text, False)
+        fired = self.efired
+        assert fired and fired[1] == 0, "calc did not fire"
+        self._ecall(*fired)
+        return ("eval", tuple(fired[0]))
 
     def _call(self, op: str, a: str, b: str, mode: int) -> None:
         from chipformer.q35.lib import bcd
