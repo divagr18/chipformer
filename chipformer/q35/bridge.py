@@ -23,7 +23,11 @@ NL, TR_OPEN, TR_CLOSE, TC_OPEN, TC_CLOSE, OTHER, FN_ADD, FN_MUL, FN_SUB = range(
 # inline arithmetic ("37 \\times 43 =", see inline_scan)
 SPACE, EQ, PLUS, MINUS, TIMES, BSL, TIMESW, COMMA, DOLLAR, LPAREN, WS = range(TEXT_BASE + 25,
                                                                            TEXT_BASE + 36)
-N_TEXT = 36
+# "$" splits by spelling: the circuit prints "$", "$$" and "." to close an inline result, so those
+# classes may have no other spellings; " $", " $$" and "\$" (currency) are their own classes
+SDOLLAR, DDOLLAR, SDDOLLAR, CURR, PERIOD = range(TEXT_BASE + 36, TEXT_BASE + 41)
+DOLLARS = (DOLLAR, SDOLLAR, DDOLLAR, SDDOLLAR, CURR)  # all neutral, all may precede a number
+N_TEXT = 41
 FUNCS = {"add": FN_ADD, "mul": FN_MUL, "sub": FN_SUB}  # tool names the circuit answers
 PRINT_OP = 0x00FD
 MAX_PRINT = 58  # digits per print (the write counter tops out at 64)
@@ -35,13 +39,14 @@ QWEN_TEXT = {**{TEXT_BASE + i: c for i, c in enumerate("0123456789abcdef")},
              TC_OPEN: "<tool_call>", TC_CLOSE: "</tool_call>", FN_ADD: "add", FN_MUL: "mul",
              FN_SUB: "sub", SPACE: " ", EQ: " =", PLUS: " +", MINUS: " -", TIMES: " \u00d7",
              BSL: " \\", TIMESW: "times", COMMA: ",", DOLLAR: "$", LPAREN: "(",
-             WS: "\n\n"}
+             WS: "\n\n", SDOLLAR: " $", DDOLLAR: "$$", SDDOLLAR: " $$", CURR: " \\$",
+             PERIOD: "."}
 # other single tokens Qwen generates for the same thing: it writes <function=add> as "=add" and
 # <function=mul> as "=m" "ul", not the way its tokenizer splits the text
 # (never for a class the circuit prints: the tied lm_head rows would tie)
 EXTRA_TEXT = {FN_ADD: ["=add"], FN_MUL: ["ul"], FN_SUB: ["=sub", "ub"], EQ: ["="], PLUS: ["+"],
               MINUS: ["-", " \u2212", "\u2212"], TIMES: ["\u00d7", " *", "*"], BSL: ["\\"],
-              TIMESW: ["cdot"], DOLLAR: [" $", "$$", " $$", " \\$", "\\$"], LPAREN: [" ("],
+              TIMESW: ["cdot"], CURR: ["\\$"], LPAREN: [" ("],
               WS: ["\n\n\n", "\n\n\n\n", "  ", "   ", "    ", "     ", " \n", " \n\n"]}
 INLINE_OPS = {PLUS: "add", MINUS: "sub", TIMES: "mul"}  # and TIMESW right after BSL: mul
 # Inline calls need at least this many digits in A and B together. Qwen gets small ones right,
@@ -59,8 +64,10 @@ def readout(cells: list[int]) -> list[int]:
 
     i, n = cells[spec.I], min(cells[spec.V], MAX_PRINT)
     digits = [HEX[cells[(i + k) & 0xFFF] & 15] for k in range(n)]
-    if cells[bcd.MODE] & 1:  # an inline call: just " digits " (the space ends the number)
-        return [SPACE, *digits, SPACE] if digits else [SPACE]
+    mode = cells[bcd.MODE]
+    if mode & 1:  # an inline call: " digits" and a closer (the math's "$"/"$$", else ".")
+        close = DDOLLAR if mode & 4 else DOLLAR if mode & 2 else PERIOD
+        return [SPACE, *digits, close] if digits else [SPACE]
     return [NL, TR_OPEN, NL, *digits, NL, TR_CLOSE, NL]
 
 
@@ -81,6 +88,11 @@ class InlineScan:
         self.lens = {1: 0, 2: 0}
         self.digits = {}
         self.op, self.op_ok, self.a_safe, self.in_call = None, False, False, False
+        self.opener = 0  # what the first number follows: 1 "$", 2 "$$" (maybe with a space)
+
+    def mode(self) -> int:
+        """The CALL record's MODE cell for an inline call: 1 | 2 inside "$" | 4 inside "$$"."""
+        return 1 | (2 if self.opener else 0) | (4 if self.opener == 2 else 0)
 
     def feed(self, t: int):
         """Returns (op, a, b) if the circuit takes over after token t, else None."""
@@ -98,7 +110,7 @@ class InlineScan:
         run_start = dig and not cont
         tw_op = t == TIMESW and prev == BSL
         op_tok = t in INLINE_OPS or tw_op
-        neutral = text and (dig or op_tok or t in (SPACE, DOLLAR, LPAREN, BSL, EQ)
+        neutral = text and (dig or op_tok or t in (SPACE, LPAREN, BSL, EQ, *DOLLARS)
                             or (t == COMMA and isd(prev)))
         brk = not neutral
         after_eq = prev == EQ and not brk and not self.in_call  # a fresh window after "="
@@ -107,8 +119,13 @@ class InlineScan:
         elif run_start:
             self.p += 1
             if self.p == 1:
-                self.a_safe = prev is not None and (not is_text(prev) or prev in (SPACE, NL, DOLLAR,
-                                                                                LPAREN, WS))
+                self.a_safe = prev is not None and (not is_text(prev) or prev in (
+                    SPACE, NL, LPAREN, WS, *DOLLARS))
+
+                def kind(x):
+                    return 1 if x in (DOLLAR, SDOLLAR) else 2 if x in (DDOLLAR, SDDOLLAR) else 0
+
+                self.opener = kind(prev) or (kind(prev2) if prev == SPACE else 0)
         if run_start:
             self.d = 0
         elif cont:
@@ -160,7 +177,7 @@ class BridgeMachine(Machine):
             self._emit([t], False)
             if self.fired:
                 calls.append(self.fired)
-                self._call(*self.fired, mode=1)
+                self._call(*self.fired, mode=self.scan.mode())
                 while not self.halted:
                     self.step()
         return calls
@@ -205,7 +222,7 @@ class BridgeMachine(Machine):
 
         w = bcd.call_writes(op, a, b, mode)
         self.emu.apply(w)
-        self._emit([spec.STEP] * mode + encode_writes(w) + [spec.STEP], True)
+        self._emit([spec.STEP] * bool(mode) + encode_writes(w) + [spec.STEP], True)
         self.halted = False
 
 

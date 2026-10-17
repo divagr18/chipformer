@@ -12,7 +12,7 @@ from chipformer.q35.lib import bcd
 BS = chr(92)
 WORDS = {" ": B.SPACE, " =": B.EQ, "=": B.EQ, " +": B.PLUS, "+": B.PLUS, " -": B.MINUS,
          "-": B.MINUS, " ×": B.TIMES, "*": B.TIMES, " *": B.TIMES, " " + BS: B.BSL, "times": B.TIMESW,
-         ",": B.COMMA, "$": B.DOLLAR, " $": B.DOLLAR, "(": B.LPAREN, "\n": B.NL, "\n\n": B.WS}
+         ",": B.COMMA, "$": B.DOLLAR, " $": B.SDOLLAR, "$$": B.DDOLLAR, " $$": B.SDDOLLAR, "(": B.LPAREN, "\n": B.NL, "\n\n": B.WS}
 
 
 def classes(tokens: list[str]) -> list[int]:
@@ -38,7 +38,8 @@ def printed(bm) -> str:
     out = []
     for t, g in zip(bm.tokens, bm.generated):
         if g and B.is_text(t):
-            out.append(" " if t == B.SPACE else str(B.HEX.index(t)) if t in B.HEX else "?")
+            close = {B.SPACE: " ", B.PERIOD: ".", B.DOLLAR: "$", B.DDOLLAR: "$$"}
+            out.append(close[t] if t in close else str(B.HEX.index(t)) if t in B.HEX else "?")
     return "".join(out)
 
 
@@ -80,13 +81,17 @@ def test_scan(tokens, want):
 def test_scan_prints_and_chains():
     bm, calls = run(["$", "12", *TIMES, "34", " =", "$", " ", "and", " ", "408", *TIMES, "2", " ="])
     assert calls == [("mul", "12", "34"), ("mul", "408", "2")]
-    assert printed(bm) == " 408  816 "
-    # the printed result is the first number of the next expression
+    assert printed(bm) == " 408$ 816."  # "$" closes the math it opened in, else "."
+    # after a "." closer the printed result does not start a new expression
     bm = B.BridgeMachine(bcd.ROM, bcd.QUIRKS)
     bm.text(3)
     calls = bm.qwen(classes([" ", "12", *TIMES, "34", " ="]))
-    calls += bm.qwen(classes([*TIMES, "2", " ="]))
-    assert calls == [("mul", "12", "34"), ("mul", "408", "2")] and printed(bm) == " 408  816 "
+    calls += bm.qwen(classes([*TIMES, "2", " ="]))  # the "." closer ends the expression
+    assert calls == [("mul", "12", "34")] and printed(bm) == " 408."
+    bm = B.BridgeMachine(bcd.ROM, bcd.QUIRKS)
+    bm.text(3)
+    calls = bm.qwen(classes([" $$", " ", "300", " +", " ", "4", " ="]))
+    assert calls == [("add", "300", "4")] and printed(bm) == " 304$$"
 
 
 def test_negative_sub_prints_nothing():
@@ -119,7 +124,7 @@ def test_circuit_with_tool_calls(circuit):
     while not bm.halted:
         bm.step()
     bm.qwen(classes([" ", "675", " -", " ", "5", " =", "."]))
-    assert printed(bm) == " 576 ???675??? 670 "  # ? = the tool response's tags and newlines
+    assert printed(bm) == " 576$???675??? 670."  # ? = the tool response's tags and newlines
     check(circuit, bm)
 
 

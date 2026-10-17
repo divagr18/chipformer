@@ -112,7 +112,7 @@ def build(target: Target | None = None) -> Chip8Q35:
     regs += [(f"key{k:X}", spec.KEYS + k, 1) for k in range(16)]
     regs += [(f"q.{q}", spec.QUIRKS + i, 1) for i, q in enumerate(spec.QUIRK_NAMES)]
     regs += [("LA", bios.LEN, 5), ("LB", bios.LEN + 1, 5)]  # bignum argument lengths
-    regs += [("MODE", bios.MODE, 1)]  # the current call is inline
+    regs += [("MODE", bios.MODE, 3)]  # inline call, inside "$", inside "$$"
     keys, data, col, blocks = {127: Chan(c.is_boot)}, {}, 2, {}
     for slot, (name, cell, nb) in enumerate(regs):
         keys[slot] = c.write_key(cell)
@@ -128,7 +128,7 @@ def build(target: Target | None = None) -> Chip8Q35:
     pcb, ib, spb, dtb, stb, rngb, v0b = (R[k] for k in ("PC", "I", "SP", "DT", "ST", "RNG", "V0"))
     keyb = [R[f"key{k:X}"][0] for k in range(16)]
     lab, lbb = R["LA"], R["LB"]
-    mode = R["MODE"][0]
+    mode, mode_d, mode_dd = R["MODE"]
     q = {name: R[f"q.{name}"][0] for name in spec.QUIRK_NAMES}
 
     # ------------------------------------------------------------ micro-step counter
@@ -161,14 +161,21 @@ def build(target: Target | None = None) -> Chip8Q35:
     fns = {op: T[cls] for op, cls in B.FUNCS.items()}
     fn_any = sum(fns.values(), Expr())
     (in_call,) = c.slot_head("in_call", {0: tco + tcc + rs}, {0: one}, {2: tco}, tco + tcc + rs)
-    safe = (T[B.SPACE] + T[B.NL] + T[B.WS] + T[B.DOLLAR] + T[B.LPAREN]
+    dollars = sum((T[d_] for d_ in B.DOLLARS), Expr())
+    safe = (T[B.SPACE] + T[B.NL] + T[B.WS] + dollars + T[B.LPAREN]
             + c.mu)  # may precede a first number
+    open1, open2 = T[B.DOLLAR] + T[B.SDOLLAR], T[B.DDOLLAR] + T[B.SDDOLLAR]  # "$", "$$"
     prev_cols = {2: Chan(is_dig, (0, 1, 0, 0)), 3: Chan(is_dig, (0, 0, 1, 0)),
                  4: Chan(T[B.COMMA], (0, 1, 0, 0)), 5: Chan(T[B.BSL], (0, 1, 0, 0)),
                  6: Chan(safe, (0, 1, 0, 0)), 7: Chan(c.is_text, (0, 1, 0, 0)),
-                 8: Chan(T[B.EQ], (0, 1, 0, 0))}
-    prev_dig, prev2_dig, prev_cm, prev_bs, prev_safe, prev_text, prev_eq = c.slot_head(
-        "prev", {0: one}, {0: one}, prev_cols, one)
+                 8: Chan(T[B.EQ], (0, 1, 0, 0)), 9: Chan(open1, (0, 1, 0, 0)),
+                 10: Chan(open2, (0, 1, 0, 0)), 11: Chan(open1, (0, 0, 1, 0)),
+                 12: Chan(open2, (0, 0, 1, 0)), 13: Chan(T[B.SPACE], (0, 1, 0, 0))}
+    (prev_dig, prev2_dig, prev_cm, prev_bs, prev_safe, prev_text, prev_eq, prev_o1, prev_o2,
+     prev2_o1, prev2_o2, prev_sp) = c.slot_head("prev", {0: one}, {0: one}, prev_cols, one)
+    # the math a first number sits in: right after "$" / "$$", or after it and a space
+    in_o1 = c.node(c.t_and([prev_o1]) + c.t_and([prev_sp, prev2_o1]), "open.$")
+    in_o2 = c.node(c.t_and([prev_o2]) + c.t_and([prev_sp, prev2_o2]), "open.$$")
     cont = c.node(c.t_and([is_dig, prev_dig]) + c.t_and([is_dig, prev_cm, prev2_dig]), "arg.cont")
     run_start = c.node(c.t_and([is_dig, one - prev_dig, one - prev_cm])
                        + c.t_and([is_dig, prev_cm, one - prev2_dig]), "arg.start")
@@ -176,7 +183,7 @@ def build(target: Target | None = None) -> Chip8Q35:
     inl = {"add": T[B.PLUS], "sub": T[B.MINUS], "mul": T[B.TIMES] + tw_op}
     op_tok = sum(inl.values(), Expr())
     comma_join = c.and_([T[B.COMMA], prev_dig], "comma.join")
-    neutral = (is_dig + T[B.SPACE] + T[B.DOLLAR] + T[B.LPAREN] + T[B.BSL] + T[B.EQ] + op_tok
+    neutral = (is_dig + T[B.SPACE] + dollars + T[B.LPAREN] + T[B.BSL] + T[B.EQ] + op_tok
                + comma_join)
     brk = one - neutral  # chip tokens included
     # the window also starts afresh right after "=" (so "x^2 = A op B =" still counts)
@@ -230,8 +237,8 @@ def build(target: Target | None = None) -> Chip8Q35:
     out = c.slot_head("call.args", lk, {0: one, 1: one, 2: one, 127: one}, data, brk - fn_any)
     la_bits, lb_bits, op_oh = out[0:5], out[5:10], out[10:10 + len(ops)]
     op_ok = out[10 + len(ops)]
-    (a_safe,) = c.slot_head("a.safe", {0: run_start + peq(1) - 1}, {0: one}, {2: prev_safe},
-                            run_start + peq(1) - 1)
+    a_safe, a_o1, a_o2 = c.slot_head("a.safe", {0: run_start + peq(1) - 1}, {0: one},
+                                     {2: prev_safe, 3: in_o1, 4: in_o2}, run_start + peq(1) - 1)
     la_, lb_ = from_bits(la_bits), from_bits(lb_bits)
     trig = c.and_([T[B.EQ], one - in_call, peq(2), co[0] - co[1], op_ok, a_safe,
                    c.node(c.t_ge(la_, 1, 0, 31), "la>0"), c.node(c.t_ge(lb_, 1, 0, 31), "lb>0"),
@@ -651,7 +658,9 @@ def build(target: Target | None = None) -> Chip8Q35:
     case([at_addr, calling, neq, ez[1]], 1, bios.LEN + 1)
     case([at_val, calling, ez[1]], 0, lb_bits)
     case([at_addr, calling, neq, ez[2]], 1, bios.MODE)
-    case([at_val, calling, ez[2]], 0, [inline_mode])
+    mode_bits = [inline_mode, c.and_([inline_mode, a_o1 + a_o2], "mode.$"),
+                 c.and_([inline_mode, a_o2], "mode.$$")]
+    case([at_val, calling, ez[2]], 0, mode_bits)
     case([at_addr, calling, neq, ez[3]], 1, spec.PC)
     case([at_val, calling, ez[3]], 0, entry)
     case([at_addr, calling, neq, ez[4]], 2, 0)
@@ -813,10 +822,12 @@ def build(target: Target | None = None) -> Chip8Q35:
     trail = c.node(c.t_eq(z, 1, -255, JMAX + 1, lits=[small, mode, nz])
                    + c.t_and([big, mode, jeq(lim + 1)]), "print.trail")
     in_print = [k["fd"][0], c.is_step + c.is_text, one - calling]
-    code = {cls: TEXT_CODE + cls - B.TEXT_BASE for cls in (B.NL, B.TR_OPEN, B.TR_CLOSE, B.SPACE)}
+    code = {cls: TEXT_CODE + cls - B.TEXT_BASE
+            for cls in (B.NL, B.TR_OPEN, B.TR_CLOSE, B.SPACE, B.PERIOD, B.DOLLAR, B.DDOLLAR)}
     for lits, cls in [([tool, jeq(0)], B.NL), ([tool, jeq(1)], B.TR_OPEN), ([tool, jeq(2)], B.NL),
                       ([tool, nl_end], B.NL), ([tool, trc], B.TR_CLOSE), ([tool, nl_last], B.NL),
-                      ([mode, jeq(0)], B.SPACE), ([trail], B.SPACE)]:
+                      ([mode, jeq(0)], B.SPACE), ([trail, one - mode_d], B.PERIOD),
+                      ([trail, mode_d, one - mode_dd], B.DOLLAR), ([trail, mode_dd], B.DDOLLAR)]:
         case(in_print + lits, 2, code[cls])
     case(in_print + [digit], 2, list(vread[:4]) + [1])  # TEXT_CODE + low nibble
     # who predicts the next token: the circuit on chip tokens and inside a print, else Qwen
