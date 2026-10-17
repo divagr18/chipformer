@@ -73,9 +73,9 @@ class Executor:
                 wd = np.zeros((len(terms), D))
                 for u, (cf, _, _, out) in enumerate(terms):
                     wd[u, out] = float(cf)
-                self.steps.append(("ffn", Lin(_mat([a for _, a, _, _ in terms], D), device),
-                                   Lin(_mat([b for _, _, b, _ in terms], D), device),
-                                   Lin(wd, device)))
+                wab = np.concatenate([_mat([a for _, a, _, _ in terms], D),
+                                      _mat([b for _, _, b, _ in terms], D)], 1)
+                self.steps.append(("ffn", Lin(wab, device), len(terms), Lin(wd, device)))
                 continue
             heads = [n for n in nodes if isinstance(n, Head)]
             H = len(heads)
@@ -111,11 +111,14 @@ class Executor:
                     wo[j * HD + col, d] += w
             decays = [j for j in range(V) if np.abs(wa_[:, j]).sum()]
             t = lambda a, **kw: torch.tensor(a, device=device, **kw)  # noqa: E731
+            lag0 = np.zeros((4, D, len(decays) + V + V * HD))  # a, beta, z read lag 0 only
+            lag0[0] = np.concatenate([wa_[:, decays], wbeta, wz], 1)
+            proj = np.concatenate([wq, wk, wv, lag0], 2)  # one matmul for the sublayer
+            nq, nv, nd = H * HD, V * HD, len(decays)
             self.steps.append({
-                "q": Lin(wq, device), "k": Lin(wk, device), "v": Lin(wv, device),
-                "a": Lin(wa_[:, decays], device), "decays": t(decays, dtype=torch.long),
-                "beta": Lin(wbeta, device), "bconst": t(bconst, dtype=torch.float32),
-                "z": Lin(wz, device), "o": Lin(wo, device),
+                "proj": Lin(proj, device),
+                "split": [nq, nq, nv, nd, V, nv], "decays": t(decays, dtype=torch.long),
+                "bconst": t(bconst, dtype=torch.float32), "o": Lin(wo, device),
                 "kh": t([h for h, _ in vh], dtype=torch.long),
                 "ar": torch.arange(V, device=device), "H": H, "V": V, "heads": heads,
                 "S": torch.zeros(V, HD, HD, device=device)})
@@ -157,21 +160,19 @@ class Executor:
         """One position: x [D] (the embedding row) -> the residual after every node."""
         for i, st in enumerate(self.steps):
             if isinstance(st, tuple):
-                _, wa, wb, wd = st
-                x1 = x[None]
-                x = x + wd((torch.relu(wb(x1)) * wa(x1))[None])
+                _, wab, nu, wd = st
+                ab = wab(x[None])
+                x = x + wd((torch.relu(ab[nu:]) * ab[:nu])[None])
                 continue
             H, V, S, kh, ar = st["H"], st["V"], st["S"], st["kh"], st["ar"]
             hist = self.hist[i]
             xs = torch.cat([x[None], hist])  # lags 0..3
-            q = torch.relu(st["q"](xs)).view(H, HD)
-            k = torch.relu(st["k"](xs)).view(H, HD)
-            v = torch.relu(st["v"](xs)).view(V, HD)
+            q, k, v, a, bt, z = torch.split(st["proj"](xs), st["split"])
+            q, k, v = (torch.relu(e).view(-1, HD) for e in (q, k, v))
             if len(st["decays"]):
-                a = st["a"](x[None])
                 fac = torch.where(a == 0, 1.0, torch.where(a == 110, 0.5, 0.0))
                 S[st["decays"]] *= fac[:, None, None]
-            beta = (st["beta"](x[None]) + st["bconst"]) == 1
+            beta = (bt + st["bconst"]) == 1
             kv = k[kh]
             kmax, idx = kv.max(1)
             write = (kmax > 0) & beta
@@ -183,11 +184,9 @@ class Executor:
             ref = (o[:, REF_COLS[0]:REF_COLS[-1] + 1] ** 2).sum(1)
             norm = torch.where(ref > 0, torch.sqrt(ref / HD), torch.ones_like(ref))
             o = torch.where((ref > 0)[:, None], o / norm[:, None], torch.zeros_like(o))
-            z = torch.relu(st["z"](x[None])).view(V, HD)
+            z = torch.relu(z).view(V, HD)
             x = x + st["o"](((o * z).reshape(-1))[None])
-            hist[2].copy_(hist[1])
-            hist[1].copy_(hist[0])
-            hist[0].copy_(xs[0])
+            hist.copy_(xs[:3])
         return x
 
 
