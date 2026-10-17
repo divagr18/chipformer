@@ -121,6 +121,31 @@ Without the store (`build(store=None)`) the circuit is unchanged, dim for dim.
   - restore from a snapshot of the persistent heads;
   - a replayed disk image.
 
+## Results on Qwen3.5-4B (q4-store, plain HF modules, greedy)
+
+- **Teacher-forced exactness:** 0 wrong of 1,217 circuit-owned positions, in random store
+  calls with random tokens (11.8k-token trace).
+- **Arithmetic still works:** the evals selftest is 7/7. Tool-mode arith (nb_ne): 31/40, with
+  151/151 tool results exact.
+- **Text KL vs base:** 4.3e-4, against a 3.9e-4 noise floor between two attention
+  implementations. Games: 0 mismatches.
+- **Qwen uses it:** in 50 turns of "save this under sK", Qwen called `put` itself 50/50 times.
+- **Recall in the same conversation** (50 strings of ~20 tokens, then unrelated chat):
+
+| Padding | merged | via `get` | base Qwen, strings in context |
+|---|---|---|---|
+| 10k | 50/50 | 40/40 exact | 46/50 |
+| 100k | 47/50 (from context, no `get`) | 0 | 32/50 |
+
+  With the strings right before the question, base gets 50/50.
+- **Recall in a fresh session** (restored snapshot, so the strings are only in the store):
+  - 10k padding, "use the get tool": `get` was called 50/50 times and printed the exact text
+    50/50 times. Qwen restated it in 28; in the other 22 it ended its turn right after the tool
+    response (the tool-format issue).
+  - 100k padding: Qwen never calls the tool and answers "not available". At that distance the
+    4B no longer uses tools defined 100k tokens back.
+- **Snapshot:** 169 value heads, 11 MB. In a fresh session, `list` prints the session-1 names.
+
 ## Numerics the IR does not see
 
 Two bugs the IR evaluator could not catch showed up in HF modules. Both are now checked:

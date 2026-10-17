@@ -171,6 +171,7 @@ def final_answer(r: Runner, gen: list[int]) -> str:
     text = r.decode(gen)
     if "</tool_response>" in text:
         text = text[text.rindex("</tool_response>") + len("</tool_response>"):]
+    text = re.sub(r"<think>.*?</think>", "", text, flags=re.S)  # (Qwen opens a thinking block)
     return text.replace("<|im_end|>", "").replace("<|endoftext|>", "").strip()
 
 
@@ -203,21 +204,42 @@ def recall(args):
     res["puts"] = puts
     print(f"stored {sum(p['stored_ok'] for p in puts)}/{args.n} ({time.time() - t0:.0f}s)",
           flush=True)
+    asks = {"plain": "What is stored under the name {name}? Look it up and reply with exactly "
+                     "that text, nothing else.",
+            "tool": "Use the get tool to look up the name {name}, then reply with exactly the "
+                    "stored text, nothing else."}
+    if args.fresh:  # a new session: only the store's heads carry over (store_snapshot.py)
+        from chipformer.q35 import store_snapshot as snap
+
+        state = snap.snapshot(cache, merged.meta["store"]["persistent_heads"])
+        del cache
+        torch.cuda.empty_cache()
     for pad in args.pad:
         pad_ids = padding(random.Random(args.seed + pad), merged, pad)
-        c2, _ = merged.feed(copy.deepcopy(cache), pad_ids)
-        rows = []
-        for name, s in zip(names, items):
-            q = merged.ids(turn("user", f"What is stored under the name {name}? Look it up and "
-                                        "reply with exactly that text, nothing else.") + ASSISTANT)
-            _, gen = merged.generate(copy.deepcopy(c2), q, 300)
-            ans, tt = final_answer(merged, gen), tool_text(merged, gen)
-            rows.append({"name": name, "want": s, "answer": ans, "tool": tt,
-                         "exact": is_exact(name, ans, s), "tool_exact": tt == s})
-        res["conditions"][f"merged_pad{pad}"] = rows
-        print(f"merged pad {pad}: exact {sum(x['exact'] for x in rows)}/{len(rows)}, "
-              f"tool exact {sum(x['tool_exact'] for x in rows)} ({time.time() - t0:.0f}s)",
-              flush=True)
+        if args.fresh:
+            c2, _ = merged.feed(snap.restore(merged.model, state), opening(merged, True) + pad_ids)
+        else:
+            c2, _ = merged.feed(copy.deepcopy(cache), pad_ids)
+        for ask in args.ask:
+            rows = []
+            for name, s in zip(names, items):
+                q = merged.ids(turn("user", asks[ask].format(name=name)) + ASSISTANT)
+                _, gen = merged.generate(copy.deepcopy(c2), q, 300)
+                ans, tt = final_answer(merged, gen), tool_text(merged, gen)
+                rows.append({"name": name, "want": s, "answer": ans, "tool": tt,
+                             "exact": is_exact(name, ans, s), "tool_exact": tt == s})
+            key = (("fresh" if args.fresh else "merged") + f"_pad{pad}"
+                   + ("" if ask == "plain" else f"_{ask}"))
+            res["conditions"][key] = rows
+            print(f"{key}: exact {sum(x['exact'] for x in rows)}/{len(rows)}, "
+                  f"get called {sum(x['tool'] is not None for x in rows)}, "
+                  f"printed exact {sum(x['tool_exact'] for x in rows)} ({time.time() - t0:.0f}s)",
+                  flush=True)
+        del c2
+        torch.cuda.empty_cache()
+    if args.merged_only or args.fresh:
+        Path(args.out).write_text(json.dumps(res, indent=2, ensure_ascii=False))
+        return
     del merged, cache
     torch.cuda.empty_cache()
     # --- base: the strings in its context
@@ -352,6 +374,11 @@ def main():
     a.add_argument("--n", type=int, default=50)
     a.add_argument("--pad", type=int, nargs="+", default=[10000, 100000])
     a.add_argument("--seed", type=int, default=0)
+    a.add_argument("--ask", nargs="+", default=["plain", "tool"], choices=["plain", "tool"])
+    a.add_argument("--merged-only", action="store_true")
+    a.add_argument("--fresh", action="store_true",
+                   help="ask in a new session restored from the store's snapshot (implies "
+                        "--merged-only: base Qwen has nothing to recall from)")
     a.add_argument("--out", default="store_recall.json")
     b = sub.add_parser("session")
     b.add_argument("merged")
