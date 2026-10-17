@@ -218,8 +218,11 @@ class FreeRun:
         if compile_:
             self.ex.step = torch.compile(self.ex.step, mode="max-autotune-no-cudagraphs",
                                          dynamic=False)
-        self.fam_dims = [self._dim(e) for e in c.out_fam]
-        self.pay_dims = [self._dim(e) for e in c.out_pay]
+        lt = lambda a: torch.tensor(a, dtype=torch.long, device=device)  # noqa: E731
+        self.fam_idx = lt([self._dim(e) for e in c.out_fam])
+        self.pay_idx = lt([self._dim(e) for e in c.out_pay])
+        self.fam_w = 2.0 ** torch.arange(len(c.out_fam), device=device)
+        self.pay_w = 2.0 ** torch.arange(len(c.out_pay), device=device)
         # token embeddings are linear in the payload bits within a family
         nf, nb = len(C.OUT_NAMES), C.NPAY
         base, bits = np.zeros((nf, self.ex.D)), np.zeros((nf, nb, self.ex.D))
@@ -253,12 +256,10 @@ class FreeRun:
 
     def _step(self):
         out = self.ex.step(self.x)
-        fam = (torch.round(out[:, self.fam_dims]) * (2 ** torch.arange(len(self.fam_dims),
-                                                                        device=self.dev))).sum(1)
-        pay = torch.round(out[:, self.pay_dims])
+        fam = (torch.round(out[:, self.fam_idx]) * self.fam_w).sum(1)
+        pay = torch.round(out[:, self.pay_idx])
         fid = fam.long().clamp(0, len(self.ids) - 1)
-        self.tok.copy_(self.ids[fid] + (pay * 2 ** torch.arange(pay.shape[1], device=self.dev)
-                                        ).sum(1).long())
+        self.tok.copy_(self.ids[fid] + (pay * self.pay_w).sum(1).long())
         self.x.copy_(self.base[fid] + torch.einsum("bi,bid->bd", pay, self.bits[fid]))
 
     def capture(self):

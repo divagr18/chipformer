@@ -38,6 +38,15 @@ NFAM = 4  # family id bits in the output code
 NPAY = 16  # payload bits in the output code
 OUT_W = 2.0**7  # head output weight (as thead)
 JMAX = 10  # longest record: FLT, 8 HEX, HALT
+CODE_AMP = 128  # a token's code in its (tied) embedding row: CODE_AMP * (2 * bit - 1)
+KAPPA = 2.0**-20  # the predicted code after the exit: KAPPA * (2 * bit - 1)
+
+
+def token_code(t: int) -> list[int]:
+    """The 20 output-code bits of a token: family id (4) then payload (16)."""
+    fam, p = S.family(t)
+    fid = FAM_ID[fam]
+    return [fid >> i & 1 for i in range(NFAM)] + [p >> i & 1 for i in range(NPAY)]
 PAY_W = {"V": 15, "F0": 15, "F1": 15, "F2": 2, "J": 16, "R": 16, "BYTE": 8, "FLT": 3, "HEX": 4}
 
 
@@ -68,6 +77,10 @@ class RvCore(Circ):
                     for n, w in PAY_W.items() if n in ("V", "F0", "F1", "F2", "J", "R")}
         self.final = sum((self.fam[n] for n in S.FINAL), Expr())
         self.tables = {}  # name -> head node (for snapshots)
+        # the token's own code (read by the tied output head; cleared before the exit writes the
+        # predicted one)
+        self.code = [f(f"code{i}", lambda t, i=i: CODE_AMP * (2 * token_code(t)[i] - 1), full=True)
+                     for i in range(NFAM + NPAY)]
 
     def zeros(self, n: int, name: str) -> list:
         """Fresh dims that start at 0 (heads add onto them)."""
@@ -578,10 +591,27 @@ def build(target: Target | None = None) -> RvCore:
     for k in range(8):
         case([jeq(1 + k), any_fault], "HEX", pc_bits[4 * (7 - k):4 * (8 - k)])
     case([jeq(9), any_fault], "HALT")
-    fam_bits = c.select_bits([(l_, FAM_ID[fn]) for l_, fn, _ in cases], NFAM, "out.fam")
-    pay_bits = c.select_bits([(l_, pl) for l_, _, pl in cases if not isinstance(pl, int)], NPAY,
-                             "out.pay")
+    fam_cases = [(l_, FAM_ID[fn]) for l_, fn, _ in cases]
+    pay_cases = [(l_, pl) for l_, _, pl in cases if not isinstance(pl, int)]
+    fam_bits = c.select_bits(fam_cases, NFAM, "exit.fam")
+    pay_bits = c.select_bits(pay_cases, NPAY, "exit.pay")
     c.out_fam, c.out_pay = fam_bits, pay_bits
+    # the exit: the input code is cleared, and the same cases write KAPPA * (2 * bit - 1) into
+    # the code dims in the output stage itself (no extra layer); a stock output head tied to the
+    # embedding then scores every token by how many code bits agree
+    for e in c.code:
+        c.ffn([(-1, one, e), (1, one, -1 * e)], "code.clear", into=e)
+    for i, e in enumerate(c.code):
+        cs, bit = (fam_cases, i) if i < NFAM else (pay_cases, i - NFAM)
+        terms = c.t_const(-KAPPA)
+        for lits, val in cs:
+            if isinstance(val, int):
+                if val >> bit & 1:
+                    terms += c.t_and(lits, 2 * KAPPA)
+            elif bit < len(val) and val[bit].terms:
+                terms += c.t_and([*lits, val[bit]], 2 * KAPPA)
+        c.ffn(terms, f"exit.code{i}", into=e, min_level=max(c.level(b) for b in fam_bits) - 1)
+    c.keep = [next(iter(e.terms)) for e in c.code]
     c.probe = {"w": w, "anchor": anchor, "cnt": cnt, "jt": jt, "U": U, "A": A, "B": B,
                "imm": imm, "r": r, "val": val, "mem": mem, "ld": ld, "k0": k0, "k1": k1,
                "taken": taken, "logic": logic, "shift": shift, "merged": merged,
