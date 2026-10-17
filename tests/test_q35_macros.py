@@ -38,8 +38,8 @@ def test_reference_results(op, a, b):
     v = {"add": int(a) + int(b), "sub": int(a) - int(b), "mul": int(a) * int(b)}[op]
     bm, n0 = run_call(op, a, b, 1)
     assert shown(bm, n0) == (" -" if v < 0 else " ") + str(abs(v)) + "."
-    bm, n0 = run_call(op, a, b, 0)  # a tool call: < 0 prints nothing
-    assert shown(bm, n0) == ("" if v < 0 else str(v))
+    bm, n0 = run_call(op, a, b, 0)  # a tool call: " -" instead of the newline below 0
+    assert shown(bm, n0) == (" -" + str(-v) if v < 0 else str(v))
 
 
 def test_trace_lengths():
@@ -117,5 +117,5 @@ def test_circuit_random_sessions(circuit):
 
 
 def test_ops_are_fixed():
-    assert {k: v for k, v in bcd.OPS.items() if k != "div"} == {"add": 0x202, "sub": 0x206,
-                                                                  "mul": 0x20A}
+    assert {k: bcd.OPS[k] for k in ("add", "sub", "mul")} == {"add": 0x202, "sub": 0x206,
+                                                               "mul": 0x20A}

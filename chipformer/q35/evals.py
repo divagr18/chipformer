@@ -106,9 +106,12 @@ def _div(a, b):
 
 def div_text(a: int, b: int) -> str:
     """How the computer prints a / b (lib/bcd.py div): the exact quotient, or its first DEC
-    decimals and "..." when it does not end."""
+    decimals and "..." when it does not end; "-" first when exactly one of a, b is negative."""
     from chipformer.q35.lib import bcd
 
+    if (a < 0) != (b < 0):
+        return "-" + div_text(abs(a), abs(b))
+    a, b = abs(a), abs(b)
     q, r = divmod(a, b)
     if not r:
         return str(q)
@@ -122,9 +125,38 @@ def div_text(a: int, b: int) -> str:
     return f"{q}." + "".join(digs) + "..."
 
 
+def _mod(a, b):
+    if b == 0:
+        raise ZeroDivisionError
+    return a % b
+
+
+def _gcd(a, b):
+    if a.denominator != 1 or b.denominator != 1:
+        raise ValueError("gcd of a fraction")
+    return math.gcd(int(a), int(b))
+
+
 # exact meaning of each tool (by name); demo.TOOLS decides which ones the model sees
 PY_TOOLS = {"add": lambda a, b: a + b, "mul": lambda a, b: a * b,
-            "sub": lambda a, b: a - b, "div": _div}
+            "sub": lambda a, b: a - b, "div": _div, "mod": _mod, "gcd": _gcd}
+SIGNED = ("mul", "div", "gcd")  # the computer takes signed a, b for these (bridge.SIGNED)
+
+
+def computer_text(op: str, a: int, b: int) -> str | None:
+    """Exactly what the computer prints for op(a, b) (inline or as a tool response), or None
+    if it does not answer it (signed a or b for add / sub / mod, division by 0)."""
+    if op not in SIGNED and (a < 0 or b < 0):
+        return None
+    if op in ("div", "mod") and b == 0:
+        return None
+    if op == "div":
+        return div_text(a, b)
+    if op == "mul":  # sign and magnitude: -0 stays "-0"
+        return ("-" if (a < 0) != (b < 0) else "") + str(abs(a * b))
+    if op == "gcd":
+        return str(math.gcd(a, b))
+    return str(PY_TOOLS[op](a, b))
 
 
 def tools():
@@ -251,7 +283,7 @@ def parse_calls(text: str) -> list[dict]:
 
 def int_arg(s):
     s = (s or "").strip()
-    return int(s) if re.fullmatch(r"\d+", s) else None
+    return int(s) if re.fullmatch(r"-?\d+", s) else None
 
 
 def num_arg(s):
@@ -279,7 +311,7 @@ def true_result(op: str, args: dict):
         return None
     try:
         return PY_TOOLS[op](x, y)
-    except ZeroDivisionError:
+    except (ZeroDivisionError, ValueError):
         return None
 
 
@@ -590,16 +622,37 @@ def decode_all(bd, ctx, prompts: list[list[int]], budget: int, hook, on_done) ->
 # ---------------------------------------------------------------------------------- scoring
 
 def _key(op, a, b):
-    return (a, b) if op in ("sub", "div") else frozenset((a, b))
+    return (a, b) if op in ("sub", "div", "mod") else frozenset((a, b))
 
 
 USER_TURN = re.compile(r"<\|im_start\|>\s*user(?!\s*<tool_response>)")
 
 
-INLINE_RE = re.compile(r"(\d[\d,]*)[\s$(]*(\+|-|−|×|\*|\\times|\\cdot|/|÷|\\div)[\s$(]*"
-                       r"(\d[\d,]*)[\s$(]*=\s*$")
+# "A op B =" with optional signs ("-5", "(-5)"), or "gcd(A, B) ="
+INLINE_RE = re.compile(r"(?P<sa>(?<![\w)\]])[-−]|\(-)?(?P<a>\d[\d,]*)\)?[\s$(]*"
+                       r"(?P<op>\+|-|−|×|\*|\\times|\\cdot|/|÷|\\div|\\bmod|\\mod|mod|%)[\s$]*"
+                       r"\(?(?P<sb>[-−])?(?P<b>\d[\d,]*)\)?[\s$)]*=\s*$")
+GCD_RE = re.compile(r"gcd\(\s*(?P<sa>[-−])?(?P<a>\d[\d,]*)\s*,\s*(?P<sb>[-−])?(?P<b>\d[\d,]*)"
+                    r"\s*\)\s*=\s*$")
 INLINE_OPS = {"+": "add", "-": "sub", "−": "sub", "×": "mul", "*": "mul",
-              "\\times": "mul", "\\cdot": "mul", "/": "div", "÷": "div", "\\div": "div"}
+              "\\times": "mul", "\\cdot": "mul", "/": "div", "÷": "div", "\\div": "div",
+              "\\bmod": "mod", "\\mod": "mod", "mod": "mod", "%": "mod"}
+
+
+def inline_expr(before: str):
+    """The calculation the text before a machine run ends with: (match, op, a, b) or None."""
+    tail = before[-200:]
+    e, op = GCD_RE.search(tail), "gcd"
+    if not e:
+        e = INLINE_RE.search(tail)
+        op = INLINE_OPS[e["op"]] if e else None
+    if not e:
+        return None
+
+    def num(sign, digits):
+        return -int(digits.replace(",", "")) if sign else int(digits.replace(",", ""))
+
+    return e, op, num(e["sa"], e["a"]), num(e["sb"], e["b"])
 
 
 def inline_fires(text: str, pred) -> list[dict]:
@@ -616,22 +669,18 @@ def inline_fires(text: str, pred) -> list[dict]:
         before = MARK.sub("", text[:m.start()])
         if before.rstrip().endswith("</tool_call>") or m.end() == len(text):
             continue  # a tool call, or a run cut off by the budget / context before its print
-        e = INLINE_RE.search(before[-200:])
-        # v13+ prints A - B < 0 as " -digits" (before: nothing)
+        x = inline_expr(before)
+        # v13+ prints A - B < 0 as " -digits" (before: nothing); v16 also signed mul / div
         shown = ("-" if "-" in m[1] else "") + m[2].replace(",", "")
         machine = shown
-        f = {"expr": e[0].strip() if e else before[-40:], "printed": shown[:60]}
-        if e:
-            a, b = int(e[1].replace(",", "")), int(e[3].replace(",", ""))
-            op = INLINE_OPS[e[2]]
-            if op == "div" and not b:
-                continue
-            v = PY_TOOLS[op](a, b)
-            t = (div_text(a, b) if op == "div" else
-                 str(v) if v >= 0 or shown.startswith("-") else "")
+        f = {"expr": x[0][0].strip() if x else before[-40:], "printed": shown[:60]}
+        t = computer_text(*x[1:]) if x else None
+        if x and t is None and x[1] in ("div", "mod") and not x[3]:
+            continue  # by 0: prints nothing
+        if t is not None:
             exact = shown.startswith(t)
             machine = t if exact else shown
-            f |= {"op": op, "a": a, "b": b, "true": t if op == "div" else str(v), "exact": exact,
+            f |= {"op": x[1], "a": x[2], "b": x[3], "true": t, "exact": exact,
                   "appended": shown[len(t):][:60] if exact else ""}
         later = MARK.sub("", text[m.end():]).replace(",", "")
         # a number Qwen writes right after the print (v9 " R ", v11 " R$" / " R$$" / " R.")
@@ -674,13 +723,15 @@ def judge(p: dict, text: str, think: bool) -> dict:
     for c in parse_calls(text):
         v = true_result(c["op"], c["args"])
         ia, ib = int_arg(c["args"].get("a")), int_arg(c["args"].get("b"))
-        valid = (c["op"] in tool_names() and ia is not None and ib is not None
-                 and (c["op"] != "sub" or ia >= ib))
+        # valid: integer arguments the computer answers (v16: signed for mul, div and gcd)
+        want = (computer_text(c["op"], ia, ib) if c["op"] in tool_names() and ia is not None
+                and ib is not None else None)
+        valid = want is not None
         resp = (c["response"] or "").strip()
         rv = num_arg(resp) if resp else None
         e = {"op": c["op"], "a": c["args"].get("a"), "b": c["args"].get("b"), "valid": valid,
              "response": c["response"], "true": fmt(v) if v is not None else None,
-             "exact": (resp == div_text(ia, ib) if c["op"] == "div" and valid and ib
+             "exact": (resp == want if valid
                        else rv is not None and v is not None and rv == v)}
         if "steps" in p and v is not None:
             e["in_gold_steps"] = v in gold_steps
@@ -775,16 +826,20 @@ class BannedHead(torch.nn.Module):
 
 
 SELFTEST = [("mul", 4, 4), ("mul", 12345, 678), ("add", 987654321, 123456789),
-            ("sub", 1000000, 1), ("sub", 5000, 4321), ("div", 1000000, 7), ("div", 8352, 48)]
+            ("sub", 1000000, 1), ("sub", 5000, 4321), ("div", 1000000, 7), ("div", 8352, 48),
+            ("div", -1418261, -408), ("mul", -63075, 8808), ("sub", 5, 675),
+            ("mod", 13201915, 1785), ("gcd", 1785, 13201915)]
 
 
 def selftest(bd, ctx, tok, bios) -> None:
     """Before a merged run: Qwen calls each tool on known operands and every call it makes
     must print the exact result. Catches a BIOS that does not match the circuit (the routine
     entry points are compiled into the weights) or inexact kernels."""
-    sym = {"add": "+", "mul": "*", "sub": "-", "div": "/"}
+    sym = {"add": "+", "mul": "*", "sub": "-", "div": "/", "mod": "mod"}
     cases = [c for c in SELFTEST if c[0] in tool_names()]
-    prompts = [build_prompt(tok, f"Use the {op} tool to compute {a} {sym[op]} {b}.", "merged", bios)
+    prompts = [build_prompt(tok, f"Use the {op} tool to compute "
+                            + (f"gcd({a}, {b})." if op == "gcd" else f"{a} {sym[op]} {b}."),
+                            "merged", bios)
                for op, a, b in cases]
     got = {}
     decode_all(bd, ctx, prompts, 400, None, lambda i, r: got.__setitem__(i, r))
@@ -794,9 +849,11 @@ def selftest(bd, ctx, tok, bios) -> None:
             v = true_result(c["op"], c["args"])
             if v is None:
                 continue
+            ia, ib = int_arg(c["args"]["a"]), int_arg(c["args"]["b"])
+            want = computer_text(c["op"], ia, ib) if ia is not None and ib is not None else None
+            if want is None:
+                continue
             n += 1
-            want = (div_text(int_arg(c["args"]["a"]), int_arg(c["args"]["b"]))
-                    if c["op"] == "div" else fmt(v))  # div truncates: 10 decimals, then "..."
             if (c["response"] or "").strip() != want:
                 bad.append((c["op"], c["args"], c["response"], want))
     print(f"selftest: {n} calls, {len(bad)} wrong {bad}", flush=True)
