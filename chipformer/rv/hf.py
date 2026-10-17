@@ -71,10 +71,11 @@ def inject(c, cache) -> None:
                 S[row] = torch.tensor(vec, dtype=S.dtype, device=S.device)
 
 
-def check(c, model, lay, ids, toks: list[int], mode: str = "prefill") -> int:
+def check(c, model, lay, ids, toks: list[int], mode: str = "prefill", tokens: bool = False):
     """Run toks (from GO) through the model with the snapshot injected first; returns the
     number of positions compared. Asserts the residual equals the IR evaluator's on every IR dim
-    at every position."""
+    at every position. With ``tokens``, returns (positions, inexact dims, wrong next-token
+    predictions) instead of asserting (fp32 is not bit-exact: see docs/rv32.md)."""
     want = ir.evaluate(c, toks, check=False)
     dims = list(range(1, len(c.dims)))
     cols = [lay.dim(d) for d in dims]
@@ -97,6 +98,14 @@ def check(c, model, lay, ids, toks: list[int], mode: str = "prefill") -> int:
         h = torch.cat(hs).double().cpu().numpy()[:, cols]
     w = want[:, dims]
     bad = np.nonzero((h != w).any(0))[0]
+    if tokens:
+        from chipformer.rv import core
+
+        mat = np.zeros_like(want)
+        mat[:, dims] = h
+        pred = core.predictions(c, mat)
+        wrong = sum(pred[t] != toks[t + 1] for t in range(len(toks) - 1))
+        return h.shape[0], len(bad), wrong
     assert not len(bad), [(c.dims[dims[i]].name, int(np.argmax(h[:, i] != w[:, i])),
                            float(h[np.argmax(h[:, i] != w[:, i]), i]),
                            float(w[np.argmax(h[:, i] != w[:, i]), i])) for i in bad[:5]]

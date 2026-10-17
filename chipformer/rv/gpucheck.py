@@ -46,6 +46,12 @@ def main():
         model = model.to("cuda" if torch.cuda.is_available() else "cpu")
         for mode in ["prefill"] + (["decode"] if args.decode else []):
             t = time.time()
+            if args.dtype == "fp32":
+                n, nd, wrong = hf.check(c, model, lay, ids, toks, mode, tokens=True)
+                bad += wrong > 0
+                print(f"{name:14s} {mode:7s} {n} positions: {nd} dims not bit-exact, "
+                      f"{wrong} wrong tokens ({time.time() - t:.1f} s)", flush=True)
+                continue
             try:
                 n = hf.check(c, model, lay, ids, toks, mode)
                 print(f"{name:14s} {mode:7s} exact on {n} positions ({time.time() - t:.1f} s)",
