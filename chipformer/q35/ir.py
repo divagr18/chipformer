@@ -236,9 +236,12 @@ class Graph:
 
         A dim several nodes write (``into``) keeps its build-order meaning: a reader sees the
         writes built before it and none built after, and later writers never go below the
-        dim's first writer. ``unit_cap`` (default: the target's) caps FFN units per sublayer.
+        dim's first writer. ``unit_cap`` caps FFN units per sublayer; the default leaves a
+        sixteenth of each MLP for the allocator's handover units (emit.allocate), whose
+        absence in a full sublayer costs residual slots.
         """
-        cap_units = self.target.intermediate if unit_cap is None else unit_cap
+        inter = self.target.intermediate
+        cap_units = inter - inter // 16 if unit_cap is None else unit_cap
         nodes = self.nodes
         n = len(nodes)
 

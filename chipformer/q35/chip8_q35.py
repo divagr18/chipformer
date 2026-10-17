@@ -725,8 +725,9 @@ def build(target: Target | None = None, store=None, schedule: bool = True) -> Ch
     drawn = c.node(c.t_const(1) + c.t_and([k["clip"][0]], -1)
                    + c.t_and([k["clip"][0], on_screen]), "drawn")
     idx_bits = col_bits + row_bits
-    target = c.select_bits([([drawn], idx_bits + [1, 0, 0, 0, 1]),
-                            ([one - drawn], spec.NULL)], 13, "target")
+    # (0 on text tokens, so its dims can live in Qwen's: overlay.py)
+    target = c.select_bits([([drawn, c.mu], idx_bits + [1, 0, 0, 0, 1]),
+                            ([one - drawn, c.mu], spec.NULL)], 13, "target")
     off_bits = k["dx_off"]
     part = []
     for p in range(8):

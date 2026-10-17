@@ -103,6 +103,10 @@ def allocate(g: Graph, clearable: set[int] | None, keep: set[int], unit_cap: int
     for d in keep:
         last[d] = top
     units = dict(g.units)
+    # a head whose outputs may be tiny (the counter's 2^-j) keeps its slots: the a-form unit
+    # that hands a slot over cannot subtract a value that underflows after the norm
+    sticky = {d for n in g.nodes if isinstance(n, Head) and n.tiny
+              for vh in n.vheads() for _, d, _ in vh.out}
     slots: dict[int, int] = {}
     pools: tuple[list[int], list[int]] = ([], [])  # slot -> current dim: chip region, overlay
     a = Alloc(slots, 0)
@@ -111,7 +115,7 @@ def allocate(g: Graph, clearable: set[int] | None, keep: set[int], unit_cap: int
         for pool in (1, 0) if overlay is not None and d in overlay else (0,):
             owner = pools[pool]
             for s, o in enumerate(owner):
-                if o in keep or (clearable is not None and o not in clearable):
+                if o in keep or o in sticky or (clearable is not None and o not in clearable):
                     continue
                 born = g.dims[o].level  # the old value must already be in the sublayer's input
                 if (by_ffn and last[o] <= level and born < level
