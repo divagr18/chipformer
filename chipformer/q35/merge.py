@@ -172,8 +172,25 @@ def pick_hidden(base: int, n_chip: int) -> tuple[int, int]:
     return best
 
 
+ID_GAIN = 4.0  # the store's id code: final-norm gain, relative to the class code's
+
+
+def store_row_features(c, lay, v0: int) -> dict[int, torch.Tensor]:
+    """Residual index -> value per Qwen row (v0 rows) of the features that read a token's own
+    id (the object store's): its id bits and id code, newline and tag detectors."""
+    from chipformer.q35 import store
+
+    vocab = c.store.vocab
+    out = {}
+    toks = [store.qtok(q, vocab.cls(q)) for q in range(v0)]
+    for d in sorted(c.full_fns):
+        col = torch.tensor([float(c.feature_value(d, t)) for t in toks])
+        out[lay.dim(d)] = col
+    return out
+
+
 def build_merged(src, dst, hidden: int | None = None, m: int | None = None,
-                 mute_qwen: bool = True):
+                 mute_qwen: bool = True, store: bool = False):
     """Write Qwen3.5 + the CHIP-8 circuit as one checkpoint ("v2" layout); returns (circuit,
     layout).
 
@@ -194,9 +211,16 @@ def build_merged(src, dst, hidden: int | None = None, m: int | None = None,
     cfg, sd = load(src)
     tc = cfg["text_config"]
     d0, v0, inter = tc["hidden_size"], tc["vocab_size"], tc["intermediate_size"]
-    c = chip8_q35.build(Target(tc["linear_num_key_heads"], tc["linear_num_value_heads"], inter))
+    vocab = None
+    if store:
+        from chipformer.q35.store import Vocab
+
+        vocab = Vocab(src / "tokenizer.json")
+    c = chip8_q35.build(Target(tc["linear_num_key_heads"], tc["linear_num_value_heads"], inter),
+                        store=vocab)
     keep = set(c.keep)
     code = [next(iter(e.terms)) for e in c.code]
+    id_code = [next(iter(e.terms)) for e in c.store.yc] if store else []
     tau, mu = next(iter(c.tau.terms)), next(iter(c.mu.terms))
     alloc = allocate(c, None, keep, inter)
     if hidden is None:
@@ -245,6 +269,9 @@ def build_merged(src, dst, hidden: int | None = None, m: int | None = None,
         for string in strings:
             (i,) = tok.encode(string, add_special_tokens=False)
             full[i, d0:] = rows[cls][d0:]
+    if store:  # every Qwen row also carries its own id bits and id code (store_q35.py)
+        for col, vals in store_row_features(c, lay, v0).items():
+            full[:v0, col] = vals.to(torch.bfloat16)
     chip = embedding_rows(c, lay, list(range(spec.VOCAB_SIZE)), hidden)
     full[v0 : v0 + spec.VOCAB_SIZE] = chip.to(torch.bfloat16)
     sd[TEXT + "embed_tokens.weight"] = full
@@ -258,6 +285,8 @@ def build_merged(src, dst, hidden: int | None = None, m: int | None = None,
     norm[d0:] = -1.0  # chip dims are invisible to the lm_head ...
     for d in code:  # ... except the output code and tau
         norm[lay.dim(d)] = tiny.code_gain(lay)
+    for d in id_code:  # (an any-print beats its 16-of-18-bit neighbours by 8 code units)
+        norm[lay.dim(d)] = ID_GAIN * tiny.code_gain(lay)
     norm[lay.dim(tau)] = TAU_GAIN
     check_bf16("final norm", norm[d0:])
     sd[TEXT + "norm.weight"] = norm.to(torch.bfloat16)
@@ -294,6 +323,11 @@ def build_merged(src, dst, hidden: int | None = None, m: int | None = None,
             "chip_dims_offset": d0, "ballast_dims": m, "circuit": c.stats(),
             "slots": alloc.n_slots, "muted": mute_qwen,
             "text_ids": {str(k): v for k, v in text_ids.items()}}
+    if store:
+        from chipformer.q35 import store_q35
+
+        meta["store"] = {"chunks": c.store.n_chunks, "tokens_per_row": c.store.tpr,
+                         "persistent_heads": store_q35.persistent_heads(c)}
     (dst / "chipformer.json").write_text(json.dumps(meta, indent=2))
     return c, lay
 
@@ -307,8 +341,10 @@ def main() -> None:
     ap.add_argument("--hidden", type=int, default=None)
     ap.add_argument("--ballast", type=int, default=None)
     ap.add_argument("--no-mute", action="store_true", help="leave Qwen's layers active on chip tokens")
+    ap.add_argument("--store", action="store_true", help="add the object store (store.py)")
     args = ap.parse_args()
-    c, lay = build_merged(args.src, args.out, args.hidden, args.ballast, not args.no_mute)
+    c, lay = build_merged(args.src, args.out, args.hidden, args.ballast, not args.no_mute,
+                          args.store)
     print(f"{args.out}: hidden {lay.hidden}, {c.n_layers()} chip layers, {c.stats()}")
 
 
