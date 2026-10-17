@@ -218,7 +218,7 @@ class FreeRun:
         if compile_:
             self.ex.step = torch.compile(self.ex.step, mode="max-autotune-no-cudagraphs",
                                          dynamic=False)
-        lt = lambda a: torch.tensor(a, dtype=torch.long, device=device)  # noqa: E731
+        lt = lambda a: torch.tensor(a, dtype=torch.long, device=device)
         self.fam_idx = lt([self._dim(e) for e in c.out_fam])
         self.pay_idx = lt([self._dim(e) for e in c.out_pay])
         self.fam_w = 2.0 ** torch.arange(len(c.out_fam), device=device)
@@ -236,7 +236,7 @@ class FreeRun:
             if nm not in S.CONTROLS:
                 for i in range(S.FAMILIES[nm][1].bit_length() - 1):
                     bits[f, i] = self.ex.embed([t0 + (1 << i)])[0].cpu().numpy() - base[f]
-        t = lambda a, dt=torch.float32: torch.tensor(a, dtype=dt, device=device)  # noqa: E731
+        t = lambda a, dt=torch.float32: torch.tensor(a, dtype=dt, device=device)
         self.base, self.bits, self.ids = t(base), t(bits), t(ids, torch.long)
         self.x = torch.zeros(batch, self.ex.D, device=device)
         self.tok = torch.zeros(batch, dtype=torch.long, device=device)

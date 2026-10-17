@@ -44,6 +44,9 @@ def main():
     ap.add_argument("--steps", type=int, default=1000)
     ap.add_argument("--prog", default="c-crc32")
     ap.add_argument("--executor-only", action="store_true")
+    ap.add_argument("--batches", default="1,8,32", help="executor batch sizes (P1.6)")
+    ap.add_argument("--hf-compile", action="store_true",
+                    help="also time rv-tiny's HF modules: static cache + torch.compile")
     args = ap.parse_args()
     c = core.build()
     prog = elf.program(DATA / f"{args.prog}.elf")
@@ -53,8 +56,11 @@ def main():
     tpi = len(toks) / n_instr
     m = next(m for m in range(3, 16) if args.hidden % m == 0 and _is_pow4(args.hidden // m))
     dev = "cuda" if torch.cuda.is_available() else "cpu"
+    batches = [int(b) for b in args.batches.split(",")]
+    if args.hf_compile:
+        hf_compiled(c, prog, toks, steps_of(args, toks), tpi)
     if args.executor_only:
-        return run_executor(c, toks, steps_of(args, toks), tpi, dev)
+        return run_executor(c, toks, steps_of(args, toks), tpi, dev, batches)
     import chipformer.rv.hf as H
 
     orig = H.pick_layout
@@ -75,23 +81,60 @@ def main():
     print("compact weight counts", counts)
     del model
     torch.cuda.empty_cache()
-    run_executor(c, toks, steps, tpi, dev)
+    run_executor(c, toks, steps, tpi, dev, batches)
+
+
+def hf_compiled(c, prog, toks, steps, tpi):
+    """rv-tiny's stock HF modules decoding free-running: a StaticCache (snapshot injected) and
+    torch.compile(mode="reduce-overhead"), i.e. CUDA graphs. Checks the generated tokens."""
+    from transformers import StaticCache
+
+    from chipformer.rv import spec as S
+    from chipformer.rv import tiny
+
+    model, _ = tiny.build(c)
+    model = model.cuda()
+    cache = StaticCache(config=model.config, max_cache_len=steps + 64)
+    with torch.no_grad():
+        model(input_ids=torch.tensor([[S.VOCAB]], device="cuda"), past_key_values=cache,
+              use_cache=True, cache_position=torch.tensor([0], device="cuda"))
+        core.snapshot(c, ref.Machine.from_program(prog))
+        hf.inject(c, cache)
+        fwd = torch.compile(model.forward, mode="reduce-overhead", fullgraph=False)
+        tok = torch.tensor([[toks[0]]], device="cuda")
+        got, t0 = [], None
+        for t in range(steps):
+            if t == 20:
+                torch.cuda.synchronize()
+                t0 = time.time()
+            out = fwd(input_ids=tok, past_key_values=cache, use_cache=True,
+                      cache_position=torch.tensor([t + 1], device="cuda"))
+            tok = out.logits[:, -1:].argmax(-1)
+            got.append(tok)
+        torch.cuda.synchronize()
+        s = (time.time() - t0) / (steps - 20)
+    got = torch.cat(got, 1)[0].tolist()
+    ok = got == toks[1:steps + 1]
+    print(f"HF (rv-tiny, hidden {model.layout.hidden}, StaticCache + torch.compile "
+          f"reduce-overhead) {1e3 * s:7.3f} ms/token  {1 / s:8.0f} tok/s  {1 / s / tpi:8.0f} "
+          f"instr/s  free-running == reference: {ok}", flush=True)
+    del model, cache
+    torch.cuda.empty_cache()
 
 
 def steps_of(args, toks):
     return min(args.steps, len(toks) - 25)
 
 
-def run_executor(c, toks, steps, tpi, dev):
+def run_executor(c, toks, steps, tpi, dev, batches=(1,)):
     from chipformer.rv import fastexec
 
     n = fastexec.check(c, toks[:300], dev)
     print(f"executor == IR on {n} positions ({dev})", flush=True)
-    for graph, comp in ((False, False), (True, False), (True, True)):
-        s = fastexec.timed(c, toks, steps, graph=graph, compile_=comp)
-        name = "compiled + CUDA graph" if comp else "CUDA graph" if graph else "eager"
-        print(f"executor ({name}){'':{22 - len(name)}s} {1e3 * s:7.3f} ms/token  "
-              f"{1 / s:8.0f} tok/s  {1 / s / tpi:8.0f} instr/s", flush=True)
+    for b in batches:
+        s = fastexec.timed(c, toks, steps, graph=True, compile_=True, batch=b)
+        print(f"executor batch {b:3d} (compiled + CUDA graph) {1e3 * s:7.3f} ms/step  "
+              f"{b / s:9.0f} tok/s  {b / s / tpi:9.0f} instr/s", flush=True)
 
 
 def _is_pow4(x):

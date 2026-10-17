@@ -30,7 +30,7 @@ STORES = [("sw", 0x3FC), ("sh", 0x3FE), ("sb", 0x3FF)]
 def gen_program(seed: int, block: int = 40, iters: int = 30) -> str:
     """A random fault-free RV32IM program (s0: loop counter, s11: the buffer, t5: addresses)."""
     rng = random.Random(seed)
-    val = lambda: rng.choice([rng.randint(-2**31, 2**31 - 1), rng.randint(-40, 40),  # noqa: E731
+    val = lambda: rng.choice([rng.randint(-2**31, 2**31 - 1), rng.randint(-40, 40),
                               rng.randint(0, 0x3FF)])
     lines = ["_start: la s11, buf", f"li s0, {iters}"] + [f"li {r}, {val()}" for r in REGS]
     lines.append("loop:")
