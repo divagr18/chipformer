@@ -137,8 +137,8 @@ class Chip8Q35(Circ):
         z0 = {col: K_ * gates[0] for col in cols}
         if hi11 is None:
             return self.head(name, q, k, v, 0, z0, outs, into=acc)
-        vx = [dict(v=v, a=0, z={col: K_ * gates[1] for col in cols}, outs=outs, beta=hi11,
-                   into="main")]
+        vx = [{"v": v, "a": 0, "z": {col: K_ * gates[1] for col in cols}, "outs": outs,
+               "beta": hi11, "into": "main"}]
         return self.head(name, q, k, v, 0, z0, outs, beta=one - hi11, into=acc, vx=vx)[:8]
 
 
@@ -1132,9 +1132,30 @@ def build(target: Target | None = None, store=None, schedule: bool = True) -> Ch
                                               one - calling, *s_gate])
                    + c.t_and([c.is_text, calling, *s_gate]) + s_owner, "owner")
 
-    nxt = [c.node([t for lits, kind, _ in A if kind == 1 for t in c.t_and(lits)], "next.is_addr"),
-           c.node([t for lits, kind, _ in A if kind == 2 for t in c.t_and(lits)], "next.is_ctrl")]
-    nxt += c.select_bits([(lits, p) for lits, _, p in A], 13, "next")
+    # the next token's code bits: is_addr, is_ctrl, then 13 payload bits; each bit is the sum
+    # over the (exclusive) cases that set it
+    def bit_cases(i):
+        out = []
+        for lits, kind, p in A:
+            if i < 2:
+                if kind == i + 1:
+                    out.append(list(lits))
+                continue
+            b = p >> (i - 2) & 1 if isinstance(p, int) else (p[i - 2] if i - 2 < len(p) else 0)
+            if isinstance(b, int):
+                if b:
+                    out.append(list(lits))
+            else:
+                out.append([*lits, b])
+        return out
+
+    fuse = st is None  # the exit computes the output code from the cases themselves
+    if fuse:
+        nxt = None
+    else:
+        nxt = [c.node([t for ls in bit_cases(i) for t in c.t_and(ls)],
+                      ["next.is_addr", "next.is_ctrl"][i] if i < 2 else f"next.b{i - 2}")
+               for i in range(NCODE)]
     c.next_bits = nxt
     c.owner = owner
     c.cases = A  # (literals, kind, payload), for debugging
@@ -1150,8 +1171,16 @@ def build(target: Target | None = None, store=None, schedule: bool = True) -> Ch
     # KAPPA * +-1 in the id code dims; everything else uses the class code
     not_any = [] if anyp is None else [one - anyp]
     for i, e in enumerate(c.code):
-        c.ffn(c.t_and([nxt[i], owner, *not_any], 2 * KAPPA) + c.t_and([owner, *not_any], -KAPPA),
-              f"exit.code{i}", into=e, min_level=top)
+        if fuse:  # KAPPA * (2 bit - 1) where the circuit owns the position, straight from the
+            # cases (one sublayer, so no separate select before the exit)
+            terms = [t for ls in bit_cases(i) for t in c.t_and([*ls, owner], 2 * KAPPA)]
+        else:
+            terms = c.t_and([nxt[i], owner, *not_any], 2 * KAPPA)
+        c.ffn(terms + c.t_and([owner, *not_any], -KAPPA), f"exit.code{i}", into=e,
+              min_level=top)
+    if fuse:  # the bits for checking (q35/check.py), read off the exit code where owned
+        half = Fraction(1, 2)
+        c.next_bits = [e * (half / Fraction(KAPPA)) + owner * half for e in c.code]
     if st is not None:
         for i, e in enumerate(st.yc):
             c.ffn(c.t_and([ybits[i], anyp], 2 * KAPPA) + c.t_and([anyp], -KAPPA),

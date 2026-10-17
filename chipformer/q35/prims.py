@@ -174,7 +174,7 @@ class Circ(Graph):
 
         def nib_terms(x, div):
             terms = []
-            for k in range(0, lo_hi // (16 * div) + 1):
+            for k in range(lo_hi // (16 * div) + 1):
                 a = div * (16 * k + x)
                 terms += self.t_in(L, a, a + div, 0, lo_hi)
             return terms
