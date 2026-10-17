@@ -16,6 +16,8 @@ Tasks (all prompts in Qwen's chat template with thinking off, except the ARC/Hel
   ifeval     google/IFEval (541), greedy, scored by lm-eval's checker (strict and loose)
   niah       needle (a 7-digit "magic number") in a wikitext-103 haystack at 8k/16k/32k tokens,
              chunked prefill; greedy answer and the teacher-forced log-prob of the needle
+  ppl        8 disjoint 32k-token wikitext-103 windows: per-token NLL by position and greedy
+             next-token agreement (a dense, long-context fidelity measure)
 
 The noise floor is the base model under another attention implementation (eager vs sdpa), which
 changes nothing but the rounding inside Qwen's full-attention layers.
@@ -34,7 +36,7 @@ from pathlib import Path
 import numpy as np
 import torch
 
-TASKS = ("mmlu", "arc", "hellaswag", "gsm8k", "ifeval", "niah")
+TASKS = ("mmlu", "arc", "hellaswag", "gsm8k", "ifeval", "niah", "ppl")
 TEXT_VOCAB = 248320  # Qwen's own vocabulary; the merged checkpoint's chip tokens come after it
 TOKEN_BUDGET = 4096  # tokens per log-likelihood batch
 GEN_BATCH = 16
@@ -373,6 +375,72 @@ def task_niah(model, tok, ctx, lengths=(8192, 16384, 32768), depths=(0.1, 0.3, 0
     return items
 
 
+@torch.no_grad()
+def task_ppl(model, tok, ctx, length=32768, docs=8):
+    """Long-context language modelling: per-token NLL and greedy next token over ``docs``
+    disjoint ``length``-token windows of wikitext-103 test, chunked prefill."""
+    from transformers import DynamicCache
+
+    hay = haystack_ids(tok)
+    items = []
+    for d in range(docs):
+        ids = hay[d * length:(d + 1) * length]
+        model.model.rope_deltas = None
+        cache = DynamicCache(config=model.config)
+        nll, top = [], []
+        for a in range(0, length, CHUNK):
+            x = torch.tensor([ids[a:a + CHUNK]], device="cuda")
+            h = model.model(input_ids=x, past_key_values=cache, use_cache=True).last_hidden_state[0]
+            for c in range(0, h.shape[0], 256):
+                lp = torch.log_softmax(model.lm_head(h[c:c + 256]).float(), -1)
+                p0 = a + c
+                tgt = torch.tensor(ids[p0 + 1:p0 + 1 + lp.shape[0]], device="cuda")
+                nll += (-lp[torch.arange(len(tgt)), tgt]).tolist()
+                top += lp.argmax(-1)[:len(tgt)].tolist()
+        del cache
+        items.append({"offset": d * length, "nll": [round(v, 5) for v in nll], "top1": top,
+                      "target": ids[1:], "correct": float(np.mean(np.array(top) == ids[1:]))})
+        print(f"  ppl doc {d}: ppl {math.exp(np.mean(nll)):.3f} top1 {items[-1]['correct']:.4f}",
+              flush=True)
+    return items
+
+
+PPL_BUCKETS = ((0, 2048), (2048, 8192), (8192, 16384), (16384, 32768))
+
+
+def ppl_table(data, names, ref, summary):
+    """Rows for the long-context perplexity task: PPL per position bucket, signed mean dNLL vs
+    ``ref`` with a bootstrap CI over 1024-token blocks, |dNLL|, greedy next-token agreement."""
+    lines = []
+    for lo, hi in PPL_BUCKETS:
+        cells = []
+        for n in names:
+            if "ppl" not in data[n]:
+                cells.append("-")
+                continue
+            v = np.concatenate([np.array(it["nll"][lo:hi]) for it in data[n]["ppl"]])
+            s = {"ppl": float(np.exp(v.mean())), "tokens": len(v)}
+            cell = f"{s['ppl']:.3f}"
+            if n != ref:
+                r = [np.array(it["nll"][lo:hi]) for it in data[ref]["ppl"]]
+                m = [np.array(it["nll"][lo:hi]) for it in data[n]["ppl"]]
+                blocks = np.array([(y[k:k + 1024] - x[k:k + 1024]).mean() for x, y in zip(r, m)
+                                   for k in range(0, len(x), 1024)])
+                boot = np.random.default_rng(0).choice(blocks, (10000, len(blocks))).mean(1)
+                dl, dh = np.percentile(boot, [2.5, 97.5])
+                d = np.concatenate([y - x for x, y in zip(r, m)])
+                agree = np.concatenate([np.array(a["top1"][lo:hi]) == np.array(b["top1"][lo:hi])
+                                        for a, b in zip(data[ref]["ppl"], data[n]["ppl"])])
+                s.update(dnll=float(d.mean()), dnll_ci95=[float(dl), float(dh)],
+                         abs_dnll=float(np.abs(d).mean()), top1_agreement=float(agree.mean()))
+                cell += (f"<br>dNLL {d.mean():+.2e} [{dl:+.1e}, {dh:+.1e}], |dNLL| "
+                         f"{np.abs(d).mean():.2e}, top-1 agree {100 * agree.mean():.2f}%")
+            summary.setdefault(n, {}).setdefault("ppl", {})[f"{lo}-{hi}"] = s
+            cells.append(cell)
+        lines.append(f"| ppl | positions {lo}-{hi} | " + " | ".join(cells) + " |")
+    return lines
+
+
 def stop_tokens(tok):
     """End of turn and end of text stop generation (as in the merged generation_config.json);
     the base snapshot ships no generation config."""
@@ -493,7 +561,7 @@ def table(args):
     lines.append("| task | metric | " + " | ".join(names) + " |")
     lines.append("|---|---|" + "---|" * len(names))
     for task in TASKS:
-        if task not in data[args.ref]:
+        if task not in data[args.ref] or task == "ppl":
             continue
         ref = data[args.ref][task]
         for metric, key in METRICS[task]:
@@ -527,6 +595,8 @@ def table(args):
                               for k, v in c.items() if k != "agreement")
             cells.append(f"{100 * np.mean(same):.1f}% [{100 * lo:.1f}, {100 * hi:.1f}]<br>{extra}")
         lines.append(f"| {task} | agreement with {args.ref} | " + " | ".join(cells) + " |")
+    if "ppl" in data[args.ref]:
+        lines += ppl_table(data, names, args.ref, summary)
     md = "\n".join(lines)
     print(md)
     (root / "summary.json").write_text(json.dumps(summary, indent=2))
