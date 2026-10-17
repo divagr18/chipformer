@@ -31,10 +31,16 @@ DOLLARS = (DOLLAR, SDOLLAR, DDOLLAR, SDDOLLAR, CURR)  # all neutral, all may pre
 MINUS2 = TEXT_BASE + 41
 # division: "/" (" /", "÷"), the tool name "div" (also "\div"), and "..." after an inexact quotient
 DIV, FN_DIV, ELLIPSIS = range(TEXT_BASE + 42, TEXT_BASE + 45)
-N_TEXT = 45
+# a tool response ends with an empty thinking block, as the next assistant turn of Qwen's chat
+# template starts: without it Qwen often ends its turn right after the response
+THINK_O, THINK_C = range(TEXT_BASE + 45, TEXT_BASE + 47)
+N_TEXT = 47
 FUNCS = {"add": FN_ADD, "mul": FN_MUL, "sub": FN_SUB, "div": FN_DIV}  # tool names it answers
 PRINT_OP = 0x00FD
-MAX_PRINT = 58  # digits per print (the write counter tops out at 64)
+# after "</tool_response>\n": "<think>\n\n</think>\n\n", with each "\n\n" printed as two "\n"
+# ("\n\n" is WS, a class with many spellings, which the circuit cannot print)
+TOOL_TAIL = [THINK_O, NL, NL, THINK_C, NL, NL]
+MAX_PRINT = 58 - len(TOOL_TAIL)  # digits per print (the write counter tops out at 64)
 MAX_ARG = 24  # digits per tool-call argument
 
 # Qwen3.5 token ids of the classes (single tokens in its tokenizer)
@@ -44,7 +50,8 @@ QWEN_TEXT = {**{TEXT_BASE + i: c for i, c in enumerate("0123456789abcdef")},
              FN_SUB: "sub", SPACE: " ", EQ: " =", PLUS: " +", MINUS: " -", TIMES: " \u00d7",
              BSL: " \\", TIMESW: "times", COMMA: ",", DOLLAR: "$", LPAREN: "(",
              WS: "\n\n", SDOLLAR: " $", DDOLLAR: "$$", SDDOLLAR: " $$", CURR: " \\$",
-             PERIOD: ".", MINUS2: "-", DIV: "/", FN_DIV: "div", ELLIPSIS: "..."}
+             PERIOD: ".", MINUS2: "-", DIV: "/", FN_DIV: "div", ELLIPSIS: "...",
+             THINK_O: "<think>", THINK_C: "</think>"}
 # other single tokens Qwen generates for the same thing: it writes <function=add> as "=add" and
 # <function=mul> as "=m" "ul", not the way its tokenizer splits the text
 # (never for a class the circuit prints: the tied lm_head rows would tie)
@@ -77,7 +84,7 @@ def readout(cells: list[int]) -> list[int]:
     if mode & 1:  # an inline call: " digits" (" -digits" below 0) and a closer (the math's
         close = DDOLLAR if mode & 4 else DOLLAR if mode & 2 else PERIOD  # "$"/"$$", else ".")
         return [MINUS if mode & 8 else SPACE, *digits, close] if digits else [SPACE]
-    return [NL, TR_OPEN, NL, *digits, NL, TR_CLOSE, NL]
+    return [NL, TR_OPEN, NL, *digits, NL, TR_CLOSE, NL, *TOOL_TAIL]
 
 
 class InlineScan:

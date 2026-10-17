@@ -28,6 +28,7 @@ import argparse
 import itertools
 import json
 import math
+import os
 import random
 import re
 import sys
@@ -452,7 +453,18 @@ def executor(style: str, ctx: Ctx):
         v = true_result(c["op"], c["args"])
         res = fmt(v) if v is not None else "error: invalid call"
         if style == "inline":  # what the circuit prints: \n<tool_response>\n R \n</tool_response>\n
-            return ctx.ids("\n<tool_response>\n" + res + "\n</tool_response>\n")
+            # Q35_RESP_STYLE (an experiment): what follows the in-turn response
+            st = os.environ.get("Q35_RESP_STYLE", "a")
+            if st == "d":  # the native user turn, without the <|im_end|>s (EOS)
+                return ctx.ids("\n<|im_start|>user\n<tool_response>\n" + res
+                               + "\n</tool_response>\n<|im_start|>assistant\n<think>\n\n"
+                               "</think>\n\n")
+            if st == "f":  # b with "\n\n" spelled as two "\n" tokens (what NL-only can print)
+                return ctx.ids("\n<tool_response>\n" + res + "\n</tool_response>") + [
+                    198, 248068, 198, 198, 248069, 198, 198]
+            tail = {"a": "\n", "b": "\n<think>\n\n</think>\n\n", "c": "\n\nThe result is ",
+                    "e": "\n\n"}[st]
+            return ctx.ids("\n<tool_response>\n" + res + "\n</tool_response>" + tail)
         return ctx.ids("<|im_end|>\n<|im_start|>user\n<tool_response>\n" + res
                        + "\n</tool_response><|im_end|>\n<|im_start|>assistant\n<think>\n\n"
                        "</think>\n\n")

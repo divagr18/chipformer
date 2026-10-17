@@ -153,16 +153,18 @@ def test_circuit_with_tool_calls(circuit):
     while not bm.halted:
         bm.step()
     bm.qwen(classes([" ", "675", " -", " ", "5000", " =", "."]))
-    assert printed(bm) == " 576$???675??? -4325."  # ? = the tool response's tags and newlines
+    tail = "?" * (3 + len(B.TOOL_TAIL))  # "\n</tool_response>\n" and the empty thinking block
+    assert printed(bm) == f" 576$???675{tail} -4325."  # ? = the tool response's tags and newlines
     bm.tool_call("div", "355", "113")
     while not bm.halted:
         bm.step()
-    assert printed(bm).endswith("???3.1415929203...???")
+    assert printed(bm).endswith("???3.1415929203..." + tail)
     check(circuit, bm)
     bm.tool_call("sub", "5", "675")  # a tool call below 0 prints nothing
     while not bm.halted:
         bm.step()
-    assert printed(bm).endswith("..." + "?" * 9)  # div's closing tags, then tags but no digits
+    # div's closing tags, then tags but no digits
+    assert printed(bm).endswith("..." + tail + "?" * (6 + len(B.TOOL_TAIL)))
     check(circuit, bm)
 
 

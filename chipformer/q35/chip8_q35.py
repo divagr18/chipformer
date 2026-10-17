@@ -999,8 +999,8 @@ def build(target: Target | None = None) -> Chip8Q35:
     case([at_val, nfd, not_tick, is_pc, kb_adb, one - f1], 0, k["next_pc"])
 
 
-    # a print: STEP, then NL <tool_response> NL digits NL </tool_response> NL as text tokens.
-    # Position j (STEP = 0, then each printed token) predicts printed token j; n = min(V0, 58).
+    # a print: STEP, then NL <tool_response> NL digits NL </tool_response> NL TOOL_TAIL as text tokens.
+    # Position j (STEP = 0, then each printed token) predicts printed token j; n = min(V0, MAX_PRINT).
     v0 = from_bits(k["v0"])
     z = j - v0
     small = c.node(c.t_lt(v0, B.MAX_PRINT + 1, 0, 255), "print.small")
@@ -1012,6 +1012,8 @@ def build(target: Target | None = None) -> Chip8Q35:
                       + c.t_and([big, jeq(lim + dz)]), name)
 
     nl_end, trc, nl_last = zj(3, "print.nl1"), zj(4, "print.trc"), zj(5, "print.nl2")
+    tail = [zj(6 + i, f"print.tail{i}") for i in range(len(B.TOOL_TAIL))]
+    end = 6 + len(B.TOOL_TAIL)  # the first position Qwen predicts after a tool response
     # tool call: [3 <= j < 3 + n] = [j >= 3] - [j >= 3 + n]; inline: [1 <= j < 1 + n]
     tool = one - mode
     digit = c.node(c.t_and([cnt[2], tool]) + c.t_ge(z, 3, -255, JMAX + 1, -1, lits=[small, tool])
@@ -1019,8 +1021,8 @@ def build(target: Target | None = None) -> Chip8Q35:
                    + c.t_and([cnt[0], mode]) + c.t_ge(z, 1, -255, JMAX + 1, -1, lits=[small, mode])
                    + c.t_and([big, mode, cnt[lim]], -1), "print.digit")
     nz = c.node(c.t_ge(v0, 1, 0, 255), "print.nonempty")
-    upto = c.node(c.t_lt(z, 6, -255, JMAX + 1, lits=[small, tool])
-                  + c.t_and([big, tool, one - cnt[lim + 5]])
+    upto = c.node(c.t_lt(z, end, -255, JMAX + 1, lits=[small, tool])
+                  + c.t_and([big, tool, one - cnt[lim + end - 1]])
                   + c.t_lt(z, 2, -255, JMAX + 1, lits=[small, mode, nz])
                   + c.t_lt(z, 1, -255, JMAX + 1, lits=[small, mode, one - nz])
                   + c.t_and([big, mode, one - cnt[lim + 1]]), "print.upto")
@@ -1030,9 +1032,10 @@ def build(target: Target | None = None) -> Chip8Q35:
     in_print = [k["fd"][0], c.is_step + c.is_text, one - calling]
     code = {cls: TEXT_CODE + cls - B.TEXT_BASE
             for cls in (B.NL, B.TR_OPEN, B.TR_CLOSE, B.SPACE, B.MINUS, B.PERIOD, B.DOLLAR,
-                        B.DDOLLAR)}
+                        B.DDOLLAR, *B.TOOL_TAIL)}
     for lits, cls in [([tool, jeq(0)], B.NL), ([tool, jeq(1)], B.TR_OPEN), ([tool, jeq(2)], B.NL),
                       ([tool, nl_end], B.NL), ([tool, trc], B.TR_CLOSE), ([tool, nl_last], B.NL),
+                      *(([tool, t], cls) for t, cls in zip(tail, B.TOOL_TAIL)),
                       ([mode, jeq(0), one - mode_neg], B.SPACE),
                       ([mode, jeq(0), mode_neg], B.MINUS), ([trail, one - mode_d], B.PERIOD),
                       ([trail, mode_d, one - mode_dd], B.DOLLAR), ([trail, mode_dd], B.DDOLLAR)]:

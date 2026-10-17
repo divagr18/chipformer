@@ -33,7 +33,7 @@ def circuit():
     return chip8_q35.build()
 
 
-@pytest.mark.parametrize("digits", [[4, 8, 1, 7], [], list(range(16)), [9] * 58, [3] * 60])
+@pytest.mark.parametrize("digits", [[4, 8, 1, 7], [], list(range(16)), [9] * B.MAX_PRINT, [9] * 58, [3] * 60])
 def test_print(circuit, digits):
     toks, gen, owner = print_trace(digits)
     n, bad, bad_owner = Q.check_bridge(circuit, toks, gen, owner)
@@ -44,7 +44,7 @@ def test_print_text(circuit):
     toks, *_ = print_trace([4, 8, 1, 7])
     printed = [t for t in toks if B.is_text(t) and t != B.OTHER]
     assert printed == [B.NL, B.TR_OPEN, B.NL, *(B.HEX[d] for d in (4, 8, 1, 7)),
-                       B.NL, B.TR_CLOSE, B.NL]
+                       B.NL, B.TR_CLOSE, B.NL, *B.TOOL_TAIL]
 
 
 @pytest.mark.skipif(not TINY.exists(), reason="run python -m chipformer.q35.tiny first")
