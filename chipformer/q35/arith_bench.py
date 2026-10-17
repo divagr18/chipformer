@@ -70,6 +70,8 @@ DM_MODULES = {"dmx_add_or_sub_big": "extrapolate/arithmetic__add_or_sub_big",
               "dmx_mul_big": "extrapolate/arithmetic__mul_big",
               "dmx_mixed_longer": "extrapolate/arithmetic__mixed_longer",
               "dmx_add_sub_multiple_longer": "extrapolate/arithmetic__add_sub_multiple_longer",
+              "dmx_div_big": "extrapolate/arithmetic__div_big",
+              "dmx_mul_div_multiple_longer": "extrapolate/arithmetic__mul_div_multiple_longer",
               "dmi_add_or_sub": "interpolate/arithmetic__add_or_sub",
               "dmi_mul": "interpolate/arithmetic__mul",
               "dmi_add_sub_multiple": "interpolate/arithmetic__add_sub_multiple",
@@ -86,7 +88,8 @@ ELEU = ["two_digit_addition", "two_digit_subtraction", "two_digit_multiplication
 ELEU_OPS = {"addition": ("add", "plus"), "subtraction": ("sub", "minus"),
             "multiplication": ("mul", "times")}
 DMXC = ["dmxc_add_or_sub_big", "dmxc_mul_big"]
-ALL = [*DM_MODULES, *DMXC, *NUPA_TASKS, "bbh_mat2", *(f"eleu_{s}" for s in ELEU)]
+DM_DIV = ["dmx_div_big", "dmx_mul_div_multiple_longer", "dmxc_div_big"]  # v14: division
+ALL = [*DM_MODULES, *DMXC, "dmxc_div_big", *NUPA_TASKS, "bbh_mat2", *(f"eleu_{s}" for s in ELEU)]
 DEFAULT_N = {"dmx": 100, "dmxc": 100, "dmi": 100, "nupa": 400, "bbh": 250, "eleu": 50}
 CONDS = ["base", "base_nudge", "merged_nb", "merged_inline_fp", "merged_inline_nudge_fp",
          "merged_inline_fp_tc", "merged_inline_nudge_fp_tc",
@@ -359,10 +362,12 @@ def setup(cond: str, mpath: str, batch: int, max_len: int, fast: bool, compile_:
     ctx = E.Ctx(tok, chip)
     hook = {"pytool_inline": E.executor("inline", ctx), "pytool": E.executor("template", ctx)}.get(kind)
     banned = []
-    if "nb" in flags or kind == "merged_inline":
+    if "nb" in flags or "ne" in flags or kind == "merged_inline":
         gc = Path(mpath) / "generation_config.json"
         bad = json.loads(gc.read_text()).get("bad_words_ids", []) if gc.exists() else []
-        banned = sorted({w[0] for w in bad if len(w) == 1} | {E.IM_START})
+        # ne: <|endoftext|> too (Qwen otherwise ends a tool-mode turn right after the response)
+        banned = sorted({w[0] for w in bad if len(w) == 1} | {E.IM_START}
+                        | ({getattr(E, "ENDOFTEXT", 248044)} if "ne" in flags else set()))
         model.lm_head = E.BannedHead(model.lm_head, banned, model.lm_head.weight.shape[0])
         print(f"banned token ids {banned}", flush=True)
     import torch._inductor.config
@@ -484,8 +489,11 @@ def run(args) -> None:
         path = out / f"{data}.{cond}.jsonl"
         done = set()
         if path.exists():
-            done = {json.loads(x)["id"] for x in path.read_text(encoding="utf-8").splitlines()
-                    if x.strip()}
+            recs = [json.loads(x) for x in path.read_text(encoding="utf-8").splitlines()
+                    if x.strip()]
+            # --redo-context: rerun problems that hit the cache length (the newer record is
+            # appended; readers keep the last record per id)
+            done = {r["id"] for r in recs if not (args.redo_context and r["stop"] == "context")}
         probs = load(data, args.n, args.seed)
         if args.per_data:  # the first K of the (sorted, seeded) sample: a subset of the full run
             probs = probs[:args.per_data]
@@ -609,10 +617,12 @@ def tfcheck(args) -> None:
         if kind in E.BIOS_KINDS:
             bios = [t + chip[0] for t in boot_tokens(Chip8(bcd.ROM, bcd.QUIRKS).cells)]
     banned = []
-    if "nb" in flags or kind == "merged_inline":
+    if "nb" in flags or "ne" in flags or kind == "merged_inline":
         gc = Path(mpath) / "generation_config.json"
         bad = json.loads(gc.read_text()).get("bad_words_ids", []) if gc.exists() else []
-        banned = sorted({w[0] for w in bad if len(w) == 1} | {E.IM_START})
+        # ne: <|endoftext|> too (Qwen otherwise ends a tool-mode turn right after the response)
+        banned = sorted({w[0] for w in bad if len(w) == 1} | {E.IM_START}
+                        | ({getattr(E, "ENDOFTEXT", 248044)} if "ne" in flags else set()))
     out = Path(args.out)
     for data in args.data:
         src = out / f"{data}.{cond}.jsonl"
@@ -886,9 +896,11 @@ def _groups(res, keys, conds):
 
 
 BENCH = [("DeepMind Mathematics, extrapolate (big / longer) test modules",
-          [k for k in DM_MODULES if k.startswith("dmx")]),
+          [k for k in DM_MODULES if k.startswith("dmx") and k not in DM_DIV]),
          (("DeepMind Mathematics, extrapolate big modules, clean problems only (non-negative "
            "integers, no decimals)"), DMXC),
+         ("DeepMind Mathematics, extrapolate division modules (div_big, mul_div_multiple_longer, "
+          "clean div_big)", DM_DIV),
          ("DeepMind Mathematics, interpolate test modules", [k for k in DM_MODULES if k.startswith("dmi")]),
          ("NUPA integer add / sub / multiply (lengths 3-20)", list(NUPA_TASKS)),
          ("BBH multistep_arithmetic_two", ["bbh_mat2"]),
@@ -945,6 +957,44 @@ def _bench(res, rep, wall, conds, title, keys) -> list[str]:
     return L
 
 
+def _tags(r: dict) -> set:
+    fires = r.get("inline", [])
+    t = set()
+    if any(f.get("true", "0").startswith("-") for f in fires):
+        t.add("negative fire")
+    if E._looping(fires):
+        t.add("loop")
+    if r["stop"] != "eos":
+        t.add("cutoff")
+    return t
+
+
+def losses(args) -> None:
+    """Paired wins / losses of A vs B on the given datasets, each problem tagged with what
+    happened in A's transcript (negative inline fire, loop, cutoff)."""
+    res, _ = load_all(Path(args.out))
+    L = [f"\n{args.a} vs {args.b}\n",
+         ("| data | N | A | B | A-only | B-only (losses) | losses with negative fire | with loop | "
+          "with cutoff | none of these | McNemar p |"),
+         "|---|---|---|---|---|---|---|---|---|---|---|"]
+    for data in [*args.data, "pooled"]:
+        keys = args.data if data == "pooled" else [data]
+        ra = {i: r for k in keys for i, r in res.get((k, args.a), {}).items()}
+        rb = {i: r for k in keys for i, r in res.get((k, args.b), {}).items()}
+        ids = sorted(set(ra) & set(rb))
+        if not ids:
+            continue
+        win = [i for i in ids if ra[i]["exact"] and not rb[i]["exact"]]
+        lose = [i for i in ids if rb[i]["exact"] and not ra[i]["exact"]]
+        tags = [_tags(ra[i]) for i in lose]
+        L.append(f"| {data} | {len(ids)} | {sum(ra[i]['exact'] for i in ids)} | "
+                 f"{sum(rb[i]['exact'] for i in ids)} | {len(win)} | {len(lose)} | "
+                 f"{sum('negative fire' in t for t in tags)} | {sum('loop' in t for t in tags)} | "
+                 f"{sum('cutoff' in t for t in tags)} | {sum(not t for t in tags)} | "
+                 f"{E.mcnemar(len(win), len(lose)):.2g} |")
+    print("\n".join(L))
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -960,6 +1010,8 @@ def main() -> None:
     r.add_argument("--batch", type=int, default=16)
     r.add_argument("--limit", type=int, help="only the first N problems still to do")
     r.add_argument("--per-data", type=int, help="only the first K problems of each dataset")
+    r.add_argument("--redo-context", action="store_true",
+                   help="rerun problems whose stored record stopped at the cache length")
     r.add_argument("--no-compile", action="store_true")
     r.add_argument("--no-selftest", action="store_true")
     r.add_argument("--fast", action="store_true", default=True)
@@ -983,6 +1035,11 @@ def main() -> None:
     p.add_argument("--model")
     p.add_argument("--out", default=str(OUT))
     p.add_argument("--shard")
+    lo = sub.add_parser("losses", help="paired wins / losses of A vs B, losses tagged")
+    lo.add_argument("a")
+    lo.add_argument("b")
+    lo.add_argument("data", nargs="+", choices=ALL)
+    lo.add_argument("--out", default=str(OUT))
     e = sub.add_parser("rescore-errors")
     e.add_argument("--out", default=str(OUT))
     s = sub.add_parser("summary")
@@ -999,7 +1056,8 @@ def main() -> None:
                 print("  ", json.dumps(p))
         return
     {"run": run, "summary": summary, "replay": replay, "identity": identity,
-     "tfcheck": tfcheck, "rescore-errors": rescore_errors}[args.cmd](args)
+     "tfcheck": tfcheck, "rescore-errors": rescore_errors,
+     "losses": losses}[args.cmd](args)
 
 
 if __name__ == "__main__":
