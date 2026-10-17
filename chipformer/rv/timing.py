@@ -59,6 +59,7 @@ def main():
     batches = [int(b) for b in args.batches.split(",")]
     if args.hf_compile:
         hf_compiled(c, prog, toks, steps_of(args, toks), tpi)
+        hf_compiled(c, prog, toks, steps_of(args, toks), tpi, compact=True)
     if args.executor_only:
         return run_executor(c, toks, steps_of(args, toks), tpi, dev, batches)
     import chipformer.rv.hf as H
@@ -84,7 +85,7 @@ def main():
     run_executor(c, toks, steps, tpi, dev, batches)
 
 
-def hf_compiled(c, prog, toks, steps, tpi):
+def hf_compiled(c, prog, toks, steps, tpi, compact=False):
     """rv-tiny's stock HF modules decoding free-running: a StaticCache (snapshot injected) and
     torch.compile(mode="reduce-overhead"), i.e. CUDA graphs. Checks the generated tokens."""
     from transformers import StaticCache
@@ -94,6 +95,8 @@ def hf_compiled(c, prog, toks, steps, tpi):
 
     model, _ = tiny.build(c)
     model = model.cuda()
+    if compact:  # every linear map (and the tied embedding / output head) reads its nonzero block
+        fast.compact(model, qwen=True, n_chip=c.n_layers())
     cache = StaticCache(config=model.config, max_cache_len=steps + 64)
     with torch.no_grad():
         model(input_ids=torch.tensor([[S.VOCAB]], device="cuda"), past_key_values=cache,
@@ -116,7 +119,7 @@ def hf_compiled(c, prog, toks, steps, tpi):
     got = torch.cat(got, 1)[0].tolist()
     ok = got == toks[1:steps + 1]
     print(f"HF (rv-tiny, hidden {model.layout.hidden}, StaticCache + torch.compile "
-          f"reduce-overhead) {1e3 * s:7.3f} ms/token  {1 / s:8.0f} tok/s  {1 / s / tpi:8.0f} "
+          f"reduce-overhead{', fast.compact' if compact else ''}) {1e3 * s:7.3f} ms/token  {1 / s:8.0f} tok/s  {1 / s / tpi:8.0f} "
           f"instr/s  free-running == reference: {ok}", flush=True)
     del model, cache
     torch.cuda.empty_cache()
