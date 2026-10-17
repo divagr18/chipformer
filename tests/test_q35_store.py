@@ -228,6 +228,17 @@ def test_store_off_is_unchanged():
     assert c.store is None
 
 
+def test_big_dims_not_subtracted(circuit):
+    """The counters' 2^(26 - n) outputs are never retired by a subtraction in the MLP that writes
+    their slot's next value: 1 - 2^26 rounds in fp32 (it broke arithmetic in HF at the 4B
+    placement, which the IR cannot see: handovers are the emitter's)."""
+    from chipformer.q35.emit import allocate
+
+    assert circuit.big
+    a = allocate(circuit, None, set(circuit.keep), circuit.target.intermediate)
+    assert not [o for o in a.subtract.values() if o in circuit.big]
+
+
 def test_store_fits(vocab):
     """16 chip layers on Qwen3.5-4B's and 0.8B's head shapes."""
     for t in TARGETS.values():

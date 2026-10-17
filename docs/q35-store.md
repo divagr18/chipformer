@@ -121,6 +121,29 @@ Without the store (`build(store=None)`) the circuit is unchanged, dim for dim.
   - restore from a snapshot of the persistent heads;
   - a replayed disk image.
 
+## Numerics the IR does not see
+
+Two bugs the IR evaluator could not catch showed up in HF modules. Both are now checked:
+
+- **Norm absorption.** Every RMSNorm divides by the ballast alone, so no residual value may be
+  large next to it. A counter that came out as 2^(64 - n) swamped it. The counters now come out
+  as 2^(26 - n), and `ir.evaluate` rejects residual values above 2^28.
+- **Slot handover by subtraction.** The allocator hands a residual slot to a new MLP output by
+  subtracting the old value in that same MLP. With an old value of 2^26 and a new one of 1, the
+  sum 1 - 2^26 rounds in fp32. Large-valued dims (`Graph.big`, the counters) are therefore never
+  retired that way (test `test_big_dims_not_subtracted`). This one broke the arithmetic macros
+  at the 4B placement only.
+
+Also, `check_bf16` now rejects weights that overflow bf16 to inf.
+
+## Prefilled history
+
+A prompt prefilled with text the circuit would have answered leaves it mid-call. For example,
+GSM8K answers with `<<40-4=36>>` fire the inline arithmetic, but the prompt lacks the
+circuit's answer. From then on the circuit owns the turn and prints chip tokens. This holds for
+any prefilled history, not only the store's. The recall eval's padding drops such turns
+(`store_eval.fires_inline`, which uses `bridge.InlineScan`).
+
 ## Limits (v1)
 
 - **Text per call:** 104 tokens. Longer texts need appends (each a new chunk).
