@@ -41,7 +41,7 @@ def timed_decode(model, c, ids, toks, steps):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--hidden", type=int, default=3072)
-    ap.add_argument("--steps", type=int, default=300)
+    ap.add_argument("--steps", type=int, default=1000)
     ap.add_argument("--prog", default="c-crc32")
     args = ap.parse_args()
     c = core.build()
@@ -70,6 +70,16 @@ def main():
               f"{1 / s / tpi:8.0f} instr/s  (hidden {args.hidden}, {c.n_layers()} layers, "
               f"{tpi:.2f} tok/instr)", flush=True)
     print("compact weight counts", counts)
+    del model
+    torch.cuda.empty_cache()
+    from chipformer.rv import fastexec
+
+    n = fastexec.check(c, toks[:300], dev)
+    print(f"executor == IR on {n} positions ({dev})", flush=True)
+    for graph in (False, True):
+        s = fastexec.timed(c, toks, steps, graph=graph)
+        print(f"executor{' (CUDA graph)' if graph else ' (eager)':15s} {1e3 * s:7.3f} ms/token  "
+              f"{1 / s:8.0f} tok/s  {1 / s / tpi:8.0f} instr/s", flush=True)
 
 
 def _is_pow4(x):
