@@ -43,6 +43,7 @@ def main():
     ap.add_argument("--hidden", type=int, default=3072)
     ap.add_argument("--steps", type=int, default=1000)
     ap.add_argument("--prog", default="c-crc32")
+    ap.add_argument("--executor-only", action="store_true")
     args = ap.parse_args()
     c = core.build()
     prog = elf.program(DATA / f"{args.prog}.elf")
@@ -51,6 +52,9 @@ def main():
     n_instr = ref.trace_stats(toks)["instructions"]
     tpi = len(toks) / n_instr
     m = next(m for m in range(3, 16) if args.hidden % m == 0 and _is_pow4(args.hidden // m))
+    dev = "cuda" if torch.cuda.is_available() else "cpu"
+    if args.executor_only:
+        return run_executor(c, toks, steps_of(args, toks), tpi, dev)
     import chipformer.rv.hf as H
 
     orig = H.pick_layout
@@ -59,9 +63,8 @@ def main():
         model, _, ids = hf.build_model(c, toks)
     finally:
         H.pick_layout = orig
-    dev = "cuda" if torch.cuda.is_available() else "cpu"
     model = model.to(dev)
-    steps = min(args.steps, len(toks) - 25)
+    steps = steps_of(args, toks)
     dense = timed_decode(model, c, ids, toks, steps)
     counts = fast.compact(model, qwen=False, n_chip=c.n_layers())
     comp = timed_decode(model, c, ids, toks, steps)
@@ -72,6 +75,14 @@ def main():
     print("compact weight counts", counts)
     del model
     torch.cuda.empty_cache()
+    run_executor(c, toks, steps, tpi, dev)
+
+
+def steps_of(args, toks):
+    return min(args.steps, len(toks) - 25)
+
+
+def run_executor(c, toks, steps, tpi, dev):
     from chipformer.rv import fastexec
 
     n = fastexec.check(c, toks[:300], dev)

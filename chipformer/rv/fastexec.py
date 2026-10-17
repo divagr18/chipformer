@@ -144,7 +144,7 @@ class Executor:
             S.copy_(S * (1 - w[:, :, None]) + w[:, :, None] * v[:, None, :])
             qv = (q[kh] > 0).float()
             o = torch.einsum("vr,vrc->vc", qv, S)
-            ref = (o[:, list(REF_COLS)] ** 2).sum(1)
+            ref = (o[:, REF_COLS[0]:REF_COLS[-1] + 1] ** 2).sum(1)  # (a slice: graph-safe)
             norm = torch.where(ref > 0, torch.sqrt(ref / HD), torch.ones_like(ref))
             o = torch.where((ref > 0)[:, None], o / norm[:, None], torch.zeros_like(o))
             z = torch.relu(x @ wz).view(V, HD)
@@ -187,7 +187,17 @@ def timed(c, toks, steps=500, graph=True) -> float:
         ex.reset()
         g = torch.cuda.CUDAGraph()
         with torch.cuda.graph(g):
-            ex.step(xin)
+            out = ex.step(xin)
+        # the replayed graph must still be the circuit: compare a prefix with the IR
+        from chipformer.q35 import ir
+
+        n = min(300, len(toks))
+        want = ir.evaluate(c, toks[:n], check=False)
+        ex.reset()
+        for t in range(n):
+            xin.copy_(emb[t] if t < len(emb) else ex.embed([toks[t]])[0])
+            g.replay()
+            assert (out.double().cpu().numpy() == want[t]).all(), f"graph replay differs at {t}"
         ex.reset()
         run = g.replay
     else:
