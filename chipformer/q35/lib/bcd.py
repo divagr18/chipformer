@@ -14,9 +14,8 @@ from chipformer.q35.lib.asm import assemble
 
 A_ADDR, B_ADDR, LEN, R_ADDR = 0x600, 0x620, 0x640, 0x660
 # 0: a tool call (<tool_response>); 1: an inline call (" digits"), | 2 inside "$", | 4 inside
-# "$$", | 8 the result is negative (set by sub)
+# "$$", | 8 the result is negative (set by sub's BRSUB)
 MODE = LEN + 2
-S_ADDR = 0x6A0  # scratch for swapping A and B
 # div: W = 0, A's digits (the CALL record writes them at W_ADDR + 1), DEC zeros; the quotient goes
 # to R_ADDR as P[t] (t <= LA), "." (10) at P[LA + 1], P[t + 1] (t > LA), "..." (11) if inexact
 W_ADDR = 0x6BF
@@ -26,97 +25,30 @@ MAX_DIGITS = 24
 QUIRKS = ("loadstore",)  # FX55/FX65 leave I unchanged
 
 
-def _copy(src: int, dst: int) -> str:  # 24 digits, 12 registers at a time
-    return "".join(f"        ld i, {src + h}\n        ld vb, [i]\n        ld i, {dst + h}\n"
-                   f"        ld [i], vb\n" for h in (0, 12))
-
-
-SWAP = _copy(A_ADDR, S_ADDR) + _copy(B_ADDR, A_ADDR) + _copy(S_ADDR, B_ADDR)
-
 SRC = f"""
 idle:   jp idle                 ; PC rests here between calls (not a PRINT)
 
 ; ---------------------------------------------------------------- add: R = A + B
-add:    badd                    ; macro: R = A + B, v7 = length
-        jp print1
+add:    badd trim               ; macro: R = A + B, v0 = length, i = R, then trim
+        db 0, 0                 ; (entries are compiled into the weights)
 
-; ---------------------------------------------------------------- sub: R = A - B (A >= B)
-sub:    bsub                    ; macro: R = A - B, v7 = length
-        jp sub_chk
+; ---------------------------------------------------------------- sub: R = A - B
+sub:    bsub trim               ; macro: R = A - B, v0 = length, i = R; trim unless A < B
+        jp sub_neg
 
 ; ---------------------------------------------------------------- mul: R = A * B
-mul:    bzero                   ; macro: R = 0, v7 = LA + LB
-        ld i, {LEN}
-        ld v1, [i]              ; v1 = LB
-mul_r:  add v1, 0xff            ; row = LB-1 .. 0
-        bmac v1                 ; macro: one schoolbook row with b = B[v1]
-        se v1, 0
-        jp mul_r
+mul:    ld v1, 0                ; rows done
+        bmul0 v1                ; macro: the first schoolbook row (no BZERO)
+        bmul v1                 ; macro: the next row; repeats until the last row,
+                                ; which sets v0 = LA + LB, i = R
 
-; ---------------------------------------------------------------- print R[0..v7), short path
-; Only R[0] can be 0 after add or mul of plain numbers, so check one or two digits and fall
-; back to the general loop when both are 0 (zero arguments, or sub).
-print1: ld i, {R_ADDR}
-        ld v0, [i]
-        se v0, 0
-        jp pr_all               ; R[0] != 0: print everything
-        ld i, {R_ADDR + 1}
-        ld v0, [i]
-        sne v0, 0
-        jp print                ; R[1] == 0 too
-        ld v0, v7
-        add v0, 0xff
-        print                   ; R[1..v7)
-pr_all: ld v0, v7
+; ---------------------------------------------------------------- print mem[i..i+v0)
+trim:   btrim                   ; macro: drop a leading 0 (keeping one digit); repeats
         print
 
-; ---------------------------------------------------------------- sub: A < B
-; inline: R = B - A and MODE |= 8 (the print starts with " -"); a tool call prints nothing
-sub_chk: ld i, {R_ADDR}
-        ld v0, [i]
-        se v0, 9                ; R[0] = 9 iff the subtraction borrowed out
-        jp print1
-        ld i, {MODE}
-        ld v0, [i]
-        ld v1, 1
-        and v1, v0
-        se v1, 0
-        jp sub_neg
-        ld v0, 0
-        print
-
-; ---------------------------------------------------------------- print R[0..v7), no leading 0s
-print:  ld v6, 0
-pr_lp:  ld v0, v7
-        add v0, 0xff
-        se v6, v0               ; keep at least one digit
-        jp pr_chk
-        jp pr_go
-pr_chk: ld i, {R_ADDR}
-        add i, v6
-        ld v0, [i]
-        se v0, 0
-        jp pr_go
-        add v6, 1
-        jp pr_lp
-pr_go:  ld i, {R_ADDR}
-        add i, v6
-        ld v0, v7
-        sub v0, v6
-        print
-
-; ---------------------------------------------------------------- inline A - B < 0: B - A
-sub_neg: ld v1, 8
-        or v0, v1
-        ld [i], v0              ; MODE |= 8 (I is still MODE)
-        ld i, {LEN}
-        ld v1, [i]              ; v0 = LA, v1 = LB
-        ld v2, v0
-        ld v0, v1
-        ld v1, v2
-        ld [i], v1              ; swap the lengths
-{SWAP}        bsub                    ; R = B - A
-        jp print1
+; ---------------------------------------------------------------- A - B < 0: B - A
+; inline: MODE |= 8 (the print starts with " -"); a tool call prints nothing (v0 = 0)
+sub_neg: brsub trim
 
 ; ---------------------------------------------------------------- div: A / B
 ; digits of an exact quotient, else DEC decimals and "..."; nothing if B starts with 0

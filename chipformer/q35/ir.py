@@ -80,7 +80,7 @@ class Target:
 
     key_heads: int = 16
     value_heads: int = 16
-    intermediate: int = 4608  # the merged 4B has 9216; 0.8B's 3584 needs 18 layers since v14
+    intermediate: int = 3584
 
     @property
     def cols(self) -> int:

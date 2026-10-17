@@ -13,7 +13,7 @@ from chipformer.q35.ir import Graph
 
 BASE = {  # Qwen3.5-0.8B text config, minus the sizes we pick
     "hidden_act": "silu",
-    "intermediate_size": 4608,  # wider than 0.8B's 3584: the circuit fits 16 layers (v14 division)
+    "intermediate_size": 3584,
     "linear_conv_kernel_dim": 4,
     "linear_key_head_dim": 128,
     "linear_value_head_dim": 128,

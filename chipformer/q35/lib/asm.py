@@ -81,18 +81,22 @@ def _encode(op: str, args: list[str], labels: dict[str, int]) -> int:
         return 0x00EE
     if op == "PRINT":
         return 0x00FD
-    if op == "BADD":  # bignum macros (macros.py)
-        return 0x5001
+    if op in ("BADD", "BSUB", "BRSUB"):  # bignum macros (macros.py), with a jump target
+        t = n(0)
+        assert 0x200 <= t < 0x400 and t % 2 == 0, (op, args)
+        return 0x5000 | (t - 0x200) // 2 << 4 | {"BADD": 1, "BSUB": 4, "BRSUB": 7}[op]
     if op == "BZERO":
         return 0x5002
-    if op == "BSUB":
-        return 0x5004
-    if op == "BMAC":
+    if op == "BMUL":
         return 0x5003 | r[0] << 8
     if op == "BDIV":
         return 0x5005 | r[0] << 8
     if op == "BADB":
         return 0x5006 | r[0] << 8
+    if op == "BMUL0":
+        return 0x5013 | r[0] << 8
+    if op == "BTRIM":
+        return 0x5008
     if op == "JP":
         if len(args) == 2:
             return 0xB000 | n(1)
