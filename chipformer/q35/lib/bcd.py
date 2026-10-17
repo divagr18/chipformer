@@ -135,18 +135,23 @@ zeros:  db 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
 # dispatch table expands), its length and MODE. eval (eval.asm) parses it by shunting-yard into
 # exact fractions n / d and prints the value: the integer, or n / d as div prints it, or "..."
 # when it can't (more than MAX_DIGITS digits anywhere, a division by 0, a malformed expression,
-# more than NVAL pending values). A value lives in a slot: H + 32 s = [sign, n length, d length
-# (0: d = 1), n's digits], D + 32 s = d's digits; BLD / BSTA (macros.py) move digits around.
+# more than NVAL pending values). A value lives in a slot: H + 32 s = [sign, n length, n's place
+# (0: its digits follow, else a number on the tape), d length (0: d = 1), n's digits], D + 32 s
+# = d's digits; BLD / BSTA (macros.py) move digits around.
 # Memory: eval's code from 0x2AE to A_ADDR and from CODE2 to TAPE, then its data, then DBUF (10^k).
 CODE2 = 0x700
-TAPE, TLEN, MSAVE, CUR, PCUR, DXY, SGN, EXP = 0xC00, 0xC30, 0xC31, 0xC32, 0xC33, 0xC34, 0xC36, 0xC38
+TAPE, TLEN, MSAVE, CUR, DXY, SGN, EXP = 0xC00, 0xC30, 0xC31, 0xC32, 0xC34, 0xC36, 0xC38
 OPST, XTAB, H, D = 0xC50, 0xC80, 0xE00, 0xF00  # operator stack, ROM tables, value slots
 NVAL = 6  # value slots (offsets 0 .. 160); T6 and T7 are temporaries
 T6, T7 = 192, 224
 END = 63  # after the tape
-H1, H2, H3, SGN1, EXP1, LEN1, MAXD1 = H + 1, H + 2, H + 3, SGN + 1, EXP + 1, LEN + 1, MAX_DIGITS + 1
+H1, H3, H4, SGN1, EXP1, LEN1, MAXD1 = H + 1, H + 3, H + 4, SGN + 1, EXP + 1, LEN + 1, MAX_DIGITS + 1
+TAPE_M1 = TAPE - 1  # a number's place p: its digits from TAPE + p - 1
+# chain mode (chain.asm): its sign parity, accumulator lengths, the first number, accumulators
+GP, L0, L1, PEND, FOP, ACC0, ACC1, FST, CODE3 = (0xC3A, 0xC3B, 0xC3C, 0xC3D, 0xC40, 0x0A0, 0x0C0,
+                                                OPST, 0xCA0)
 VMAX, W1 = 32 * NVAL, W_ADDR + 1
-T6_DL, T6_D, T7_NL, T7_N = H + T6 + 2, D + T6, H + T7 + 1, H + T7 + 3
+T6_DL, T6_D, T7_NL, T7_N = H + T6 + 3, D + T6, H + T7 + 1, H + T7 + 4
 SYM_SUB = dict(zip(".+-*/()^", ("s_pt", "s_add", "s_sub", "s_mul", "s_div", "s_lp", "s_rp", "s_pow")))
 
 
@@ -171,9 +176,12 @@ def _dispatch() -> tuple[str, str, str]:
 
 
 HANDLERS, JTAB, RTAB = _dispatch()
+_NAMES = {k: v for k, v in globals().items() if k.isupper()}
 EVAL_SRC = (Path(__file__).with_name("eval.asm").read_text(encoding="utf-8")
-            .format(**{k: v for k, v in globals().items() if k.isupper()},
-                    DBUF_DB=", ".join(["1"] + ["0"] * MAX_DIGITS)))
+            .format(**_NAMES, DBUF_DB=", ".join(["1"] + ["0"] * MAX_DIGITS),
+                    **dict(zip(("CHAIN1", "CHAIN2"), Path(__file__).with_name("chain.asm")
+                               .read_text(encoding="utf-8").format(**_NAMES)
+                               .split("; ---- part 2")))))
 
 ROM, LABELS = assemble(SRC + EVAL_SRC)
 OPS = {"add": LABELS["add"], "mul": LABELS["mul"], "sub": LABELS["sub"], "div": LABELS["div"],
@@ -183,8 +191,11 @@ OPS = {"add": LABELS["add"], "mul": LABELS["mul"], "sub": LABELS["sub"], "div": 
 assert {k: v for k, v in OPS.items() if k in ("add", "sub", "mul")} == {
     "add": 0x202, "sub": 0x206, "mul": 0x20A}, OPS
 assert LABELS["sm_t"] < 0x400 and LABELS["am_t"] < 0x400, "macro targets must sit below 0x400"
+# compiled into the v18 weights (the expression CALL record): eval's entry, the tape and its length
+assert (OPS["eval"], TAPE, TLEN) == (0x2CA, 0xC00, 0xC30), (hex(OPS["eval"]), TAPE, TLEN)
 assert LABELS["code1_end"] <= A_ADDR and LABELS["eval_end"] <= TAPE, "eval's code overflows"
-assert LABELS["dbuf"] + MAX_DIGITS < H
+assert LABELS["dbuf"] + MAX_DIGITS < CODE3 and spec.FONT_BASE + 80 <= ACC0 < ACC1 + 32 <= 0x200
+assert LABELS["chain_end"] <= H, "chain mode's code overflows"
 
 
 class EvalError(Exception):

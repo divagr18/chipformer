@@ -3,14 +3,16 @@
 ; (bcd.py fills in the names in braces and generates the dispatch tables; see its notes)
 ;
 ; The tape: one code per token (digits 0..9, symbols 10..17, fused tokens 18..), END after it.
-; A value lives in slot s (offset 32 s): H + 32 s = [sign, n length, d length (0: d = 1),
-; n's digits], D + 32 s = d's digits. Slots 0 .. NVAL-1 are the value stack, T6 and T7 temporaries.
+; A value lives in slot s (offset 32 s): H + 32 s = [sign, n length, n's place, d length (0: d = 1),
+; n's digits]; n's place 0: its digits follow (H4 + 32 s), else they are a number on the tape
+; (TAPE + place - 1); D + 32 s = d's digits. Slots 0 .. NVAL-1 are the value stack, T6 and T7
+; temporaries.
 ;
 ; registers while parsing: ve = tape index, vd = 32 * values, va = operators (vc = the top),
 ; vb = where the number being read starts (255: none; v8 = its "." + 1, or 0), v9 = 1 after an
-; operand;
-; in reduce v6 / v7 = the offsets of X / Y (X op Y -> X); v0..v5 are scratch.
-; operators: "(" 0, + 4, - 5, * 8, / 9, negation 12, ^ 16 (precedence = code / 4)
+; operand; in reduce v6 / v7 = the offsets of X / Y (X op Y -> X); v0..v5 are scratch.
+; operators: "(" 0, + 4, - 5, * 8, / 9, negation 12, ^ 16. An operator reduces the ones on top
+; of the stack while they are >= its threshold (+ - 4, * / 8, ^ 17: right-associative).
 
 ; macros with jump targets first (they must sit below 0x400): R = A op B with the leading zeros
 ; skipped, so v0 = the length and I = its first digit
@@ -44,7 +46,8 @@ eval:   ld i, {MODE}
         add i, v0
         ld v0, {END}
         ld [i], v0
-        ld ve, 0
+        jp f_init               ; chain mode first (it falls back to g_init)
+g_init: ld ve, 0                ; the general evaluator
         ld vd, 0
         ld va, 0
         ld vb, 255
@@ -62,21 +65,32 @@ dig:    se vb, 255
         add vb, 255
         jp ev_lp
 
-s_pt:   sne vb, 255             ; "."
+s_pt:   sne vd, 1               ; "." (chain mode: the general evaluator)
+        jp g_init
+        sne vb, 255
         jp err
         se v8, 0
         jp err
         ld v8, ve
         ret
-s_lp:   se vb, 255              ; "(" (right after an operand: a product)
+s_lp:   sne vd, 1               ; "(" (right after an operand: a product)
+        jp f_lp
+        ld v7, 0
+        se vb, 255
         call commit
         se v9, 0
         call imul
         ld v0, 0
         jp push
 imul:   ld v0, 8
-        jp binop
-s_rp:   se vb, 255              ; ")" (none open: ignored)
+        ld v1, 8
+        ld i, {CUR}
+        ld [i], v1
+        jp bo_lp
+s_rp:   sne vd, 1               ; ")" (none open: ignored)
+        jp f_rp
+        ld v7, 0
+        se vb, 255
         call commit
 rp_lp:  sne va, 0
         jp rp_d
@@ -88,72 +102,61 @@ rp_p:   call pop
 rp_d:   ld v9, 1
         ret
 s_add:  ld v0, 4
+        ld v1, 4
         jp s_op
 s_sub:  ld v0, 5
+        ld v1, 4
         jp s_op
 s_mul:  ld v0, 8
+        ld v1, 8
         jp s_op
 s_div:  ld v0, 9
+        ld v1, 8
         jp s_op
-s_pow:  ld v0, 16
-s_op:   ld v7, v0
+s_pow:  sne vd, 1
+        jp g_init
+        ld v0, 16
+        ld v1, 17
+s_op:   sne vd, 1
+        jp f_op
+        ld i, {CUR}             ; CUR = the operator, its threshold
+        ld [i], v1
+        ld v7, v0
         se vb, 255
         call commit
-        ld v0, v7
         se v9, 0
-        jp binop
-        sne v0, 5               ; not after an operand: "-" negates, "+" is nothing
+        jp bo_lp
+        sne v7, 5               ; not after an operand: "-" negates, "+" is nothing
         jp s_neg
-        sne v0, 4
+        sne v7, 4
         ret
         jp err
 s_neg:  ld v0, 12
         jp push
-binop:  ld i, {CUR}             ; reduce what binds at least as tight, then push v0
-        ld [i], v0
-        shr v0, v0
-        shr v0, v0
-        ld i, {PCUR}
-        ld [i], v0
-bo_lp:  sne va, 0
-        jp bo_push
-        sne vc, 0
-        jp bo_push              ; "("
-        ld v1, vc
-        shr v1, v1
-        shr v1, v1              ; the top's precedence
-        ld i, {PCUR}
-        ld v0, [i]
-        ld v2, v1
-        sub v2, v0
+bo_lp:  ld i, {CUR}             ; reduce the operators on top >= the threshold, then push
+        ld v1, [i]
+        sne va, 0
+        jp push
+        ld v2, vc
+        sub v2, v1
         sne vf, 0
-        jp bo_push              ; looser: push
-        se v2, 0
-        jp bo_red               ; tighter: reduce
-        sne v0, 4               ; as tight: reduce, unless right-associative "^"
-        jp bo_push
-bo_red: call reduce
+        jp push
+        call reduce
         jp bo_lp
-bo_push: ld i, {CUR}
-        ld v0, [i]
-push:   ld i, {OPST}            ; vc = the top
+push:   ld v1, v0               ; push v0: memory keeps the one below, vc the top
+        ld v0, vc
+        ld i, {OPST}
         add i, va
         ld [i], v0
         add va, 1
-        ld vc, v0
+        ld vc, v1
         ld v9, 0
         ret
-pop:    add va, 255             ; (keeps v0)
-        sne va, 0
-        ret
-        ld v2, v0
-        ld v1, va
-        add v1, 255
+pop:    add va, 255             ; vc = the one below
         ld i, {OPST}
-        add i, v1
+        add i, va
         ld v0, [i]
         ld vc, v0
-        ld v0, v2
         ret
 
 commit: sne vd, {VMAX}          ; push the number on the tape from vb to ve - 2
@@ -191,26 +194,32 @@ cm_c:   ld v0, v5
         sub v0, v1
         se vf, 0
         jp err
-        ld i, {TAPE}
-        add i, vb
-        bld a, v5
-        ld i, {H3}
-        add i, vd
-        bsta
-        ld v0, 0                ; header: sign 0, n length, d length
-        ld v1, v5
         ld v2, v4
         sne v2, 0
-        jp cm_e
+        jp cm_n
         add v2, 1
         ld i, dbuf              ; d = 10^decimals
         bld a, v2
         ld i, {D}
         add i, vd
         bsta
-cm_e:   ld i, {H}
+cm_n:   ld v3, 0                ; a negation right before it (not before "^") folds into it
+        sne va, 0
+        jp cm_h
+        se vc, 12
+        jp cm_h
+        sne v7, 16
+        jp cm_h
+        ld v3, 1
+        call pop
+cm_h:   ld v0, v3               ; header: sign, n length, place, d length
+        ld v1, v5
+        ld v3, v2
+        ld v2, vb
+        add v2, 1
+        ld i, {H}
         add i, vd
-        ld [i], v2
+        ld [i], v3
         add vd, 32
         ld vb, 255
         ld v8, 0
@@ -218,7 +227,10 @@ cm_e:   ld i, {H}
         ret
 
 ; ---------------------------------------------------------------- the end: reduce all, print
-h_end:  se vb, 255
+h_end:  sne vd, 1
+        jp f_end
+        ld v7, 0
+        se vb, 255
         call commit
 he_lp:  sne va, 0
         jp he_d
@@ -230,26 +242,28 @@ he_p:   call pop
         jp he_lp
 he_d:   se vd, 32
         jp err
+        ld v3, 0
+        call na                 ; A = n (v0 = its length)
         ld i, {H}
-        ld v3, [i]              ; v0 sign, v1 n length, v2 d length, v3 n's first digit
-        se v1, 1
-        jp he_s
-        se v3, 0
-        jp he_s
-        ld v0, 0                ; 0: no sign, no d
-        ld v2, 0
-he_s:   ld v5, v1
-        ld v6, v2
+        ld v3, [i]              ; v0 sign, v1 n length, v2 place, v3 d length
         ld v7, v0
-        call setmode
+        ld v5, v1
+        ld v6, v3
+        ld i, {A_ADDR}
+        ld v0, [i]
+        se v5, 1
+        jp he_s
+        se v0, 0
+        jp he_s
+        ld v7, 0                ; 0: no sign, no d
+        ld v6, 0
+he_s:   call setmode
         se v6, 0
         jp he_div
-        ld i, {H3}
+        ld i, {A_ADDR}
         ld v0, v5
         print
-he_div: ld i, {H3}              ; n / d: div prints it
-        bld a, v5
-        ld i, {W1}
+he_div: ld i, {W1}              ; n / d: div prints it
         bsta
         ld i, {D}
         bld b, v6
@@ -257,8 +271,14 @@ he_div: ld i, {H3}              ; n / d: div prints it
 setmode: ld i, {MSAVE}          ; MODE as the CALL wrote it, | 8 if v7 (negative)
         ld v0, [i]
         ld v1, 0
-        se v7, 0
+        sne v7, 0
+        jp sm_m
+        ld v1, 1                ; a tool response has no "-": "..." instead
+        and v1, v0
+        sne v1, 0
+        jp err
         ld v1, 8
+sm_m:
         or v0, v1
         ld i, {MODE}
         ld [i], v0
@@ -274,8 +294,9 @@ err:    ld i, {MSAVE}           ; prints "..."
         print
 
 ; ---------------------------------------------------------------- reduce: the top operator
-reduce: ld v0, vc
+reduce: ld v5, vc
         call pop
+        ld v0, v5
         sne v0, 12
         jp r_neg
         sne vd, 32
@@ -301,23 +322,25 @@ r_neg:  sne vd, 0
         ret
 pop1:   add vd, 224
         ret
+{CHAIN1}
 code1_end:
         org {CODE2}             ; (the data from A_ADDR to the end of W sits in between)
 
 hdrs:   ld i, {H}               ; v3 = sign(Y), DXY = d lengths (X, Y); v0 = sign(X), I = X's header
         add i, v7
-        ld v2, [i]
-        ld v3, v0
-        ld v5, v2
+        ld v3, [i]
+        ld v4, v0
+        ld v5, v3
         ld i, {H}
         add i, v6
-        ld v2, [i]
-        ld v4, v0
-        ld v0, v2
+        ld v3, [i]
+        ld v2, v0
+        ld v0, v3
         ld v1, v5
         ld i, {DXY}
         ld [i], v1
-        ld v0, v4
+        ld v0, v2
+        ld v3, v4
         ld i, {H}
         add i, v6
         ret
@@ -348,12 +371,13 @@ rm_dd:  ld v3, v6
         call rs_d
         jp pop1
 
-r_div:  ld i, {H1}              ; Y = 0: "..."
-        add i, v7
-        ld v2, [i]
+r_div:  ld v3, v7               ; Y = 0: "..."
+        call nb
         se v0, 1
         jp dv_ok
-        sne v2, 0
+        ld i, {B_ADDR}
+        ld v0, [i]
+        sne v0, 0
         jp err
 dv_ok:  call hdrs
         xor v0, v3
@@ -474,8 +498,8 @@ sa_df:  call subm
 
 r_pow:  ld i, {H}               ; Y: a whole number of at most 2 digits
         add i, v7
-        ld v4, [i]              ; v0 sign, v1 length, v2 d length, v3 v4 digits
-        se v2, 0
+        ld v3, [i]              ; v0 sign, v1 length, v2 place, v3 d length
+        se v3, 0
         jp err
         ld v5, v0
         ld v0, v1
@@ -483,17 +507,23 @@ r_pow:  ld i, {H}               ; Y: a whole number of at most 2 digits
         sub v0, v2
         se vf, 0
         jp err
-        se v1, 1
-        jp pw_2
-        ld v4, v3
-        ld v3, 0
-pw_2:   ld v0, v3               ; e = 10 v3 + v4
-        shl v0, v0
-        ld v1, v0
-        shl v1, v1
-        shl v1, v1
-        add v0, v1
-        add v0, v4
+        ld v3, v7
+        call nb                 ; B = its digits, v0 = how many
+        ld v4, v0
+        ld i, {B_ADDR}
+        ld v1, [i]
+        se v4, 1
+        jp pw_3
+        ld v1, v0               ; one digit: e = B[0]
+        ld v0, 0
+pw_3:   ld v2, v0               ; e = 10 v0 + v1
+        shl v2, v2
+        ld v3, v2
+        shl v3, v3
+        shl v3, v3
+        add v2, v3
+        add v2, v1
+        ld v0, v2
         ld v1, v5
         ld i, {EXP}
         ld [i], v1              ; EXP = e, EXP + 1 = [e < 0]
@@ -501,7 +531,7 @@ pw_2:   ld v0, v3               ; e = 10 v3 + v4
         call na
         ld v3, {T6}
         call ast_n
-        ld i, {H2}
+        ld i, {H3}
         add i, v6
         ld v0, [i]
         ld i, {T6_DL}
@@ -520,10 +550,11 @@ pw_x:   ld i, {EXP}
         ld v0, 0                ; e = 0: X = 1
         ld v1, 1
         ld v2, 0
-        ld v3, 1
+        ld v3, 0
+        ld v4, 1
         ld i, {H}
         add i, v6
-        ld [i], v3
+        ld [i], v4
         jp pop1
 pw_s:   ld v1, 1                ; even e: no sign
         and v0, v1
@@ -562,74 +593,85 @@ pw_e:   ld i, {EXP1}
         se v0, 0
         call recip
         jp pop1
-recip:  ld i, {H1}              ; X = 1 / X; X = 0: "..."
-        add i, v6
-        ld v2, [i]              ; v0 n length, v1 d length, v2 n's first digit
+recip:  ld v3, v6               ; X = 1 / X; X = 0: "..."
+        call na                 ; T7 = n(X)
         se v0, 1
         jp rc_ok
-        sne v2, 0
+        ld i, {A_ADDR}
+        ld v0, [i]
+        sne v0, 0
         jp err
-rc_ok:  ld v3, v6               ; T7 = n(X)
-        call na
-        ld v3, {T7}
+rc_ok:  ld v3, {T7}
         call ast_n
-        ld i, {H2}
+        ld i, {H3}
         add i, v6
         ld v0, [i]
         se v0, 0
         jp rc_d
         ld v0, 1                ; d(X) = 1: n(X) = 1
-        ld i, {H1}
+        ld i, {H4}
         add i, v6
         ld [i], v0
-        ld i, {H3}
-        add i, v6
-        ld [i], v0
-        jp rc_n
+        ld v0, 1
+        ld v1, 0
+        jp rc_h
 rc_d:   ld i, {D}               ; n(X) = d(X)
         add i, v6
         bld a, v0
-        ld i, {H3}
+        ld i, {H4}
         add i, v6
         bsta
-        ld i, {H1}
+        ld v1, 0
+rc_h:   ld i, {H1}
         add i, v6
-        ld [i], v0
-rc_n:   ld i, {T7_NL}           ; d(X) = T7
+        ld [i], v1              ; n length, place 0
+        ld i, {T7_NL}           ; d(X) = T7
         ld v0, [i]
         ld i, {T7_N}
         bld a, v0
         ld i, {D}
         add i, v6
         bsta
-        ld i, {H2}
+        ld i, {H3}
         add i, v6
         ld [i], v0
         ret
 
 ; ---------------------------------------------------------------- moves (slot offset v3)
-na:     ld i, {H1}              ; A = n(slot)
+na:     ld i, {H1}              ; A = n(slot), v0 = its length
         add i, v3
-        ld v0, [i]
-        ld i, {H3}
+        ld v1, [i]
+        sne v1, 0
+        jp na_s
+        ld i, {TAPE_M1}
+        add i, v1
+        bld a, v0
+        ret
+na_s:   ld i, {H4}
         add i, v3
         bld a, v0
         ret
-nb:     ld i, {H1}              ; B = n(slot)
+nb:     ld i, {H1}              ; B = n(slot), v0 = its length
         add i, v3
-        ld v0, [i]
-        ld i, {H3}
+        ld v1, [i]
+        sne v1, 0
+        jp nb_s
+        ld i, {TAPE_M1}
+        add i, v1
+        bld b, v0
+        ret
+nb_s:   ld i, {H4}
         add i, v3
         bld b, v0
         ret
-da:     ld i, {H2}              ; A = d(slot)
+da:     ld i, {H3}              ; A = d(slot)
         add i, v3
         ld v0, [i]
         ld i, {D}
         add i, v3
         bld a, v0
         ret
-db:     ld i, {H2}              ; B = d(slot)
+db:     ld i, {H3}              ; B = d(slot)
         add i, v3
         ld v0, [i]
         ld i, {D}
@@ -638,38 +680,42 @@ db:     ld i, {H2}              ; B = d(slot)
         ret
 ast_n:  ld i, {LEN}             ; n(slot) = A
         ld v0, [i]
-        ld i, {H3}
+        ld i, {H4}
         add i, v3
         bsta
+        ld v1, 0
         ld i, {H1}
         add i, v3
-        ld [i], v0
+        ld [i], v1
         ret
-rs_n:   call ovf                ; n(slot) = R
-        bld a, v0
-        ld i, {H3}
-        add i, v3
-        bsta
-        ld i, {H1}
-        add i, v3
-        ld [i], v0
-        ret
-rs_d:   call ovf                ; d(slot) = R
-        bld a, v0
-        ld i, {D}
-        add i, v3
-        bsta
-        ld i, {H2}
-        add i, v3
-        ld [i], v0
-        ret
-ovf:    ld v1, v0               ; over MAX_DIGITS digits: "..."
+rs_n:   ld v1, v0               ; n(slot) = R (over MAX_DIGITS digits: "...")
         ld v2, {MAXD1}
         sub v1, v2
         se vf, 0
         jp err
+        bld a, v0
+        ld i, {H4}
+        add i, v3
+        bsta
+        ld v1, 0
+        ld i, {H1}
+        add i, v3
+        ld [i], v1
         ret
-dcp:    ld i, {H2}              ; d(X) = d(Y)
+rs_d:   ld v1, v0               ; d(slot) = R
+        ld v2, {MAXD1}
+        sub v1, v2
+        se vf, 0
+        jp err
+        bld a, v0
+        ld i, {D}
+        add i, v3
+        bsta
+        ld i, {H3}
+        add i, v3
+        ld [i], v0
+        ret
+dcp:    ld i, {H3}              ; d(X) = d(Y)
         add i, v7
         ld v0, [i]
         ld i, {D}
@@ -678,20 +724,16 @@ dcp:    ld i, {H2}              ; d(X) = d(Y)
         ld i, {D}
         add i, v6
         bsta
-        ld i, {H2}
+        ld i, {H3}
         add i, v6
         ld [i], v0
         ret
-ndcp:   ld i, {H1}              ; d(X) = n(Y)
-        add i, v7
-        ld v0, [i]
-        ld i, {H3}
-        add i, v7
-        bld a, v0
+ndcp:   ld v3, v7               ; d(X) = n(Y)
+        call na
         ld i, {D}
         add i, v6
         bsta
-        ld i, {H2}
+        ld i, {H3}
         add i, v6
         ld [i], v0
         ret
@@ -706,3 +748,7 @@ eval_end:
 
         org {XTAB}
 dbuf:   db {DBUF_DB}
+
+        org {CODE3}
+{CHAIN2}
+chain_end:

@@ -181,6 +181,11 @@ def value_text(v: Fraction) -> str:
     return "-" + t if v < 0 else t
 
 
+def calc_text(v: Fraction) -> str:
+    """The calc tool's response: a tool response has no "-", so a negative value is "..."."""
+    return "..." if v < 0 else value_text(v)
+
+
 # ---------------------------------------------------------------------------------- datasets
 
 def _num(s):
@@ -744,7 +749,7 @@ def judge(p: dict, text: str, think: bool) -> dict:
         e = {"op": c["op"], "a": c["args"].get("a"), "b": c["args"].get("b"), "valid": valid,
              "response": c["response"], "true": fmt(v) if v is not None else None,
              "exact": (resp == div_text(ia, ib) if c["op"] == "div" and valid and ib
-                       else resp == value_text(v) if c["op"] == "calc" and valid
+                       else resp == calc_text(v) if c["op"] == "calc" and valid
                        else rv is not None and v is not None and rv == v)}
         if c["op"] == "calc":
             e["a"] = c["args"].get("expression")
@@ -846,7 +851,7 @@ class BannedHead(torch.nn.Module):
 
 SELFTEST = [("mul", 4, 4), ("mul", 12345, 678), ("add", 987654321, 123456789),
             ("sub", 1000000, 1), ("sub", 5000, 4321), ("div", 1000000, 7), ("div", 8352, 48),
-            ("calc", "(12 + 7) * 3 - 4^3", None), ("calc", "20 * (-8) / (-60) * 329", None),
+            ("calc", "4^3 - (12 + 7) * 3", None), ("calc", "20 * (-8) / (-60) * 329", None),
             ("calc", "1.25 / (3 - 0.5)", None)]
 
 
@@ -872,7 +877,7 @@ def selftest(bd, ctx, tok, bios) -> None:
                 continue
             n += 1
             want = (div_text(int_arg(c["args"]["a"]), int_arg(c["args"]["b"]))
-                    if c["op"] == "div" else value_text(v) if c["op"] == "calc"
+                    if c["op"] == "div" else calc_text(v) if c["op"] == "calc"
                     else fmt(v))  # div truncates: 10 decimals, then "..."
             if (c["response"] or "").strip() != want:
                 bad.append((c["op"], c["args"], c["response"], want))

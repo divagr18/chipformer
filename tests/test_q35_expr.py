@@ -203,3 +203,10 @@ def test_circuit_tool(circuit):
     bm.text(2)
     assert printed(bm) == "???35???"
     check(circuit, bm)
+
+
+def test_tool_negative():
+    """A tool response has no "-": calc prints "..." for a negative value (inline prints it)."""
+    assert run_eval(tape_of("3-10"), mode=0)[:2] == (False, "...")
+    assert run_eval(tape_of("3-10"), mode=1)[:2] == (True, "7")
+    assert run_eval(tape_of("10-3*2"), mode=0)[:2] == (False, "4")

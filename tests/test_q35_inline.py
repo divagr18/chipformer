@@ -95,12 +95,13 @@ def test_scan_prints_and_chains():
     bm, calls = run(["$", "12", *TIMES, "34", " =", "$", " ", "and", " ", "408", *TIMES, "2", " ="])
     assert calls == [("mul", "12", "34"), ("mul", "408", "2")]
     assert printed(bm) == " 408$ 816."  # "$" closes the math it opened in, else "."
-    # after a "." closer the printed result does not start a new expression
+    # after a "." closer the single-op path does not go on from the printed result, but a whole
+    # expression does: "408." is a number (v18)
     bm = B.BridgeMachine(bcd.ROM, bcd.QUIRKS)
     bm.text(3)
     calls = bm.qwen(classes([" ", "12", *TIMES, "34", " ="]))
-    calls += bm.qwen(classes([*TIMES, "2", " ="]))  # the "." closer ends the expression
-    assert calls == [("mul", "12", "34")] and printed(bm) == " 408."
+    calls += bm.qwen(classes([*TIMES, "2", " ="]))
+    assert [c[0] for c in calls] == ["mul", "eval"] and printed(bm) == " 408. 816."
     bm = B.BridgeMachine(bcd.ROM, bcd.QUIRKS)
     bm.text(3)
     calls = bm.qwen(classes([" $$", " ", "3000", " +", " ", "4000", " ="]))
