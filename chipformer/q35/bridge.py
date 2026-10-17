@@ -29,8 +29,10 @@ SDOLLAR, DDOLLAR, SDDOLLAR, CURR, PERIOD = range(TEXT_BASE + 36, TEXT_BASE + 41)
 DOLLARS = (DOLLAR, SDOLLAR, DDOLLAR, SDDOLLAR, CURR)  # all neutral, all may precede a number
 # " -" starts a negative inline result, so its other spellings ("-", "−") are their own class
 MINUS2 = TEXT_BASE + 41
-N_TEXT = 42
-FUNCS = {"add": FN_ADD, "mul": FN_MUL, "sub": FN_SUB}  # tool names the circuit answers
+# division: "/" (" /", "÷"), the tool name "div" (also "\div"), and "..." after an inexact quotient
+DIV, FN_DIV, ELLIPSIS = range(TEXT_BASE + 42, TEXT_BASE + 45)
+N_TEXT = 45
+FUNCS = {"add": FN_ADD, "mul": FN_MUL, "sub": FN_SUB, "div": FN_DIV}  # tool names it answers
 PRINT_OP = 0x00FD
 MAX_PRINT = 58  # digits per print (the write counter tops out at 64)
 MAX_ARG = 24  # digits per tool-call argument
@@ -42,20 +44,22 @@ QWEN_TEXT = {**{TEXT_BASE + i: c for i, c in enumerate("0123456789abcdef")},
              FN_SUB: "sub", SPACE: " ", EQ: " =", PLUS: " +", MINUS: " -", TIMES: " \u00d7",
              BSL: " \\", TIMESW: "times", COMMA: ",", DOLLAR: "$", LPAREN: "(",
              WS: "\n\n", SDOLLAR: " $", DDOLLAR: "$$", SDDOLLAR: " $$", CURR: " \\$",
-             PERIOD: ".", MINUS2: "-"}
+             PERIOD: ".", MINUS2: "-", DIV: "/", FN_DIV: "div", ELLIPSIS: "..."}
 # other single tokens Qwen generates for the same thing: it writes <function=add> as "=add" and
 # <function=mul> as "=m" "ul", not the way its tokenizer splits the text
 # (never for a class the circuit prints: the tied lm_head rows would tie)
 EXTRA_TEXT = {FN_ADD: ["=add"], FN_MUL: ["ul"], FN_SUB: ["=sub", "ub"], EQ: ["="], PLUS: ["+"],
-              MINUS2: [" \u2212", "\u2212"], TIMES: ["\u00d7", " *", "*"], BSL: ["\\"],
+              MINUS2: [" \u2212", "\u2212"], DIV: [" /", "\u00f7"], TIMES: ["\u00d7", " *", "*"], BSL: ["\\"],
               TIMESW: ["cdot"], CURR: ["\\$"], LPAREN: [" ("],
               WS: ["\n\n\n", "\n\n\n\n", "  ", "   ", "    ", "     ", " \n", " \n\n"]}
-INLINE_OPS = {PLUS: "add", MINUS: "sub", MINUS2: "sub", TIMES: "mul"}  # and TIMESW after BSL
+INLINE_OPS = {PLUS: "add", MINUS: "sub", MINUS2: "sub", TIMES: "mul", DIV: "div"}
+# and after a backslash: TIMESW ("\times", "\cdot") mul, FN_DIV ("\div") div
+BSL_OPS = {TIMESW: "mul", FN_DIV: "div"}
 # Inline calls need at least this many digits in A and B together. Qwen gets small ones right,
 # and right after a trace its conv window holds chip tokens instead of the "=", so a short
 # printed result can read to it like the start of a new expression. Qwen also adds and
 # subtracts numbers of a few digits reliably, so those stay its own.
-INLINE_MIN_DIGITS = {"mul": 4, "add": 7, "sub": 7}
+INLINE_MIN_DIGITS = {"mul": 4, "add": 7, "sub": 7, "div": 4}
 
 
 def is_text(t: int) -> bool:
@@ -66,7 +70,9 @@ def readout(cells: list[int]) -> list[int]:
     from chipformer.q35.lib import bcd
 
     i, n = cells[spec.I], min(cells[spec.V], MAX_PRINT)
-    digits = [HEX[cells[(i + k) & 0xFFF] & 15] for k in range(n)]
+    # 10 and 11 print as "." and "..." (a quotient's decimals), so no hex digits a / b
+    shown = {**dict(enumerate(HEX)), 10: PERIOD, 11: ELLIPSIS}
+    digits = [shown[cells[(i + k) & 0xFFF] & 15] for k in range(n)]
     mode = cells[bcd.MODE]
     if mode & 1:  # an inline call: " digits" (" -digits" below 0) and a closer (the math's
         close = DDOLLAR if mode & 4 else DOLLAR if mode & 2 else PERIOD  # "$"/"$$", else ".")
@@ -113,7 +119,7 @@ class InlineScan:
             self.op = None  # a tool call needs its own function name
         cont = dig and (isd(prev) or (prev == COMMA and isd(prev2)))
         run_start = dig and not cont
-        tw_op = t == TIMESW and prev == BSL
+        tw_op = t in BSL_OPS and prev == BSL
         op_tok = t in INLINE_OPS or tw_op
         neutral = text and (dig or op_tok or t in (SPACE, LPAREN, BSL, EQ, *DOLLARS)
                             or (t == COMMA and isd(prev)))
@@ -143,11 +149,11 @@ class InlineScan:
             self.lens[self.p] = self.d + 1 if self.d < MAX_ARG else 0
             if self.d < MAX_ARG:
                 self.digits[self.p, self.d] = HEX.index(t)
-        fn = {FN_ADD: "add", FN_MUL: "mul", FN_SUB: "sub"}.get(t)
+        fn = {cls: name for name, cls in FUNCS.items()}.get(t)
         if fn and self.in_call:
             self.op, self.op_ok = fn, self.p == 1
         if op_tok and not self.in_call:
-            self.op, self.op_ok = ("mul" if tw_op else INLINE_OPS[t]), self.p == 1
+            self.op, self.op_ok = (BSL_OPS[t] if tw_op else INLINE_OPS[t]), self.p == 1
         if (t == EQ and not self.in_call and self.p == 2 and self.nops == 1 and self.op_ok
                 and self.a_safe and self.lens[1] and self.lens[2] and self.op
                 and self.lens[1] + self.lens[2] >= INLINE_MIN_DIGITS[self.op]):

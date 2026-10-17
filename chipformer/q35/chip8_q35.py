@@ -180,7 +180,9 @@ def build(target: Target | None = None) -> Chip8Q35:
     run_start = c.node(c.t_and([is_dig, one - prev_dig, one - prev_cm])
                        + c.t_and([is_dig, prev_cm, one - prev2_dig]), "arg.start")
     tw_op = c.and_([T[B.TIMESW], prev_bs], "times.op")  # \\times, \\cdot
-    inl = {"add": T[B.PLUS], "sub": T[B.MINUS] + T[B.MINUS2], "mul": T[B.TIMES] + tw_op}
+    dv_op = c.and_([T[B.FN_DIV], prev_bs], "div.op")  # \\div
+    inl = {"add": T[B.PLUS], "sub": T[B.MINUS] + T[B.MINUS2], "mul": T[B.TIMES] + tw_op,
+           "div": T[B.DIV] + dv_op}
     op_tok = sum(inl.values(), Expr())
     comma_join = c.and_([T[B.COMMA], prev_dig], "comma.join")
     neutral = (is_dig + T[B.SPACE] + dollars + T[B.LPAREN] + T[B.BSL] + T[B.EQ] + op_tok
@@ -230,7 +232,7 @@ def build(target: Target | None = None) -> Chip8Q35:
             data[2 + 5 * (a_ - 1) + i] = is_dig + peq(a_) + len_bits[i] - 2
     ops = list(B.FUNCS)
     for i, op in enumerate(ops):
-        data[12 + i] = fns[op] + inl[op]
+        data[12 + i] = fns[op] + inl[op] - (dv_op if op == "div" else 0)  # "\div" counts once
     at_fn = c.node(c.t_and([fn_any, in_call]) + c.t_and([op_tok, one - in_call]), "op.at")
     data[12 + len(ops)] = at_fn + peq(1) - 1
     # <tool_call> clears the routine (a row of zeros), so a tool call needs a name inside it: an
@@ -313,7 +315,8 @@ def build(target: Target | None = None) -> Chip8Q35:
                          + nib_lits(b2[4:], 0xE), "00EE")
     for h, name in [(5, "5XY0"), (9, "9XY0")]:
         ind[name] = c.and_(nib_lits(hib, h) + nib_lits(nb, 0), name)
-    for m, name in [(1, "BADD"), (2, "BZERO"), (3, "BMAC"), (4, "BSUB")]:  # lib/macros.py
+    for m, name in [(1, "BADD"), (2, "BZERO"), (3, "BMAC"), (4, "BSUB"), (5, "BDIV"),
+                    (6, "BADB")]:  # lib/macros.py
         ind[name] = c.and_(nib_lits(hib, 5) + nib_lits(nb, m), name)
     for m in [0, 1, 2, 3, 4, 5, 6, 7, 0xE]:
         ind[f"8XY{m:X}"] = c.and_(nib_lits(hib, 8) + nib_lits(nb, m), f"8XY{m:X}")
@@ -510,6 +513,8 @@ def build(target: Target | None = None) -> Chip8Q35:
         terms += c.t_eq(mx, v - 2, 0, 31, lits=[ind["BADD"] + ind["BSUB"]])  # n = max + 1
         terms += c.t_eq(la_i + lb_i, v - 1, 0, 62, lits=[ind["BZERO"]])
         terms += c.t_eq(la_i, v - 1, 0, 31, lits=[ind["BMAC"]])  # LA digits, then the carry
+        # LB digits, the window's top digit, the quotient digit, VX, VF
+        terms += c.t_eq(lb_i, v - 4, 0, 31, lits=[ind["BDIV"] + ind["BADB"]])
         nw_oh.append(c.node(terms, f"nw=={v}"))
     nw_oh = [one - sum(nw_oh, Expr())] + nw_oh
 
@@ -533,8 +538,8 @@ def build(target: Target | None = None) -> Chip8Q35:
         "dt_dec": dt_dec, "st_dec": st_dec, "ls_extra": [ls_extra], "i_next": i_next,
         "clip": [q["clip"]], "fd": [ind["00FD"]], "v0": v0b,
         "badd": [ind["BADD"]], "bzero": [ind["BZERO"]], "bmac": [ind["BMAC"]],
-        "bsub": [ind["BSUB"]],
-        "la": lab, "lb": lbb, "row": vxb[:5],
+        "bsub": [ind["BSUB"]], "bdiv": [ind["BDIV"]], "badb": [ind["BADB"]],
+        "la": lab, "lb": lbb, "row": vxb[:5], "t": vxb[:6], "pc": list(pcb),
     }
     flat = [(name, i, e) for name, vals in ctx_vals.items() for i, e in enumerate(vals)]
     k = {name: [None] * len(vals) for name, vals in ctx_vals.items()}
@@ -646,7 +651,9 @@ def build(target: Target | None = None) -> Chip8Q35:
     pad = [0] * (32 - B.MAX_ARG)
     a_addr = onehot_bits(q_a + pad, 5)
     b_addr = onehot_bits(q_b + pad, 5)
-    a_addr = [bios.A_ADDR >> i & 1 if i >= 5 else a_addr[i] for i in range(13)]
+    op_div = op_oh[ops.index("div")]  # div's A goes to W + 1 (bcd.call_writes)
+    a_addr = [(bios.A_ADDR >> i & 1) * (one - op_div) + ((bios.W_ADDR + 1) >> i & 1) * op_div
+              if i >= 5 else a_addr[i] for i in range(13)]
     b_addr = [bios.B_ADDR >> i & 1 if i >= 5 else b_addr[i] for i in range(13)]
     entry = [sum((op_oh[k_] for k_, op in enumerate(ops) if bios.OPS[op] >> i & 1), Expr())
              for i in range(12)]
@@ -682,10 +689,25 @@ def build(target: Target | None = None) -> Chip8Q35:
 
     lo_, hi_ = -72, 72  # bounds of index arithmetic, garbage states included (5-bit fields)
     qa = eqs(ia, lo_, hi_, MD, "mac.ia", [kb_as + kb_mac])
-    qb = [c.node(c.t_eq(ib, v, lo_, hi_, lits=[kb_as]) + c.t_eq(krow, v, 0, 31, lits=[kb_mac]),
-                 f"mac.ib=={v}") for v in range(MD)]
+    qb = [c.node(c.t_eq(ib, v, lo_, hi_, lits=[kb_as])
+                 + c.t_eq(klb - wi, v, lo_, hi_, lits=[k["bdiv"][0] + k["badb"][0]])
+                 + c.t_eq(krow, v, 0, 31, lits=[kb_mac]), f"mac.ib=={v}") for v in range(MD)]
     kk2 = kla + krow - wi  # BMAC target digit i + row + 1
     qr = eqs(kk2, lo_, hi_, 2 * MD, "mac.k", [kb_mac])
+    # long division (BDIV / BADB): t = VX, the window W[t-LB .. t], quotient digit at P[pq]
+    kb_div, kb_adb = k["bdiv"][0], k["badb"][0]
+    kb_dv = kb_div + kb_adb
+    kt = from_bits(k["t"])
+    NWC = 2 + MD + bios.DEC  # W: a 0, A, the decimals' zeros
+    gt_la = c.node(c.t_ge(kt - kla, 1, -31, 63), "div.t>la")
+    pq = kt + gt_la  # P index of the quotient digit
+    # writes: 0 = the quotient digit P[pq], 1 .. LB+1 = the window (from the right; LB+1 is its
+    # top digit), LB+2 = VX, LB+3 = VF
+    dv_p = c.and_([kb_dv, jeq(0)], "div.w0")
+    in_dv = c.node(c.t_lt(j - klb, 2, lo_, hi_, lits=[kb_dv, cnt[0]]), "div.digit")
+    rel = j - klb
+    dv_at = [c.node(c.t_eq(rel, r_, lo_, hi_, lits=[kb_dv]), f"div.w{r_}") for r_ in (2, 3)]
+    qw = eqs(kt - wi + 1, -64, 65, NWC, "div.kw", [kb_dv])
 
     def digit_bank(name, base, n, query):
         cells = {base + i: i for i in range(n)}
@@ -694,7 +716,37 @@ def build(target: Target | None = None) -> Chip8Q35:
     a_bits = digit_bank("bank.A", bios.A_ADDR, MD, qa)
     b_bits = digit_bank("bank.B", bios.B_ADDR, MD, qb)
     r_bits = digit_bank("bank.R", bios.R_ADDR, 2 * MD, qr)
-    a_i, b_i, r_i = from_bits(a_bits), from_bits(b_bits), from_bits(r_bits)
+    w_bits = digit_bank("bank.W", bios.W_ADDR, NWC, qw)
+    a_i, b_i, r_i, w_i = from_bits(a_bits), from_bits(b_bits), from_bits(r_bits), from_bits(w_bits)
+    p_i = from_bits(digit_bank("bank.P", bios.R_ADDR, 2 * MD,
+                               eqs(pq, 0, 64, 2 * MD, "div.pqr", [kb_adb])))  # BADB: P - 1
+
+    # BDIV's quotient digit, at its first ADDR token (nothing is written yet): q = #{k in 1..9 :
+    # R3 + delta >= k * B2} (lib/macros.div_estimate). R3 + delta - k*B2 reaches 999, beyond
+    # bf16's exact integers, so it is split as 10 * H + L (H = 10 W0 + W1 - k b0,
+    # L = W2 + delta - k b1, both small): [10 H + L >= 0] = sum over c of [ceil(-L/10) == c] [H >= c]
+    wq = [from_bits(digit_bank(f"bank.Wq{c_}", bios.W_ADDR, NWC,
+                               eqs(kt - klb + c_, -64, 64, NWC, f"div.q{c_}", [kb_div])))
+          for c_ in range(3)]
+    b0 = from_bits(digit_bank("bank.B0", bios.B_ADDR, 1, {0: kb_div}))
+    b1 = from_bits(digit_bank("bank.B1", bios.B_ADDR + 1, 1, {0: kb_div}))
+    lb1 = c.node(c.t_eq(klb, 1, 0, 31), "div.lb1")
+    lb3 = c.node(c.t_ge(klb, 3, 0, 31), "div.lb3")
+    th = [one]
+    for k_ in range(1, 10):
+        h_ = 10 * wq[0] + wq[1] - k_ * b0  # -81 .. 99
+        l_ = wq[2] + lb3 - k_ * b1  # -81 .. 10
+        ge_h = {cc: c.node(c.t_ge(h_, cc, -81, 99), f"div.H{k_}>={cc}") for cc in range(-1, 10)}
+        l_is = {cc: c.node(c.t_in(l_, -10 * cc, -10 * cc + 10, -81, 10), f"div.L{k_}~{cc}")
+                for cc in range(-1, 10)}
+        th.append(c.node(cat(c.t_and([l_is[cc], ge_h[cc], one - lb1]) for cc in range(-1, 10))
+                         + c.t_and([ge_h[0], lb1]), f"div.q>={k_}"))
+    th.append(Expr())
+    q_new = onehot_bits([th[v] - th[v + 1] for v in range(10)], 4)
+    # the record's first write carries q in its VAL token, so the window's writes read it from
+    # the token stream (the estimate itself is too deep to feed their carry chain)
+    at_q = c.and_([c.is_val, kb_div, jeq(1)], "div.at_q")
+    q_bits = c.slot_head("div.q", {0: at_q}, {0: one}, {2 + i: c.vb[i] for i in range(4)}, at_q)
 
     # Carries. A carry can only reach the next write through the token stream, so each VAL
     # token reconstructs the carry its write produced from the digit it wrote, d:
@@ -704,10 +756,22 @@ def build(target: Target | None = None) -> Chip8Q35:
     prod = c.node(cat(c.t_and([a_bits[p_], b_bits[q_]], 1 << (p_ + q_))
                       for p_ in range(4) for q_ in range(4)), "a*b")
     s_mac = r_i + prod  # <= 90 (<= 240 in garbage states)
-    fl_oh = [c.node(c.t_in(s_mac, 10 * v, 10 * v + 10, 0, 240), f"s//10=={v}") for v in range(10)]
-    sm_oh = [c.node(cat(c.t_eq(s_mac, v + 10 * q_, 0, 240) for q_ in range(10)), f"s%10=={v}")
+    # BADB is BMAC's carry chain with s = W[k] + b. BDIV subtracts: W[k] - q*b - borrow, kept as
+    # g = q*b - W[k] + 9 (0 .. 90) so that borrow' = g // 10 + [d >= 10 - g % 10].
+    qprod = c.node(cat(c.t_and([q_bits[p_], b_bits[q_]], 1 << (p_ + q_))
+                       for p_ in range(4) for q_ in range(4)), "q*b")
+    s_adb = w_i + b_i  # <= 18 (<= 30)
+    g_div = qprod - w_i + 9  # 0 .. 90 (-6 .. 234)
+    fl_oh = [c.node(c.t_in(s_mac, 10 * v, 10 * v + 10, 0, 240, lits=[kb_mac])
+                    + c.t_in(s_adb, 10 * v, 10 * v + 10, 0, 30, lits=[kb_adb])
+                    + c.t_in(g_div, 10 * v, 10 * v + 10, -15, 240, lits=[kb_div]),
+                    f"s//10=={v}") for v in range(10)]
+    sm_oh = [c.node(cat(c.t_eq(s_mac, v + 10 * q_, 0, 240, lits=[kb_mac]) for q_ in range(10))
+                    + cat(c.t_eq(s_adb, v + 10 * q_, 0, 30, lits=[kb_adb]) for q_ in range(4))
+                    + cat(c.t_eq(g_div, v + 10 * q_, -15, 240, lits=[kb_div])
+                          for q_ in range(10)), f"s%10=={v}")
              for v in range(10)]
-    at_mac = c.and_([c.is_addr, kb_mac], "mac.at")
+    at_mac = c.and_([c.is_addr, kb_mac + kb_dv], "mac.at")
     keep = c.slot_head("mac.s", {0: at_mac}, {0: one},
                        {2 + i: e for i, e in enumerate(fl_oh + sm_oh)}, at_mac)
     fl_r, sm_r = keep[:10], keep[10:]
@@ -715,14 +779,24 @@ def build(target: Target | None = None) -> Chip8Q35:
     d_lt = [c.node(c.t_lt(tok_d, v, 0, 15), f"d<{v}") for v in range(10)]
     wrapped = c.node(cat(c.t_and([sm_r[v], d_lt[v]]) for v in range(1, 10)), "mac.wrap")
     cout_mac = sum((v * fl_r[v] for v in range(10)), Expr()) + wrapped  # <= 9
+    wrap_dv = c.node(cat(c.t_and([sm_r[v], one - d_lt[10 - v]]) for v in range(1, 10)),
+                     "div.wrap")  # [d >= 10 - g % 10]
+    cout_div = sum((v * fl_r[v] for v in range(10)), Expr()) + wrap_dv  # <= 9
     cout_add = c.node(c.t_ge(a_i + b_i - tok_d, 9, -15, 30), "add.cout")
     cout_sub = c.node(c.t_ge(tok_d - a_i + b_i, 1, -15, 30), "sub.borrow")  # [d > a - b]
     cm_oh = eqs(cout_mac, 0, 10, 10, "mac.cout")
-    cout_bits = [c.node(c.t_and([c.is_val, kb_mac, b_]) + c.t_and([c.is_val, kb_add, cout_add])
-                        + c.t_and([c.is_val, kb_sub, cout_sub])
-                        if i == 0 else c.t_and([c.is_val, kb_mac, b_]), f"cout.b{i}")
-                 for i, b_ in enumerate(onehot_bits(cm_oh, 4))]
-    macro = kb_add + kb_mac + kb_sub
+    cd_oh = eqs(cout_div, 0, 10, 10, "div.cout")
+    cout_bits = [c.node(c.t_and([c.is_val, kb_mac + kb_adb, b_])
+                        + c.t_and([c.is_val, kb_div, bd_])
+                        + (c.t_and([c.is_val, kb_add, cout_add])
+                           + c.t_and([c.is_val, kb_sub, cout_sub]) if i == 0 else []),
+                        f"cout.b{i}")
+                 for i, (b_, bd_) in enumerate(zip(onehot_bits(cm_oh, 4), onehot_bits(cd_oh, 4)))]
+    # division: only the window's writes carry (the last one: BDIV negative / BADB carried out)
+    # (at a VAL token wi = j - 1; written with j so that is_val is not both a literal and in z,
+    # which would give it a weight of 257, not a bf16 value)
+    dv_win = c.node(c.t_lt(j - klb, 3, lo_, hi_, lits=[c.is_val, kb_dv, cnt[1]]), "div.win")
+    macro = kb_add + kb_mac + kb_sub + dv_win + c.and_([rs, kb_dv], "div.rs")
     carry = c.slot_head("carry", {0: rs + c.is_val + macro - 1}, {0: one},
                         {2 + i: cout_bits[i] for i in range(4)}, rs + c.is_val + macro - 1)
     c_in = from_bits(carry)
@@ -731,11 +805,15 @@ def build(target: Target | None = None) -> Chip8Q35:
     t_add = a_i + b_i + c_in  # <= 19 (<= 45)
     t_mac = s_mac + c_in  # <= 99 (<= 255)
     t_sub = a_i - b_i - c_in  # -10 .. 9 (-30 .. 15)
+    t_adb = s_adb + c_in  # <= 27 (<= 45)
+    t_div = 9 - g_div - c_in  # W[k] - q*b - borrow: -99 .. 9 (-246 .. 24)
     dsum = [c.node(c.t_eq(t_add, v, 0, 45, lits=[kb_add]) + c.t_eq(t_add, v + 10, 0, 45,
                                                                    lits=[kb_add])
                    + cat(c.t_eq(t_mac, v + 10 * q_, 0, 255, lits=[kb_mac]) for q_ in range(10))
                    + c.t_eq(t_sub, v, -30, 15, lits=[kb_sub])
-                   + c.t_eq(t_sub, v - 10, -30, 15, lits=[kb_sub]),
+                   + c.t_eq(t_sub, v - 10, -30, 15, lits=[kb_sub])
+                   + cat(c.t_eq(t_adb, v + 10 * q_, 0, 45, lits=[kb_adb]) for q_ in range(3))
+                   + cat(c.t_eq(t_div, v - 10 * q_, -246, 24, lits=[kb_div]) for q_ in range(10)),
                    f"mac.d=={v}") for v in range(10)]
     digit_val = onehot_bits(dsum, 4)
 
@@ -774,7 +852,7 @@ def build(target: Target | None = None) -> Chip8Q35:
     case([at_addr, nfd, not_tick, k["dxyn"][0], lt_2n], 1, target)
     case([at_val, nfd, not_tick, k["dxyn"][0], eq_2n], 0, [any_collision])
     case([at_addr, nfd, not_tick, k["dxyn"][0], eq_2n], 1, VF)
-    case([at_val, nfd, not_tick, is_pc], 0, k["next_pc"])
+    case([at_val, nfd, not_tick, is_pc, one - k["bdiv"][0] - k["badb"][0]], 0, k["next_pc"])
     case([at_addr, nfd, not_tick, is_pc], 1, spec.PC)
     case([at_addr, nfd, not_tick, is_end], 2, 0)
     case([at_val, nfd, in_tick, jeq(0)], 0, k["dt_dec"])
@@ -793,6 +871,45 @@ def build(target: Target | None = None) -> Chip8Q35:
     case([at_val, nfd, in_mac], 0, digit_val)
     case([at_addr, nfd, end_mac], 1, addr_bits(row_oh, bios.R_ADDR))
     case([at_val, nfd, end_mac], 0, list(carry))
+
+    # long division records: the window (LB digits from the right, then its top digit), the
+    # quotient digit, VX, VF, then PC (back to the same instruction while it goes on)
+    kw_oh = eqs(kt - j + 1, -64, 65, NWC, "div.kwj", [kb_dv])
+    case([at_addr, nfd, in_dv], 1, addr_bits(kw_oh, bios.W_ADDR))
+    case([at_val, nfd, in_dv], 0, digit_val)
+    pq_oh = eqs(pq, 0, 64, 2 * MD, "div.pq", [kb_dv])
+    case([at_addr, nfd, dv_p], 1, addr_bits(pq_oh, bios.R_ADDR))
+    pm1 = [c.node(c.t_eq(p_i, v + 1, 0, 15), f"P-1=={v}") for v in range(15)]
+    p_dec = [sum((e for v, e in enumerate(pm1) if v >> b_ & 1), Expr()) + one - sum(pm1, Expr())
+             for b_ in range(8)]  # P - 1 (0 - 1 = 255)
+    case([at_val, nfd, dv_p, kb_div], 0, q_new)
+    case([at_val, nfd, dv_p, kb_adb], 0, p_dec)
+    case([at_addr, nfd, dv_at[0]], 1, onehot_bits(k["x"], 4) + [0] * 8 + [1])
+    # flags, after the window: its last carry is BDIV's "negative" / BADB's "carried out", and a
+    # counter of the window's nonzero digits says whether the remainder is 0
+    nz_tok = c.and_([c.is_val, dv_win, one - d_lt[1]], "div.nz_tok")
+    (xz,) = c.slot_head("div.nz", {0: rs, 1: one - rs}, {0: one - rs, 1: one - rs}, {2: rs},
+                        one - rs, 110 * nz_tok + 238 * rs, tiny=2.0**-90)
+    nz = c.node([(1, one - rs, 7 * one - 8 * xz), (-1, one - rs, 6 * one - 8 * xz)], "div.nz")
+    ge_la = c.node(c.t_ge(kt - kla, 0, -31, 63), "div.t>=la")
+    at_end = c.node(c.t_eq(kt - kla, bios.DEC, -31, 63), "div.t=end")
+    neg = carry[0]  # 0/1 everywhere (c_in is 0/1 only here)
+    f1 = c.node(c.t_and([kb_div, neg]) + c.t_and([kb_adb, one - neg]), "div.f1")
+    f2 = c.node(c.t_and([kb_div, one - neg, one - nz, ge_la])
+                + c.t_and([kb_adb, neg, one - nz, ge_la]), "div.f2")
+    f3 = c.node(c.t_and([kb_div, one - neg, nz, at_end])
+                + c.t_and([kb_adb, neg, nz, at_end]), "div.f3")
+    f0 = one - f1 - f2 - f3
+    t_oh = eqs(kt, 0, 64, 64, "div.t", [kb_dv])
+    t1_oh = eqs(kt + 1, 0, 65, 64, "div.t+1", [kb_dv])
+    case([at_val, nfd, dv_at[0], f0], 0, onehot_bits(t1_oh, 8))
+    case([at_val, nfd, dv_at[0], one - f0], 0, onehot_bits(t_oh, 8))
+    case([at_addr, nfd, dv_at[1]], 1, spec.V + 15)
+    case([at_val, nfd, dv_at[1]], 0, [f1 + f3, f2 + f3])
+    case([at_val, nfd, not_tick, is_pc, kb_div, f0], 0, k["pc"])
+    case([at_val, nfd, not_tick, is_pc, kb_div, one - f0], 0, k["next_pc"])
+    case([at_val, nfd, not_tick, is_pc, kb_adb, f1], 0, k["pc"])
+    case([at_val, nfd, not_tick, is_pc, kb_adb, one - f1], 0, k["next_pc"])
 
 
     # a print: STEP, then NL <tool_response> NL digits NL </tool_response> NL as text tokens.
@@ -833,7 +950,11 @@ def build(target: Target | None = None) -> Chip8Q35:
                       ([mode, jeq(0), mode_neg], B.MINUS), ([trail, one - mode_d], B.PERIOD),
                       ([trail, mode_d, one - mode_dd], B.DOLLAR), ([trail, mode_dd], B.DDOLLAR)]:
         case(in_print + lits, 2, code[cls])
-    case(in_print + [digit], 2, list(vread[:4]) + [1])  # TEXT_CODE + low nibble
+    # TEXT_CODE + low nibble; 10 and 11 (a quotient's "." and "...") print as their classes
+    p10, p11 = (c.and_(nib_lits(vread[:4], v), f"print.is{v}") for v in (10, 11))
+    case(in_print + [digit, one - p10 - p11], 2, list(vread[:4]) + [1])
+    case(in_print + [digit, p10], 2, TEXT_CODE + B.PERIOD - B.TEXT_BASE)
+    case(in_print + [digit, p11], 2, TEXT_CODE + B.ELLIPSIS - B.TEXT_BASE)
     # who predicts the next token: the circuit on chip tokens and inside a print, else Qwen
     owner = c.node(c.t_and([c.mu]) + c.t_and([c.is_text, k["fd"][0], cnt[0], upto,
                                               one - calling])
@@ -844,6 +965,7 @@ def build(target: Target | None = None) -> Chip8Q35:
     nxt += c.select_bits([(lits, p) for lits, _, p in A], 13, "next")
     c.next_bits = nxt
     c.owner = owner
+    c.cases = A  # (literals, kind, payload), for debugging
     # ---------------------------------------------------------- exit (the last chip sublayer)
     # The emitter clears every other chip dim here, so after the chip layers a token holds only
     # its Qwen part, mu, the output code (KAPPA * +-1 where the circuit owns the position, else

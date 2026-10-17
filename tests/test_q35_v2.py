@@ -54,6 +54,7 @@ def test_checkpoint_print_and_exit(circuit, dtype):
     from transformers import AutoModelForCausalLM
 
     from chipformer.q35.emit import allocate
+    from chipformer.q35 import tiny
     from chipformer.q35.tiny import pick_layout
 
     model = AutoModelForCausalLM.from_pretrained(TINY, dtype=getattr(torch, dtype)).eval()
@@ -70,7 +71,7 @@ def test_checkpoint_print_and_exit(circuit, dtype):
     g = np.array(gen[1:] + [False])
     assert not (g & (pred != want)).any()
     # after the exit only mu, the output code and tau remain in the chip region
-    alloc = allocate(circuit, None, set(circuit.keep), 3584)
+    alloc = allocate(circuit, None, set(circuit.keep), tiny.BASE["intermediate_size"])
     lay = pick_layout(alloc.n_slots + 1)
     lay.slots = alloc.slots
     res = caught[0][0].float()

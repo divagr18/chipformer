@@ -12,7 +12,8 @@ from chipformer.q35.lib import bcd
 BS = chr(92)
 WORDS = {" ": B.SPACE, " =": B.EQ, "=": B.EQ, " +": B.PLUS, "+": B.PLUS, " -": B.MINUS,
          "-": B.MINUS2, "−": B.MINUS2, " ×": B.TIMES, "*": B.TIMES, " *": B.TIMES, " " + BS: B.BSL, "times": B.TIMESW,
-         ",": B.COMMA, "$": B.DOLLAR, " $": B.SDOLLAR, "$$": B.DDOLLAR, " $$": B.SDDOLLAR, "(": B.LPAREN, "\n": B.NL, "\n\n": B.WS}
+         ",": B.COMMA, "$": B.DOLLAR, " $": B.SDOLLAR, "$$": B.DDOLLAR, " $$": B.SDDOLLAR, "(": B.LPAREN, "\n": B.NL, "\n\n": B.WS,
+         "/": B.DIV, " /": B.DIV, "÷": B.DIV, "div": B.FN_DIV, ".": B.PERIOD}
 
 
 def classes(tokens: list[str]) -> list[int]:
@@ -38,7 +39,8 @@ def printed(bm) -> str:
     out = []
     for t, g in zip(bm.tokens, bm.generated):
         if g and B.is_text(t):
-            close = {B.SPACE: " ", B.MINUS: " -", B.PERIOD: ".", B.DOLLAR: "$", B.DDOLLAR: "$$"}
+            close = {B.SPACE: " ", B.MINUS: " -", B.PERIOD: ".", B.DOLLAR: "$", B.DDOLLAR: "$$",
+                     B.ELLIPSIS: "..."}
             out.append(close[t] if t in close else str(B.HEX.index(t)) if t in B.HEX else "?")
     return "".join(out)
 
@@ -72,6 +74,13 @@ CASES = [
     (["x", "^", "2", " =", " ", "4818396", *TIMES, "7", " ="], [("mul", "4818396", "7")]),
     ([" ", "50", " =", "30", *TIMES, "40", " ="], []),  # a number right after "=" is not counted
     (["x", "4245", *TIMES, "60", " ="], []),  # a letter right before the first number
+    ([" ", "1686", "/", "6", " ="], [("div", "1686", "6")]),
+    (["$", "259749", " /", " ", "3162", " ="], [("div", "259749", "3162")]),
+    ([" ", "720", " " + BS, "div", " ", "45", " ="], [("div", "720", "45")]),
+    ([" ", "100", "÷", "7", " ="], [("div", "100", "7")]),
+    ([" ", "1", "/", "2", " ="], []),  # small
+    ([" ", "km", "/", "1234", " ="], []),
+    ([" ", "1234", " ", "div", " ", "5", " ="], []),  # "div" without a backslash
 ]
 
 
@@ -95,6 +104,19 @@ def test_scan_prints_and_chains():
     bm.text(3)
     calls = bm.qwen(classes([" $$", " ", "3000", " +", " ", "4000", " ="]))
     assert calls == [("add", "3000", "4000")] and printed(bm) == " 7000$$"
+
+
+def test_div_prints():
+    for a, b, want in [("1686", "6", " 281."), ("1000", "8", " 125."), ("10", "16", " 0.625."),
+                       ("100", "7", " 14.2857142857...."), ("1", "3000", " 0.0003333333...."),
+                       ("99999999", "9999", " 10001."),
+                       ("5", "125000000000000", " 0.0000000000....")]:
+        bm, calls = run([" ", a, "/", b, " ="])
+        assert calls == [("div", a, b)] and printed(bm) == want, (a, b, printed(bm))
+    bm, _ = run(["$", "355", "/", "113", " ="])
+    assert printed(bm) == " 3.1415929203...$"
+    bm, _ = run([" ", "1234", "/", "0", " ="])  # division by zero prints nothing
+    assert printed(bm) == " "
 
 
 def test_negative_sub_prints_minus():
@@ -132,10 +154,15 @@ def test_circuit_with_tool_calls(circuit):
         bm.step()
     bm.qwen(classes([" ", "675", " -", " ", "5000", " =", "."]))
     assert printed(bm) == " 576$???675??? -4325."  # ? = the tool response's tags and newlines
+    bm.tool_call("div", "355", "113")
+    while not bm.halted:
+        bm.step()
+    assert printed(bm).endswith("???3.1415929203...???")
+    check(circuit, bm)
     bm.tool_call("sub", "5", "675")  # a tool call below 0 prints nothing
     while not bm.halted:
         bm.step()
-    assert printed(bm).endswith(".??????")  # tags and newlines, no digits
+    assert printed(bm).endswith("..." + "?" * 9)  # div's closing tags, then tags but no digits
     check(circuit, bm)
 
 
@@ -160,7 +187,7 @@ def test_circuit_fuzz(circuit):
     the reference does, and the records and prints that follow are exact."""
     rng = random.Random(5)
     pool = ([B.HEX[d] for d in range(10)] * 4 + [B.SPACE] * 4
-            + [B.EQ, B.PLUS, B.MINUS, B.MINUS2, B.TIMES, B.BSL, B.TIMESW, B.COMMA, B.DOLLAR, B.LPAREN,
+            + [B.EQ, B.PLUS, B.MINUS, B.MINUS2, B.DIV, B.TIMES, B.BSL, B.TIMESW, B.COMMA, B.DOLLAR, B.LPAREN,
                B.NL, B.OTHER, B.OTHER])
     fired = 0
     for _ in range(12):
@@ -170,7 +197,7 @@ def test_circuit_fuzz(circuit):
         for _ in range(60):
             if rng.random() < 0.15:  # plant an expression
                 a, b = str(rng.randrange(1, 10**rng.randint(1, 5))), str(rng.randrange(10**rng.randint(1, 4)))
-                op = rng.choice([" +", " -", "-", "*", TIMES])
+                op = rng.choice([" +", " -", "-", "*", TIMES, "/", [" " + chr(92), "div", " "]])
                 stream += [B.SPACE, *classes([a]), *classes(op if isinstance(op, list) else [op]),
                            B.SPACE, *classes([b]), B.EQ]
             stream.append(rng.choice(pool))

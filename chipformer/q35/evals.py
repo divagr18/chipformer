@@ -104,6 +104,24 @@ def _div(a, b):
     return q.numerator if q.denominator == 1 else q
 
 
+def div_text(a: int, b: int) -> str:
+    """How the computer prints a / b (lib/bcd.py div): the exact quotient, or its first DEC
+    decimals and "..." when it does not end."""
+    from chipformer.q35.lib import bcd
+
+    q, r = divmod(a, b)
+    if not r:
+        return str(q)
+    digs = []
+    for _ in range(bcd.DEC):
+        r *= 10
+        digs.append(str(r // b))
+        r %= b
+        if not r:
+            return f"{q}." + "".join(digs)
+    return f"{q}." + "".join(digs) + "..."
+
+
 # exact meaning of each tool (by name); demo.TOOLS decides which ones the model sees
 PY_TOOLS = {"add": lambda a, b: a + b, "mul": lambda a, b: a * b,
             "sub": lambda a, b: a - b, "div": _div}
@@ -578,10 +596,10 @@ def _key(op, a, b):
 USER_TURN = re.compile(r"<\|im_start\|>\s*user(?!\s*<tool_response>)")
 
 
-INLINE_RE = re.compile(r"(\d[\d,]*)[\s$(]*(\+|-|−|×|\*|\\times|\\cdot)[\s$(]*"
+INLINE_RE = re.compile(r"(\d[\d,]*)[\s$(]*(\+|-|−|×|\*|\\times|\\cdot|/|÷|\\div)[\s$(]*"
                        r"(\d[\d,]*)[\s$(]*=\s*$")
 INLINE_OPS = {"+": "add", "-": "sub", "−": "sub", "×": "mul", "*": "mul",
-              "\\times": "mul", "\\cdot": "mul"}
+              "\\times": "mul", "\\cdot": "mul", "/": "div", "÷": "div", "\\div": "div"}
 
 
 def inline_fires(text: str, pred) -> list[dict]:
@@ -593,7 +611,8 @@ def inline_fires(text: str, pred) -> list[dict]:
     first len(true) digits: ``exact`` = the digits start with the true value, ``appended`` = the
     digits Qwen added after it (for A - B < 0, everything shown is Qwen's)."""
     out = []
-    for m in re.finditer(r"\[machine:\d+\]( ?-?)((?:\d|,(?=\d))*)", text):
+    # v14 quotients: digits, then "." and decimals, then "..." if inexact
+    for m in re.finditer(r"\[machine:\d+\]( ?-?)((?:\d|,(?=\d))*(?:\.\d+(?:\.\.\.)?)?)", text):
         before = MARK.sub("", text[:m.start()])
         if before.rstrip().endswith("</tool_call>") or m.end() == len(text):
             continue  # a tool call, or a run cut off by the budget / context before its print
@@ -605,11 +624,14 @@ def inline_fires(text: str, pred) -> list[dict]:
         if e:
             a, b = int(e[1].replace(",", "")), int(e[3].replace(",", ""))
             op = INLINE_OPS[e[2]]
+            if op == "div" and not b:
+                continue
             v = PY_TOOLS[op](a, b)
-            t = str(v) if v >= 0 or shown.startswith("-") else ""
+            t = (div_text(a, b) if op == "div" else
+                 str(v) if v >= 0 or shown.startswith("-") else "")
             exact = shown.startswith(t)
             machine = t if exact else shown
-            f |= {"op": op, "a": a, "b": b, "true": str(v), "exact": exact,
+            f |= {"op": op, "a": a, "b": b, "true": t if op == "div" else str(v), "exact": exact,
                   "appended": shown[len(t):][:60] if exact else ""}
         later = MARK.sub("", text[m.end():]).replace(",", "")
         # a number Qwen writes right after the print (v9 " R ", v11 " R$" / " R$$" / " R.")
@@ -618,7 +640,7 @@ def inline_fires(text: str, pred) -> list[dict]:
                      "same" if ech[1] == machine else "diff")
         f["reused"] = bool(machine) and machine in later
         f["is_answer"] = (bool(machine) and len(machine) < 60 and pred is not None
-                          and Fraction(int(machine)) == pred)
+                          and Fraction(Decimal(machine.removesuffix("..."))) == pred)
         out.append(f)
     return out
 
@@ -658,7 +680,8 @@ def judge(p: dict, text: str, think: bool) -> dict:
         rv = num_arg(resp) if resp else None
         e = {"op": c["op"], "a": c["args"].get("a"), "b": c["args"].get("b"), "valid": valid,
              "response": c["response"], "true": fmt(v) if v is not None else None,
-             "exact": (rv is not None and v is not None and rv == v)}
+             "exact": (resp == div_text(ia, ib) if c["op"] == "div" and valid and ib
+                       else rv is not None and v is not None and rv == v)}
         if "steps" in p and v is not None:
             e["in_gold_steps"] = v in gold_steps
         if want_calls and v is not None:
@@ -752,14 +775,14 @@ class BannedHead(torch.nn.Module):
 
 
 SELFTEST = [("mul", 4, 4), ("mul", 12345, 678), ("add", 987654321, 123456789),
-            ("sub", 1000000, 1), ("sub", 5000, 4321)]
+            ("sub", 1000000, 1), ("sub", 5000, 4321), ("div", 1000000, 7), ("div", 8352, 48)]
 
 
 def selftest(bd, ctx, tok, bios) -> None:
     """Before a merged run: Qwen calls each tool on known operands and every call it makes
     must print the exact result. Catches a BIOS that does not match the circuit (the routine
     entry points are compiled into the weights) or inexact kernels."""
-    sym = {"add": "+", "mul": "*", "sub": "-"}
+    sym = {"add": "+", "mul": "*", "sub": "-", "div": "/"}
     cases = [c for c in SELFTEST if c[0] in tool_names()]
     prompts = [build_prompt(tok, f"Use the {op} tool to compute {a} {sym[op]} {b}.", "merged", bios)
                for op, a, b in cases]
@@ -772,8 +795,10 @@ def selftest(bd, ctx, tok, bios) -> None:
             if v is None:
                 continue
             n += 1
-            if (c["response"] or "").strip() != fmt(v):
-                bad.append((c["op"], c["args"], c["response"], fmt(v)))
+            want = (div_text(int_arg(c["args"]["a"]), int_arg(c["args"]["b"]))
+                    if c["op"] == "div" else fmt(v))  # div truncates: 10 decimals, then "..."
+            if (c["response"] or "").strip() != want:
+                bad.append((c["op"], c["args"], c["response"], want))
     print(f"selftest: {n} calls, {len(bad)} wrong {bad}", flush=True)
     if bad or n == 0:
         raise SystemExit("selftest failed: the BIOS does not match this checkpoint's circuit?")

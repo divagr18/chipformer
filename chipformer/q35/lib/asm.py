@@ -89,6 +89,10 @@ def _encode(op: str, args: list[str], labels: dict[str, int]) -> int:
         return 0x5004
     if op == "BMAC":
         return 0x5003 | r[0] << 8
+    if op == "BDIV":
+        return 0x5005 | r[0] << 8
+    if op == "BADB":
+        return 0x5006 | r[0] << 8
     if op == "JP":
         if len(args) == 2:
             return 0xB000 | n(1)

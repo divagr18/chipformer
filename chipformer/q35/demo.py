@@ -30,7 +30,10 @@ TOOLS = [{"type": "function", "function": {
                                "multiplication.")),
                        ("add", "Add two non-negative integers exactly. Use it for any addition."),
                        ("sub", ("Subtract b from a exactly (a must be >= b). Use it for any "
-                               "subtraction."))]]
+                               "subtraction.")),
+                       ("div", ("Divide a by b exactly: the quotient, or its first 10 decimals "
+                                "followed by ... when it does not end. Use it for any "
+                                "division."))]]
 
 
 def problems(n: int, seed: int = 0, hard: bool = False) -> list[tuple[str, str, int]]:
