@@ -390,11 +390,15 @@ def decode_rows(bd, ctx, prompts: list[list[int]], budget: int, hook, on_done,
     - **Chip steps for some rows.** With skip_qwen, rows whose input is a chip token take the
       cheap chip step (the chip layers only) while the rows on text wait, whenever at least
       ``chip_min`` rows are on chip tokens (a chip token then costs a fraction of its slot in a
-      full step), for up to ``chip_per_full`` chip steps in a row. A waiting row's state is
-      untouched (the chip step restores its chip-layer states and writes no Qwen KV for it),
-      so every row sees the same token sequence as with full steps only: only the interleaving
-      across rows changes, and rows are independent (the batch size, hence every GEMM kernel,
-      stays the same). On v15, 40 of 40 problems came out token-identical to decode_views.
+      full step), for up to ``chip_per_full`` chip steps in a row. In the tail (no prompt
+      queued) that only delays the last rows, unless the full step reads KV views: then rows
+      that finish their traces sooner shrink the view (on v15, batch 16: 298 s with chip steps
+      in the tail vs 366 s without; with one view, 245 s without vs 335 s with). A waiting
+      row's state is untouched (the chip step restores its chip-layer states and writes no
+      Qwen KV for it), so every row sees the same token sequence as with full steps only: only
+      the interleaving across rows changes, and rows are independent (the batch size, hence
+      every GEMM kernel, stays the same). On v15, 40 of 40 problems came out token-identical
+      to decode_views, and 20 of 20 to evals.decode_all.
     - **Prefill ahead.** Prompts are prefilled on a second CUDA stream (batch.BatchDecoder's
       prefetcher: same modules and kernels as ``bd.prefill``, so the same bits) while the batch
       decodes, instead of stalling every row at each refill.
@@ -418,6 +422,7 @@ def decode_rows(bd, ctx, prompts: list[list[int]], budget: int, hook, on_done,
     rows, tok, pos = level[:3]
     act = level[6]
     graphs = bd.view_graphs.get(n)
+    views = graphs is not None and len(bd.views) > 1
     has_chip = level[4] is not None
     rpos = bd.rpos[n] if getattr(bd, "freeze", False) else None
     pre = _Prefetcher(bd, prompts, range(len(prompts)), max(1, prefetch))
@@ -465,7 +470,7 @@ def decode_rows(bd, ctx, prompts: list[list[int]], budget: int, hook, on_done,
                 partial = False
                 if has_chip and all(on[b] for b in busy):
                     use_chip = True
-                elif has_chip and sum(on) >= chip_min and credit > 0:
+                elif has_chip and (queue or views) and sum(on) >= chip_min and credit > 0:
                     use_chip = partial = True
                     credit -= 1
                 else:
