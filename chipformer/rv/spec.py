@@ -1,68 +1,77 @@
 """Tokens, records and the address map of the RV32 machine.
 
 A trace is one record per instruction. Machine state changes only at a record's last token (its
-*commit*); the PC is implied: PC = 4 * (anchor + n), where the anchor is the payload of the latest
-J or R token and n counts the commits since then (an R refresh is forced before n reaches 64).
+*commit*); the PC is implied: PC = ROM_BASE + 4 * (anchor + n), where the anchor is the payload of
+the latest J or R token and n counts the commits since then (an R refresh comes before the
+instruction when n reaches 63).
 
 Token families (chip vocabulary ids from 0):
 
-  V   15-bit chunk of a value, not final
-  F0  final; the value is this payload sign-extended from bit 14 (a 1-token value record)
-  F1  final; after one V: value bits 15..29, sign-extended from bit 29
-  F2  final; after two V: value bits 30..31
-  J   final; jump: anchor = payload (a word index), n = 0
-  R   final; anchor refresh: anchor = payload, n = 0, nothing executes
-  NT, ST0, ST1, SS0, SS1, HALT   final controls (ST/SS: the RAM value head, address bit 4)
-  GO  not final: the start of a run (after a state snapshot)
+  V     15-bit chunk of a value, not final
+  F0    final; the value is this payload sign-extended from bit 14 (a 1-token value record)
+  F1    final; after one V: value bits 15..29, sign-extended from bit 29
+  F2    final; after two V: value bits 30..31
+  J     final; jump: anchor = payload (a 16-bit ROM word index), n = 0
+  R     final; anchor refresh: anchor = payload, n = 0, nothing executes
+  BYTE  final; putchar (ecall a7 = 1): the byte a0 & 255
+  FLT   not final; a fault: payload = cause (FAULTS), then 8 HEX digits of the PC, then HALT
+  HEX   not final; a hex digit of a fault record
+  NT, ST0, ST1, SS0, SS1, HALT   final controls (ST/SS: the RAM value head, address bit 6)
+  GO    not final: the start of a run (after a state snapshot)
 
 Records:
 
-  rd-writing instruction (ALU, MUL, load, LUI, AUIPC)  F0 | V F1 | V V F2 (by the value's size)
-  the same with rd = x0, not-taken branch, FENCE      NT
-  taken branch, JAL, JALR                              J  (the link rd = PC + 4 is in-circuit)
-  SW                                                   ST0 / ST1
-  SB, SH                                               V V V SS0 / SS1 (the merged word)
-  ECALL (exit), EBREAK                                 HALT
-  before the instruction, when n == 63                 R
+  rd-writing instruction (ALU, MUL, load, LUI, AUIPC, CSR read)  F0 | V F1 | V V F2 (by size)
+  the same with rd = x0, not-taken branch, FENCE                NT
+  taken branch, JAL, JALR                                        J  (the link is in-circuit)
+  SW                                                             ST0 / ST1
+  SB, SH                                                         V V V SS0 / SS1 (merged word)
+  ECALL a7 = 1 (putchar a0)                                      BYTE
+  ECALL a7 = 93 (exit)                                           HALT
+  a fault                                                        FLT(cause) HEX x 8 HALT
+  before the instruction, when n == 63                           R
 
-Memory (P0 sizes; see docs/rv32.md for the P1/P2 maps):
+Memory (P1):
 
-  RAM  0x0000_0000 + 16 KB   words; data and .rodata from 0x100, the stack below 0x4000
-  ROM  0x0001_0000 + 64 KB   code only, pre-decoded (rom_fields), filled from a snapshot
-
-RAM sits at the bottom so data and stack pointers fit a 1-token value record (F0 holds
--2^14 .. 2^14 - 1): that saves about 0.23 tokens per instruction on C code.
+  RAM  0x0000_0000 + 32 KB   words; data / .rodata / bss / heap from 0x100, the stack below
+                             0x8000 (data pointers below 16 KB fit a 1-token value)
+  ROM  0x0001_0000 + 128 KB  code only, pre-decoded (rom_fields), filled from a snapshot
 """
 
-P = 15  # payload bits of V, F0, F1, J, R
-NP = 1 << P
+FAMILY_SIZES = [("V", 1 << 15), ("F0", 1 << 15), ("F1", 1 << 15), ("F2", 4), ("J", 1 << 16),
+                ("R", 1 << 16), ("BYTE", 256), ("FLT", 8), ("HEX", 16)]
+FAMILIES = {}
+_base = 0
+for _n, _s in FAMILY_SIZES:
+    FAMILIES[_n] = (_base, _s)
+    _base += _s
+CTRL = _base
+CONTROL_NAMES = ["NT", "ST0", "ST1", "SS0", "SS1", "HALT", "GO"]
+CONTROLS = {n: CTRL + i for i, n in enumerate(CONTROL_NAMES)}
+VOCAB = CTRL + len(CONTROL_NAMES)
+FINAL = {"F0", "F1", "F2", "J", "R", "BYTE", "NT", "ST0", "ST1", "SS0", "SS1", "HALT"}
+PAYLOAD_BITS = {n: (s - 1).bit_length() for n, s in FAMILY_SIZES}
 
-V, F0, F1, J, R = 0, NP, 2 * NP, 3 * NP + 4, 4 * NP + 4
-F2 = 3 * NP  # 4 tokens
-CTRL = 5 * NP + 4
-NT, ST0, ST1, SS0, SS1, HALT, GO = range(CTRL, CTRL + 7)
-VOCAB = CTRL + 7
+FAULTS = ["illegal", "ebreak", "misaligned load", "misaligned store", "load out of range",
+          "store out of range", "bad jump", "ecall"]
 
-FAMILIES = {"V": (V, NP), "F0": (F0, NP), "F1": (F1, NP), "F2": (F2, 4), "J": (J, NP),
-            "R": (R, NP)}
-CONTROLS = {"NT": NT, "ST0": ST0, "ST1": ST1, "SS0": SS0, "SS1": SS1, "HALT": HALT, "GO": GO}
-FINAL = {"F0", "F1", "F2", "J", "R", "NT", "ST0", "ST1", "SS0", "SS1", "HALT"}
-
-ROM_BASE, ROM_WORDS = 0x10000, 1 << 14  # 64 KB
-RAM_BASE, RAM_WORDS = 0x0, 1 << 12  # 16 KB (one sublayer)
+ROM_BASE, ROM_WORDS = 0x10000, 1 << 15  # 128 KB (two sublayers)
+RAM_BASE, RAM_WORDS = 0x0, 1 << 13  # 32 KB (two sublayers)
 DATA_BASE = 0x100  # .data starts here (address 0 stays a null pointer)
 SP_INIT = RAM_BASE + 4 * RAM_WORDS
 N_MAX = 63  # the R refresh comes before the instruction when n == N_MAX
+MISA = 0x40001100  # RV32, I and M
 
 
 def family(t: int) -> tuple[str, int]:
     """(family or control name, payload) of a token."""
+    if t >= CTRL:
+        if t >= VOCAB:
+            raise ValueError(f"not an rv token: {t}")
+        return CONTROL_NAMES[t - CTRL], 0
     for name, (base, size) in FAMILIES.items():
         if base <= t < base + size:
             return name, t - base
-    for name, tok in CONTROLS.items():
-        if t == tok:
-            return name, 0
     raise ValueError(f"not an rv token: {t}")
 
 
@@ -103,6 +112,11 @@ def decode_value(tokens: list[int]) -> int:
     else:
         raise ValueError(fam)
     return v & 0xFFFFFFFF
+
+
+def fault_record(cause: int, pc: int) -> list[int]:
+    return ([tok("FLT", cause)] + [tok("HEX", pc >> 4 * (7 - i) & 15) for i in range(8)]
+            + [tok("HALT")])
 
 
 def sign32(v: int) -> int:

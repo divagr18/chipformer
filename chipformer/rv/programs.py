@@ -8,6 +8,7 @@ _start: li a0, 0
 loop:   addi a0, a0, 3
         addi t0, t0, -1
         bnez t0, loop
+        li a7, 93
         ecall
 """
 
@@ -33,6 +34,7 @@ words:  lw t0, 0(a1)
         la t1, dst
         lw a0, 4(t1)
         lw a1, 8(t1)
+        li a7, 93
         ecall
 .data
 src:    .word 0x64636261, 0x68676665, 0xF00DBEEF, 0x80
@@ -51,6 +53,7 @@ fib:    beqz a0, done
         addi a0, a0, -1
         j fib
 done:   mv a0, t0
+        li a7, 93
         ecall
 """
 
@@ -60,6 +63,7 @@ _start: li a0, 7
         mv s1, a0
         li a0, 12
         call sum
+        li a7, 93
         ecall
 fact:   addi sp, sp, -16
         sw ra, 12(sp)
@@ -119,6 +123,7 @@ _start: la t0, vals
         ori s9, a0, 0x123
         andi s10, a2, -256
         sub s11, a2, a7
+        li a7, 93
         ecall
 .data
 vals:   .word 0x8F7F80FF, 0x7F7F0080, 0x11223344

@@ -3,9 +3,29 @@
   "exit": 57,
   "stdout": ""
  },
+ "c-crc32p": {
+  "exit": 0,
+  "stdout": "crc32=414fa339\n"
+ },
+ "c-fib": {
+  "exit": 0,
+  "stdout": "fib(25)=75025\n"
+ },
+ "c-gmpmul": {
+  "exit": 0,
+  "stdout": "mul=1219326311370217952249809480012498094790\n"
+ },
+ "c-qsort": {
+  "exit": 0,
+  "stdout": "qsort 1000: err=0 min=4940 max=16772127 hash=72e4eb11\n"
+ },
  "c-sieve": {
   "exit": 47,
   "stdout": ""
+ },
+ "c-sieve4": {
+  "exit": 0,
+  "stdout": "primes below 10000: 1229\n"
  },
  "c-sort": {
   "exit": 253,
@@ -14,6 +34,10 @@
  "c-strops": {
   "exit": 180,
   "stdout": ""
+ },
+ "c-sudoku": {
+  "exit": 0,
+  "stdout": "solved=1 steps=37652 row0=534678912\n"
  },
  "rv32ui-add": {
   "exit": 0,
@@ -172,6 +196,22 @@
   "stdout": ""
  },
  "rv32ui-xori": {
+  "exit": 0,
+  "stdout": ""
+ },
+ "rv32um-mul": {
+  "exit": 0,
+  "stdout": ""
+ },
+ "rv32um-mulh": {
+  "exit": 0,
+  "stdout": ""
+ },
+ "rv32um-mulhsu": {
+  "exit": 0,
+  "stdout": ""
+ },
+ "rv32um-mulhu": {
   "exit": 0,
   "stdout": ""
  }

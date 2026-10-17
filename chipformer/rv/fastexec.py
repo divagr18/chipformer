@@ -110,7 +110,7 @@ class Executor:
                 for col, d, w in vd.out:
                     wo[j * HD + col, d] += w
             decays = [j for j in range(V) if np.abs(wa_[:, j]).sum()]
-            t = lambda a, **kw: torch.tensor(a, device=device, **kw)  # noqa: E731
+            t = lambda a, **kw: torch.tensor(a, device=device, **kw)
             lag0 = np.zeros((4, D, len(decays) + V + V * HD))  # a, beta, z read lag 0 only
             lag0[0] = np.concatenate([wa_[:, decays], wbeta, wz], 1)
             proj = np.concatenate([wq, wk, wv, lag0], 2)  # one matmul for the sublayer
@@ -164,7 +164,7 @@ class Executor:
                 ab = wab(x[None])
                 x = x + wd((torch.relu(ab[nu:]) * ab[:nu])[None])
                 continue
-            H, V, S, kh, ar = st["H"], st["V"], st["S"], st["kh"], st["ar"]
+            _H, V, S, kh, ar = st["H"], st["V"], st["S"], st["kh"], st["ar"]
             hist = self.hist[i]
             xs = torch.cat([x[None], hist])  # lags 0..3
             q, k, v, a, bt, z = torch.split(st["proj"](xs), st["split"])

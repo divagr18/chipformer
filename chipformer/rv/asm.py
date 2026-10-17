@@ -30,6 +30,8 @@ SH_OPS = {"slli": (0, 1), "srli": (0, 5), "srai": (0x20, 5)}
 LOADS = {"lb": 0, "lh": 1, "lw": 2, "lbu": 4, "lhu": 5}
 STORES = {"sb": 0, "sh": 1, "sw": 2}
 BRANCHES = {"beq": 0, "bne": 1, "blt": 4, "bge": 5, "bltu": 6, "bgeu": 7}
+CSRS = {"cycle": 0xC00, "time": 0xC01, "instret": 0xC02, "cycleh": 0xC80, "instreth": 0xC82,
+        "mhartid": 0xF14, "misa": 0x301, "mscratch": 0x340}
 
 
 def enc_r(f7, rs2, rs1, f3, rd, op):
@@ -240,6 +242,12 @@ def assemble(src: str) -> Program:
                 emit(0x00100073)
             elif op == "fence":
                 emit(0x0FF0000F)
+            elif op == "csrr":  # csrrs rd, csr, x0
+                emit(CSRS.get(a[1], 0) << 20 | 2 << 12 | reg(a[0]) << 7 | 0x73
+                     if a[1] in CSRS else val(a[1]) << 20 | 2 << 12 | reg(a[0]) << 7 | 0x73)
+            elif op == "csrw":  # csrrw x0, csr, rs
+                csr = CSRS[a[0]] if a[0] in CSRS else val(a[0])
+                emit(csr << 20 | reg(a[1]) << 15 | 1 << 12 | 0x73)
             else:
                 raise ValueError(f"unknown instruction {op} {args}")
     return Program(text, bytes(data), labels)

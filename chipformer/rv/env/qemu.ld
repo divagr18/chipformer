@@ -1,4 +1,5 @@
-/* The same layout at addresses qemu-riscv32 (user mode) can map. */
+/* The same layout at addresses qemu-riscv32 (user mode) can map (the heap inside .bss, so it is
+   mapped too). */
 ENTRY(_start)
 SECTIONS
 {
@@ -6,6 +7,15 @@ SECTIONS
   .text : { *(.text.init) *(.text .text.*) }
   . = 0x200000;
   .data : { *(.rodata .rodata.* .srodata .srodata.*) *(.data .data.* .sdata .sdata.*) }
-  .bss : { *(.bss .bss.* .sbss .sbss.*) *(COMMON) }
+  .tdata : { __tls_base = .; *(.tdata .tdata.*) }
+  .tbss : { *(.tbss .tbss.*) }
+  .bss : {
+    . = . + SIZEOF(.tbss);
+    *(.bss .bss.* .sbss .sbss.*) *(COMMON)
+    . = ALIGN(16);
+    __heap_start = .;
+    . = . + 0x10000;
+    __heap_end = .;
+  }
   _end = .;
 }
