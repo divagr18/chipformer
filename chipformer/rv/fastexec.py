@@ -146,8 +146,12 @@ class Executor:
     def reset(self):
         """Fresh per-sequence buffers: lagged inputs per head sublayer, states from the snapshot."""
         self.load_init()
-        self.hist = [None if isinstance(st, tuple) else torch.zeros(3, self.D, device=self.dev)
-                     for st in self.steps]
+        if getattr(self, "hist", None) is None:
+            self.hist = [None if isinstance(st, tuple) else torch.zeros(3, self.D, device=self.dev)
+                         for st in self.steps]
+        for h in self.hist:  # in place: a captured graph keeps these buffers
+            if h is not None:
+                h.zero_()
 
     def step(self, x):
         """One position: x [D] (the embedding row) -> the residual after every node."""
