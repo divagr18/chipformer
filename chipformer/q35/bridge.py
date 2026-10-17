@@ -67,16 +67,23 @@ INLINE_OPS = {PLUS: "add", MINUS: "sub", MINUS2: "sub", TIMES: "mul", DIV: "div"
 # "\bmod": "b" has the hex digit's class) mod
 BSL_OPS = {TIMESW: "mul", FN_DIV: "div", FN_MOD: "mod"}
 PREFIX = ("gcd",)  # written before A: "gcd(A, B) ="
-SIGNED = ("mul", "div", "gcd")  # the others only answer A and B without signs
+SIGNED = ("add", "sub", "mul", "div", "gcd")  # mod only answers A and B without signs
+DECIMAL = ("add", "sub", "mul", "div")  # these also take decimals ("3.75"; a 2nd "." breaks)
 SIGNS = (MINUS, MINUS2, LPMINUS)  # a sign when it follows SIGN_PREV (" (-" always is one)
 SAFE = (SPACE, NL, WS, LPAREN, *DOLLARS)  # may precede a first number (and so may chip tokens)
 OPISH = (PLUS, MINUS, MINUS2, TIMES, DIV, TIMESW, FN_DIV, MODOP, FN_MOD, FN_GCD)
 SIGN_PREV = SAFE + (EQ, COMMA) + OPISH
+# tokens that are always neutral: right after a number's "." one of them ends the window (so the
+# "." that closes a printed result does not start a decimal)
+ALWAYS = (SPACE, *DOLLARS, LPAREN, BSL, EQ, PLUS, MINUS, MINUS2, TIMES, DIV, MODOP, FN_GCD,
+          LPMINUS, SLPMINUS)
 # Inline calls need at least this many digits in A and B together. Qwen gets small ones right,
 # and right after a trace its conv window holds chip tokens instead of the "=", so a short
 # printed result can read to it like the start of a new expression. Qwen also adds and
 # subtracts numbers of a few digits reliably, so those stay its own.
 INLINE_MIN_DIGITS = {"mul": 4, "add": 7, "sub": 7, "div": 4, "mod": 4, "gcd": 4}
+# ... with a sign or a point (Qwen slips on those more)
+INLINE_MIN_DIGITS_X = {**INLINE_MIN_DIGITS, "add": 4, "sub": 4}
 
 
 def is_text(t: int) -> bool:
@@ -102,16 +109,18 @@ class InlineScan:
     """Which "A op B =" the circuit answers: the reference for its capture logic.
 
     Text since the last *breaker* token (anything but digits, spaces, operators, signs, "=",
-    "$", "(", a backslash, or a comma or ")" right after a digit) must be exactly: digits, one
-    operator, digits, then "=" (for gcd: the operator first, "gcd(A, B) ="), with at least
-    INLINE_MIN_DIGITS[op] digits in the two numbers together. A comma between digits joins them
-    (1,234). The first number must start after a space, newline, other whitespace, "$", "(" or
-    a chip token, so "2.5 * 3 =" and "x^2 + 1 =" are left alone.
+    "$", "(", a backslash, or a comma, "." or ")" right after a digit) must be exactly: digits,
+    one operator, digits, then "=" (for gcd: the operator first, "gcd(A, B) ="), with at least
+    INLINE_MIN_DIGITS[op] digits in the two numbers together (INLINE_MIN_DIGITS_X with a sign or
+    a point). A comma between digits joins them (1,234), and a "." between digits makes a
+    decimal (a number with two points never fires; an ALWAYS token right after a number's "."
+    ends the window). The first number must start after a space, newline, other whitespace,
+    "$", "(" or a chip token, so "x^2 + 1 =" is left alone.
 
     A sign is "-" (any spelling) or "(-" right after one of SIGN_PREV, or " (-"; it is no
-    operator, and the number right after it is negative. mul, div and gcd take signed numbers
-    (the result is negative when exactly one of A, B is, for mul and div); the others do not
-    fire on them. Chip tokens are breakers too. Fed every token of the stream, in order.
+    operator, and the number right after it is negative. Signs are for SIGNED ops and points
+    for DECIMAL ones; the others do not fire on them. Chip tokens are breakers too. Fed every
+    token of the stream, in order.
     """
 
     def __init__(self):
@@ -119,19 +128,24 @@ class InlineScan:
         self.p = self.nops = self.d = 0
         self.lens = {1: 0, 2: 0}
         self.neg = {1: False, 2: False}
+        self.point = {1: False, 2: False}
+        self.ilen = {1: 0, 2: 0}  # digits before the point
+        self.frac = self.bad = False  # this number has fraction digits; the window, 2 points
         self.digits = {}
         self.op, self.op_ok, self.a_safe, self.in_call = None, False, False, False
         self.opener = 0  # what the first number follows: 1 "$", 2 "$$" (maybe with a space)
 
-    def negative(self) -> bool:
-        """Whether the result of the call being made prints with a minus (MODE bit 8)."""
-        return self.op in ("mul", "div") and self.neg[1] != self.neg[2]
-
     def mode(self) -> int:
-        """The CALL record's MODE cell for an inline call: 1 | 2 inside "$" | 4 inside "$$"
-        | 8 negative."""
-        return (1 | (2 if self.opener else 0) | (4 if self.opener == 2 else 0)
-                | (8 if self.negative() else 0))
+        """The CALL record's MODE cell for an inline call: 1 | 2 inside "$" | 4 inside "$$" (the
+        signs' bits come from bcd.call_writes)."""
+        return 1 | (2 if self.opener else 0) | (4 if self.opener == 2 else 0)
+
+    def number(self, k: int) -> str:
+        """Argument k as written: "-" if negative, its digits, "." where its point was."""
+        ds = "".join(str(self.digits[k, w]) for w in range(self.lens[k]))
+        if self.point[k]:
+            ds = ds[:self.ilen[k]] + "." + ds[self.ilen[k]:]
+        return "-" * self.neg[k] + ds
 
     def feed(self, t: int):
         """Returns (op, a, b) if the circuit takes over after token t, else None."""
@@ -153,21 +167,25 @@ class InlineScan:
             self.in_call = t == TC_OPEN
         if t == TC_OPEN:
             self.op = None  # a tool call needs its own function name
-        cont = dig and (isd(prev) or (prev == COMMA and isd(prev2)))
+        cont = dig and (isd(prev) or (prev in (COMMA, PERIOD) and isd(prev2)))
         run_start = dig and not cont
+        point = t == PERIOD and isd(prev)
         neg = run_start and ((prev in SIGNS and sign_prev(prev2)) or prev == SLPMINUS)
         bs_op = t in BSL_OPS and (prev == BSL or (t == FN_MOD and prev == HEX[11]
                                                   and prev2 == BSL))
         sign_minus = t in (MINUS, MINUS2) and sign_prev(prev)
         op_tok = (t in INLINE_OPS or bs_op) and not sign_minus
-        neutral = text and (dig or op_tok or sign_minus
+        neutral = text and (dig or op_tok or sign_minus or point
                             or t in (SPACE, LPAREN, BSL, EQ, LPMINUS, SLPMINUS, *DOLLARS)
                             or (t in (COMMA, RPAREN) and isd(prev))
                             or (t == HEX[11] and prev == BSL))
+        if prev == PERIOD and isd(prev2) and t in ALWAYS:
+            neutral = op_tok = False  # "5." then an operator: it ended a sentence or a print
         brk = not neutral
         after_eq = prev == EQ and not brk and not self.in_call  # a fresh window after "="
         if t == TC_OPEN or (brk and not self.in_call) or after_eq:
             self.p = 0
+            self.bad = False
         elif run_start:
             self.p += 1
             if self.p == 1:
@@ -180,10 +198,18 @@ class InlineScan:
                 self.opener = kind(prev) or (kind(prev2) if after else 0)
             if self.p in (1, 2):
                 self.neg[self.p] = neg
+                self.point[self.p] = False
+        if point:
+            if self.frac:
+                self.bad = True
+            elif self.p in (1, 2):
+                self.point[self.p], self.ilen[self.p] = True, self.d + 1
         if run_start:
             self.d = 0
+            self.frac = False
         elif cont:
             self.d += 1
+            self.frac |= prev == PERIOD
         if brk or after_eq:
             self.nops = 0
         elif op_tok:
@@ -198,13 +224,14 @@ class InlineScan:
         if op_tok and not self.in_call:
             self.op = BSL_OPS[t] if bs_op else INLINE_OPS[t]
             self.op_ok = self.p == (0 if self.op in PREFIX else 1)
+        signed = self.neg[1] or self.neg[2]
+        dec = self.point[1] or self.point[2]
         if (t == EQ and not self.in_call and self.p == 2 and self.nops == 1 and self.op_ok
-                and self.a_safe and self.lens[1] and self.lens[2] and self.op
-                and self.lens[1] + self.lens[2] >= INLINE_MIN_DIGITS[self.op]
-                and (self.op in SIGNED or not (self.neg[1] or self.neg[2]))):
-            a = "".join(str(self.digits[1, w]) for w in range(self.lens[1]))
-            b = "".join(str(self.digits[2, w]) for w in range(self.lens[2]))
-            return self.op, a, b
+                and self.a_safe and self.lens[1] and self.lens[2] and self.op and not self.bad
+                and self.lens[1] + self.lens[2] >= (INLINE_MIN_DIGITS_X if signed or dec
+                                                    else INLINE_MIN_DIGITS)[self.op]
+                and (self.op in SIGNED or not signed) and (self.op in DECIMAL or not dec)):
+            return self.op, self.number(1), self.number(2)
         return None
 
 
@@ -266,13 +293,14 @@ class BridgeMachine(Machine):
             return [OTHER] * n
 
         def num(s):  # a minus is its own token: Qwen writes "\n-1418261\n"
-            return [MINUS2] * s.startswith("-") + [HEX[int(ch)] for ch in s.lstrip("-")]
+            return [MINUS2] * s.startswith("-") + [PERIOD if ch == "." else HEX[int(ch)]
+                                                   for ch in s.lstrip("-")]
 
         text = ([TC_OPEN, NL] + lit(2) + [FUNCS[op]] + lit(1) + [NL] + lit(3) + [NL] + num(a)
                 + [NL] + lit(3) + [NL] + lit(3) + [NL] + num(b) + [NL] + lit(3) + [NL] + lit(3)
                 + [NL, TC_CLOSE])
         self._emit(text, False)
-        self._call(op, a.lstrip("-"), b.lstrip("-"), mode=8 * self.scan.negative())
+        self._call(op, a, b, mode=0)
 
     def _call(self, op: str, a: str, b: str, mode: int) -> None:
         from chipformer.q35.lib import bcd

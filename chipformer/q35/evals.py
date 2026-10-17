@@ -140,23 +140,38 @@ def _gcd(a, b):
 # exact meaning of each tool (by name); demo.TOOLS decides which ones the model sees
 PY_TOOLS = {"add": lambda a, b: a + b, "mul": lambda a, b: a * b,
             "sub": lambda a, b: a - b, "div": _div, "mod": _mod, "gcd": _gcd}
-SIGNED = ("mul", "div", "gcd")  # the computer takes signed a, b for these (bridge.SIGNED)
+SIGNED = ("add", "sub", "mul", "div", "gcd")  # signed a, b (bridge.SIGNED)
 
 
-def computer_text(op: str, a: int, b: int) -> str | None:
+def decimal_text(v: Fraction) -> str:
+    """An exact decimal as the computer prints it: no leading zeros before the point, no
+    trailing zeros after it (nor the point itself), "-" below 0."""
+    s = format((Decimal(v.numerator) / Decimal(v.denominator)).normalize(), "f")
+    if "." in s:
+        s = s.rstrip("0").rstrip(".")
+    return "0" if s in ("-0", "") else s
+
+
+def computer_text(op: str, a, b) -> str | None:
     """Exactly what the computer prints for op(a, b) (inline or as a tool response), or None
-    if it does not answer it (signed a or b for add / sub / mod, division by 0)."""
+    if it does not answer it: mod takes neither signs nor decimals and gcd no decimals; no
+    division by 0. a and b are ints, Fractions or decimal strings (v17: signs and decimals
+    for add / sub / mul / div)."""
+    a, b = Fraction(a), Fraction(b)
+    if op in ("mod", "gcd") and (a.denominator != 1 or b.denominator != 1):
+        return None
     if op not in SIGNED and (a < 0 or b < 0):
         return None
     if op in ("div", "mod") and b == 0:
         return None
-    if op == "div":
-        return div_text(a, b)
-    if op == "mul":  # sign and magnitude: -0 stays "-0"
-        return ("-" if (a < 0) != (b < 0) else "") + str(abs(a * b))
+    if op == "div":  # the same digits as for a and b scaled to integers
+        k = a.denominator * b.denominator
+        return div_text(int(a * k), int(b * k))
     if op == "gcd":
-        return str(math.gcd(a, b))
-    return str(PY_TOOLS[op](a, b))
+        return str(math.gcd(int(a), int(b)))
+    if op == "mod":
+        return str(int(a) % int(b))
+    return decimal_text(PY_TOOLS[op](a, b))
 
 
 def tools():
@@ -284,6 +299,12 @@ def parse_calls(text: str) -> list[dict]:
 def int_arg(s):
     s = (s or "").strip()
     return int(s) if re.fullmatch(r"-?\d+", s) else None
+
+
+def computer_arg(s):
+    """A tool argument the computer reads: a number with an optional sign and point."""
+    s = (s or "").strip()
+    return Fraction(Decimal(s.replace(",", ""))) if re.fullmatch(r"-?\d[\d,]*(\.\d*)?", s) else None
 
 
 def num_arg(s):
@@ -629,9 +650,9 @@ USER_TURN = re.compile(r"<\|im_start\|>\s*user(?!\s*<tool_response>)")
 
 
 # "A op B =" with optional signs ("-5", "(-5)"), or "gcd(A, B) ="
-INLINE_RE = re.compile(r"(?P<sa>(?<![\w)\]])[-−]|\(-)?(?P<a>\d[\d,]*)\)?[\s$(]*"
+INLINE_RE = re.compile(r"(?P<sa>(?<![\w)\]])[-−]|\(-)?(?P<a>\d[\d,]*(?:\.\d+)?)\)?[\s$(]*"
                        r"(?P<op>\+|-|−|×|\*|\\times|\\cdot|/|÷|\\div|\\bmod|\\mod|mod|%)[\s$]*"
-                       r"\(?(?P<sb>[-−])?(?P<b>\d[\d,]*)\)?[\s$)]*=\s*$")
+                       r"\(?(?P<sb>[-−])?(?P<b>\d[\d,]*(?:\.\d+)?)\)?[\s$)]*=\s*$")
 GCD_RE = re.compile(r"gcd\(\s*(?P<sa>[-−])?(?P<a>\d[\d,]*)\s*,\s*(?P<sb>[-−])?(?P<b>\d[\d,]*)"
                     r"\s*\)\s*=\s*$")
 INLINE_OPS = {"+": "add", "-": "sub", "−": "sub", "×": "mul", "*": "mul",
@@ -650,7 +671,8 @@ def inline_expr(before: str):
         return None
 
     def num(sign, digits):
-        return -int(digits.replace(",", "")) if sign else int(digits.replace(",", ""))
+        v = Fraction(Decimal(digits.replace(",", "")))
+        return -v if sign else v
 
     return e, op, num(e["sa"], e["a"]), num(e["sb"], e["b"])
 
@@ -680,7 +702,8 @@ def inline_fires(text: str, pred) -> list[dict]:
         if t is not None:
             exact = shown.startswith(t)
             machine = t if exact else shown
-            f |= {"op": x[1], "a": x[2], "b": x[3], "true": t, "exact": exact,
+            f |= {"op": x[1], "a": decimal_text(x[2]), "b": decimal_text(x[3]), "true": t,
+                  "exact": exact,
                   "appended": shown[len(t):][:60] if exact else ""}
         later = MARK.sub("", text[m.end():]).replace(",", "")
         # a number Qwen writes right after the print (v9 " R ", v11 " R$" / " R$$" / " R.")
@@ -722,7 +745,7 @@ def judge(p: dict, text: str, think: bool) -> dict:
     rec_calls = []
     for c in parse_calls(text):
         v = true_result(c["op"], c["args"])
-        ia, ib = int_arg(c["args"].get("a")), int_arg(c["args"].get("b"))
+        ia, ib = computer_arg(c["args"].get("a")), computer_arg(c["args"].get("b"))
         # valid: integer arguments the computer answers (v16: signed for mul, div and gcd)
         want = (computer_text(c["op"], ia, ib) if c["op"] in tool_names() and ia is not None
                 and ib is not None else None)
@@ -828,7 +851,8 @@ class BannedHead(torch.nn.Module):
 SELFTEST = [("mul", 4, 4), ("mul", 12345, 678), ("add", 987654321, 123456789),
             ("sub", 1000000, 1), ("sub", 5000, 4321), ("div", 1000000, 7), ("div", 8352, 48),
             ("div", -1418261, -408), ("mul", -63075, 8808), ("sub", 5, 675),
-            ("mod", 13201915, 1785), ("gcd", 1785, 13201915)]
+            ("mod", 13201915, 1785), ("gcd", 1785, 13201915),
+            ("mul", "-3.75", "2.4"), ("add", "-12.5", "7.25"), ("div", "0.3", "0.12")]
 
 
 def selftest(bd, ctx, tok, bios) -> None:
@@ -849,7 +873,7 @@ def selftest(bd, ctx, tok, bios) -> None:
             v = true_result(c["op"], c["args"])
             if v is None:
                 continue
-            ia, ib = int_arg(c["args"]["a"]), int_arg(c["args"]["b"])
+            ia, ib = computer_arg(c["args"]["a"]), computer_arg(c["args"]["b"])
             want = computer_text(c["op"], ia, ib) if ia is not None and ib is not None else None
             if want is None:
                 continue

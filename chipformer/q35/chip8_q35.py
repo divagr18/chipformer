@@ -178,18 +178,26 @@ def build(target: Target | None = None) -> Chip8Q35:
                  12: Chan(open2, (0, 0, 1, 0)), 13: Chan(T[B.SPACE], (0, 1, 0, 0)),
                  14: Chan(signs, (0, 1, 0, 0)), 15: Chan(T[B.SLPMINUS], (0, 1, 0, 0)),
                  16: Chan(sign_prev, (0, 1, 0, 0)), 17: Chan(sign_prev, (0, 0, 1, 0)),
-                 18: Chan(T[B.HEX[11]], (0, 1, 0, 0)), 19: Chan(T[B.BSL], (0, 0, 1, 0))}
+                 18: Chan(T[B.HEX[11]], (0, 1, 0, 0)), 19: Chan(T[B.BSL], (0, 0, 1, 0)),
+                 20: Chan(T[B.PERIOD], (0, 1, 0, 0))}
     (prev_dig, prev2_dig, prev_cm, prev_bs, prev_safe, prev_text, prev_eq, prev_o1, prev_o2,
      prev2_o1, prev2_o2, prev_sp, prev_sg, prev_slm, prev_spv, prev2_spv, prev_b,
-     prev2_bs) = c.slot_head("prev", {0: one}, {0: one}, prev_cols, one)
+     prev2_bs, prev_pt) = c.slot_head("prev", {0: one}, {0: one}, prev_cols, one)
     # the math a first number sits in: right after "$" / "$$", or after it and a space or sign
     in_o1 = c.node(c.t_and([prev_o1]) + c.t_and([prev_sp + prev_sg + prev_slm, prev2_o1]),
                    "open.$")
     in_o2 = c.node(c.t_and([prev_o2]) + c.t_and([prev_sp + prev_sg + prev_slm, prev2_o2]),
                    "open.$$")
-    cont = c.node(c.t_and([is_dig, prev_dig]) + c.t_and([is_dig, prev_cm, prev2_dig]), "arg.cont")
-    run_start = c.node(c.t_and([is_dig, one - prev_dig, one - prev_cm])
-                       + c.t_and([is_dig, prev_cm, one - prev2_dig]), "arg.start")
+    # a comma or a "." between digits joins them
+    cont = c.node(c.t_and([is_dig, prev_dig]) + c.t_and([is_dig, prev_cm + prev_pt, prev2_dig]),
+                  "arg.cont")
+    run_start = c.node(c.t_and([is_dig, one - prev_dig, one - prev_cm - prev_pt])
+                       + c.t_and([is_dig, prev_cm + prev_pt, one - prev2_dig]), "arg.start")
+    point = c.and_([T[B.PERIOD], prev_dig], "arg.point")
+    frac_d = c.and_([is_dig, prev_pt, prev2_dig], "arg.frac_digit")
+    # an ALWAYS token right after a number's "." ends the window
+    always = sum((T[x] for x in B.ALWAYS if x not in (B.MINUS, B.MINUS2)), Expr()) + minus
+    point_end = c.and_([always, prev_pt, prev2_dig], "point.end")
     # a number is negative right after a sign (bridge.InlineScan)
     neg_d = c.node(c.t_and([prev_sg, prev2_spv]) + c.t_and([prev_slm]), "arg.neg")
     s_minus = c.and_([minus, prev_spv], "sign.minus")  # a "-" that is a sign, not sub
@@ -199,12 +207,17 @@ def build(target: Target | None = None) -> Chip8Q35:
                    "mod.op")  # \\mod, \\bmod
     inl = {"add": T[B.PLUS], "sub": minus - s_minus, "mul": T[B.TIMES] + tw_op,
            "div": T[B.DIV] + dv_op, "mod": T[B.MODOP] + md_op, "gcd": T[B.FN_GCD]}
-    op_tok = sum(inl.values(), Expr())
+    op_raw = sum(inl.values(), Expr())  # (neutral either way)
+    # an operator that a number's "." ends the window at is no operator
+    pe_op = c.and_([T[B.PLUS] + minus + T[B.TIMES] + T[B.DIV] + T[B.MODOP] + T[B.FN_GCD], prev_pt,
+                    prev2_dig], "point.end_op")
+    op_tok = op_raw - pe_op
     comma_join = c.and_([T[B.COMMA], prev_dig], "comma.join")
     paren_join = c.and_([T[B.RPAREN], prev_dig], "paren.join")
     b_join = c.and_([T[B.HEX[11]], prev_bs], "bmod.b")
-    neutral = (is_dig + T[B.SPACE] + dollars + T[B.LPAREN] + T[B.BSL] + T[B.EQ] + op_tok
-               + s_minus + T[B.LPMINUS] + T[B.SLPMINUS] + comma_join + paren_join + b_join)
+    neutral = (is_dig + T[B.SPACE] + dollars + T[B.LPAREN] + T[B.BSL] + T[B.EQ] + op_raw
+               + s_minus + T[B.LPMINUS] + T[B.SLPMINUS] + comma_join + paren_join + b_join
+               + point - point_end)
     brk = one - neutral  # chip tokens included
     # the window also starts afresh right after "=" (so "x^2 = A op B =" still counts)
     after_eq = [prev_eq, one - brk, one - in_call]
@@ -251,7 +264,7 @@ def build(target: Target | None = None) -> Chip8Q35:
     ops = list(B.FUNCS)
     both = {"div": dv_op, "mod": md_op, "gcd": T[B.FN_GCD]}  # name and operator: counts once
     for i, op in enumerate(ops):
-        data[12 + i] = fns[op] + inl[op] - both.get(op, 0)
+        data[12 + i] = fns[op] + inl[op] - both.get(op, 0) - pe_op  # (a breaker writes row 127)
     at_fn = c.node(c.t_and([fn_any, in_call]) + c.t_and([op_tok, one - in_call]), "op.at")
     data[12 + len(ops)] = at_fn + peq(1) - 1  # the operator came after the first number
     data[13 + len(ops)] = at_fn - cp[0]  # ... before it (gcd)
@@ -270,16 +283,37 @@ def build(target: Target | None = None) -> Chip8Q35:
         {2: prev_safe + neg_d, 3: in_o1, 4: in_o2, 5: neg_d}, run_start + peq(1) - 1)
     (neg_b,) = c.slot_head("b.neg", {0: run_start + peq(2) - 1}, {0: one}, {2: neg_d},
                            run_start + peq(2) - 1)
-    # add, sub and mod do not answer signed numbers
+    # decimals: the digits before each argument's point (a 2nd point in a number: no call)
+    (frac,) = c.slot_head("arg.frac", {0: run_start + frac_d}, {0: one}, {2: frac_d},
+                          run_start + frac_d)  # this number has digits after a point
+    point1 = c.and_([point, one - frac], "point.first")
+    (bad,) = c.slot_head("arg.bad", {0: reset + point - point1}, {0: one}, {2: point - point1},
+                         reset + point - point1)
+    has_p, ilen = {}, {}
+    for a_ in (1, 2):
+        key = run_start + point1 + peq(a_) - 1
+        out_p = c.slot_head(f"arg.point{a_}", {0: key}, {0: one},
+                            {2: point1, **{3 + i: len_bits[i] + point1 - 1 for i in range(5)}},
+                            key)
+        has_p[a_], ilen[a_] = out_p[0], out_p[1:]
+    # signs only for B.SIGNED, points only for B.DECIMAL
     unsigned = sum((op_oh[k_] for k_, op in enumerate(ops) if op not in B.SIGNED), Expr())
-    sign_ok = c.node(c.t_and([one - unsigned]) + c.t_and([unsigned, one - neg_a, one - neg_b]),
-                     "sign.ok")
+    no_dec = sum((op_oh[k_] for k_, op in enumerate(ops) if op not in B.DECIMAL), Expr())
+    plain_l = [one - neg_a, one - neg_b, one - has_p[1], one - has_p[2]]
+    num_ok = c.node(c.t_and([one - unsigned - no_dec])
+                    + c.t_and([unsigned, one - neg_a, one - neg_b, one - has_p[1], one - has_p[2]])
+                    + c.t_and([no_dec - unsigned, one - has_p[1], one - has_p[2]]), "num.ok")
+    plain = c.and_(plain_l, "plain")  # no sign, no point
     la_, lb_ = from_bits(la_bits), from_bits(lb_bits)
-    trig = c.and_([T[B.EQ], one - in_call, peq(2), co[0] - co[1], op_ok, a_safe, sign_ok,
+    big = []
+    for k_, op in enumerate(ops):
+        lo, hi = B.INLINE_MIN_DIGITS_X[op], B.INLINE_MIN_DIGITS[op]
+        big += c.t_ge(la_ + lb_, lo, 0, 62, lits=[op_oh[k_]])
+        big += c.t_in(la_ + lb_, lo, hi, 0, 62, -1, lits=[op_oh[k_], *plain_l])
+    trig = c.and_([T[B.EQ], one - in_call, peq(2), co[0] - co[1], op_ok, a_safe, num_ok,
+                   one - bad,
                    c.node(c.t_ge(la_, 1, 0, 31), "la>0"), c.node(c.t_ge(lb_, 1, 0, 31), "lb>0"),
-                   c.node(cat(c.t_ge(la_ + lb_, B.INLINE_MIN_DIGITS[op], 0, 62,
-                                     lits=[op_oh[ops.index(op)]]) for op in ops), "inline.big"),
-                   sum(op_oh, Expr())], "inline.trig")
+                   c.node(big, "inline.big"), sum(op_oh, Expr())], "inline.trig")
     # 1 from an inline trigger until the next text token: the mode of the CALL record
     (inline_mode,) = c.slot_head("inline.mode", {0: c.is_text}, {0: one}, {2: trig}, c.is_text)
 
@@ -714,7 +748,7 @@ def build(target: Target | None = None) -> Chip8Q35:
     in_a = c.node(c.t_lt(za, 0, -B.MAX_ARG, JMAX + 1), "call.in_a")
     in_b = c.node(c.t_ge(za, 0, -B.MAX_ARG, JMAX + 1)
                   + c.t_ge(zz, 0, -2 * B.MAX_ARG, JMAX + 1, -1), "call.in_b")
-    ez = [c.node(c.t_eq(zz, v, -2 * B.MAX_ARG, JMAX + 1), f"call.e{v}") for v in range(5)]
+    ez = [c.node(c.t_eq(zz, v, -2 * B.MAX_ARG, JMAX + 1), f"call.e{v}") for v in range(7)]
     q_a = [c.and_([jeq(w), in_a], f"call.qa{w}") for w in range(B.MAX_ARG)]
     q_b = [c.node(c.t_eq(za, w, -B.MAX_ARG, JMAX + 1, lits=[in_b]), f"call.qb{w}")
            for w in range(B.MAX_ARG)]
@@ -730,8 +764,12 @@ def build(target: Target | None = None) -> Chip8Q35:
     a_addr = [(bios.A_ADDR >> i & 1) * (one - op_w) + ((bios.W_ADDR + 1) >> i & 1) * op_w
               if i >= 5 else a_addr[i] for i in range(13)]
     b_addr = [bios.B_ADDR >> i & 1 if i >= 5 else b_addr[i] for i in range(13)]
-    entry = [sum((op_oh[k_] for k_, op in enumerate(ops) if bios.OPS[op] >> i & 1), Expr())
-             for i in range(12)]
+    # the routine: bcd.OPS, or bcd.OPS_X with a sign or a point
+    op_plain = {op: c.and_([op_oh[k_], plain], f"op.{op}.plain") if bios.OPS[op] != bios.OPS_X[op]
+                else op_oh[k_] for k_, op in enumerate(ops)}
+    entry = [sum((op_plain[op] for op in ops if bios.OPS[op] >> i & 1), Expr())
+             + sum((op_oh[k_] - op_plain[op] for k_, op in enumerate(ops)
+                    if bios.OPS_X[op] >> i & 1), Expr()) for i in range(12)]
     case([trig], 2, 0)
     case([at_addr, calling, neq, in_a], 1, a_addr)
     case([at_val, calling, in_a], 0, digit_bits)
@@ -742,16 +780,18 @@ def build(target: Target | None = None) -> Chip8Q35:
     case([at_addr, calling, neq, ez[1]], 1, bios.LEN + 1)
     case([at_val, calling, ez[1]], 0, lb_bits)
     case([at_addr, calling, neq, ez[2]], 1, bios.MODE)
-    # negative: mul and div with exactly one of A, B negative
-    op_md = op_oh[ops.index("mul")] + op_oh[ops.index("div")]
+    # | 16 / 32: A / B negative (the routines set 8, the result's sign)
     mode_bits = [inline_mode, c.and_([inline_mode, a_o1 + a_o2], "mode.$"),
-                 c.and_([inline_mode, a_o2], "mode.$$"),
-                 c.node(c.t_and([op_md, neg_a, one - neg_b]) + c.t_and([op_md, one - neg_a, neg_b]),
-                        "mode.neg")]
+                 c.and_([inline_mode, a_o2], "mode.$$"), 0, neg_a, neg_b]
     case([at_val, calling, ez[2]], 0, mode_bits)
-    case([at_addr, calling, neq, ez[3]], 1, spec.PC)
-    case([at_val, calling, ez[3]], 0, entry)
-    case([at_addr, calling, neq, ez[4]], 2, 0)
+    for e_, (a_, la_b) in enumerate([(1, la_bits), (2, lb_bits)]):  # IA, IB
+        case([at_addr, calling, neq, ez[3 + e_]], 1, bios.IA + e_)
+        case([at_val, calling, ez[3 + e_]], 0,
+             [c.node(c.t_and([has_p[a_], ilen[a_][i]]) + c.t_and([one - has_p[a_], la_b[i]]),
+                     f"call.i{a_}.{i}") for i in range(5)])
+    case([at_addr, calling, neq, ez[5]], 1, spec.PC)
+    case([at_val, calling, ez[5]], 0, entry)
+    case([at_addr, calling, neq, ez[6]], 2, 0)
 
     # ---------------------------------------------------------------- bignum macros
     MD = bios.MAX_DIGITS

@@ -119,3 +119,36 @@ def test_circuit_random_sessions(circuit):
 def test_ops_are_fixed():
     assert {k: bcd.OPS[k] for k in ("add", "sub", "mul")} == {"add": 0x202, "sub": 0x206,
                                                                "mul": 0x20A}
+
+
+def test_signed_decimal_mod_gcd_reference():
+    """v16 / v17 BIOS routines against evals.computer_text on random operands: what a tool call
+    prints (inline adds the space / minus and the closer)."""
+    import math
+
+    from chipformer.q35.evals import computer_text
+
+    rng = random.Random(11)
+
+    def num(signed, dec):
+        s = str(rng.randrange(10 ** rng.randint(1, 8)))
+        if dec and rng.random() < 0.6:
+            s += "." + "".join(str(rng.randrange(10)) for _ in range(rng.randint(1, 4)))
+        return ("-" if signed and rng.random() < 0.5 else "") + s
+
+    n = 0
+    for k in range(160):
+        op = ["add", "sub", "mul", "div", "mod", "gcd"][k % 6]
+        a, b = num(op != "mod", op in ("add", "sub", "mul", "div")), num(op != "mod", op in (
+            "add", "sub", "mul", "div"))
+        want = computer_text(op, a, b)
+        if want is None:
+            continue
+        bm, n0 = run_call(op, a, b, 0)
+        sym = {B.MINUS: "-", B.PERIOD: ".", B.ELLIPSIS: "..."}
+        got = "".join(sym.get(t, str(B.HEX.index(t)) if t in B.HEX else "")
+                      for t, g in zip(bm.tokens[n0:], bm.generated[n0:]) if g and B.is_text(t))
+        assert got == want, (op, a, b, got, want)
+        n += 1
+    assert n >= 140
+

@@ -133,7 +133,7 @@ def macro_writes(cells: list[int], op: int):
         w.append((spec.V, n - z))
         w.append((spec.I, bcd.R_ADDR + z))
         if kind == BRSUB:
-            w.append((bcd.MODE, mode | 8))
+            w.append((bcd.MODE, mode & 7 | 8))  # (the circuit keeps MODE's low 4 bits)
         new_pc = nxt if kind == BSUB and carry else target(op)
     elif kind == BZERO:
         n = la + lb

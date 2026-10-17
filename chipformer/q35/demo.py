@@ -24,19 +24,21 @@ import torch
 TOOLS = [{"type": "function", "function": {
     "name": name, "description": desc,
     "parameters": {"type": "object", "required": ["a", "b"], "properties": {
-        "a": {"type": "integer", "description": "first operand"},
-        "b": {"type": "integer", "description": "second operand"}}}}}
-    for name, desc in [("mul", "Multiply two integers exactly. Use it for any multiplication."),
-                       ("add", "Add two non-negative integers exactly. Use it for any addition."),
-                       ("sub", ("Subtract b from a exactly (a must be >= b). Use it for any "
-                               "subtraction.")),
-                       ("div", ("Divide a by b exactly (integers): the quotient, or its first 10 "
-                                "decimals followed by ... when it does not end. Use it for any "
-                                "division.")),
-                       ("mod", ("The remainder of a divided by b (non-negative integers). Use it "
-                                "for any remainder or modulo.")),
-                       ("gcd", ("The greatest common divisor of two integers. Use it to reduce "
-                                "fractions."))]]
+        "a": {"type": kind, "description": "first operand"},
+        "b": {"type": kind, "description": "second operand"}}}}}
+    for name, kind, desc in [
+        ("mul", "number", "Multiply two numbers exactly (decimals and negatives too). Use it for "
+                          "any multiplication."),
+        ("add", "number", "Add two numbers exactly (decimals and negatives too). Use it for any "
+                          "addition."),
+        ("sub", "number", "Subtract b from a exactly (decimals and negatives too). Use it for "
+                          "any subtraction."),
+        ("div", "number", "Divide a by b exactly: the quotient, or its first 10 decimals "
+                          "followed by ... when it does not end. Use it for any division."),
+        ("mod", "integer", "The remainder of a divided by b (non-negative integers). Use it for "
+                           "any remainder or modulo."),
+        ("gcd", "integer", "The greatest common divisor of two integers. Use it to reduce "
+                           "fractions.")]]
 
 
 def problems(n: int, seed: int = 0, hard: bool = False) -> list[tuple[str, str, int]]:
