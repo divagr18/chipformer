@@ -33,12 +33,15 @@ TOOLS = [{"type": "function", "function": {
                                "subtraction."))]]
 
 
-def problems(n: int, seed: int = 0) -> list[tuple[str, str, int]]:
+def problems(n: int, seed: int = 0, hard: bool = False) -> list[tuple[str, str, int]]:
     rng = random.Random(seed)
     out = []
     for _ in range(n):
-        op = rng.choice(["add", "mul"])
-        a, b = rng.randrange(10**rng.randint(3, 7)), rng.randrange(10**rng.randint(2, 6))
+        op = rng.choice(["add", "mul", "mul"] if hard else ["add", "mul"])
+        if hard:
+            a, b = rng.randrange(10**5, 10**rng.randint(6, 10)), rng.randrange(10**3, 10**rng.randint(4, 7))
+        else:
+            a, b = rng.randrange(10**rng.randint(3, 7)), rng.randrange(10**rng.randint(2, 6))
         sym = "+" if op == "add" else "*"
         q = rng.choice(["What is {a} {s} {b}?", "Compute {a} {s} {b}.",
                         "I need {a} {s} {b} exactly for an invoice."]).format(a=a, b=b, s=sym)
@@ -54,9 +57,16 @@ def load(path):
     return model, tok
 
 
+NUDGE = ("Exact arithmetic: whenever you write a calculation like `a \\times b =`, `a + b =` "
+         "or `a - b =` with whole numbers, its exact result is filled in right after the `=`. "
+         "So never do long multiplication or addition by hand: write the whole calculation and "
+         "let the result appear.")
+
+
 @torch.no_grad()
-def ask(model, tok, question: str, prefix: list[int], tools, max_new: int) -> str:
-    ids = tok.apply_chat_template([{"role": "user", "content": question}], tools=tools,
+def ask(model, tok, question: str, prefix: list[int], tools, max_new: int, system=None) -> str:
+    msgs = [{"role": "system", "content": system}] if system else []
+    ids = tok.apply_chat_template(msgs + [{"role": "user", "content": question}], tools=tools,
                                   add_generation_prompt=True, return_tensors="pt",
                                   enable_thinking=False)["input_ids"][0].tolist()
     x = torch.tensor([prefix + ids], device="cuda")
@@ -82,16 +92,19 @@ def main() -> None:
     ap.add_argument("--max-new", type=int, default=4000)
     ap.add_argument("--out")
     ap.add_argument("--inline", action="store_true", help="no tools: inline arithmetic only")
+    ap.add_argument("--nudge", action="store_true", help="system prompt: write whole calculations")
+    ap.add_argument("--hard", action="store_true", help="6-10 digit x 4-7 digit problems")
     args = ap.parse_args()
     meta = json.loads((Path(args.merged) / "chipformer.json").read_text())
     off = meta["chip_token_offset"]
     bios = [t + off for t in boot_tokens(Chip8(bcd.ROM, bcd.QUIRKS).cells)]
-    probs = problems(args.n)
+    probs = problems(args.n, hard=args.hard)
     rep = {"merged": [], "base": []}
     model, tok = load(args.merged)
     for q, op, want in probs:
         t = time.time()
-        out = ask(model, tok, q, bios, None if args.inline else TOOLS, args.max_new)
+        out = ask(model, tok, q, bios, None if args.inline else TOOLS, args.max_new,
+                  NUDGE if args.nudge else None)
         text = tok.decode(out, skip_special_tokens=False)
         n_chip = sum(1 for i in out if off <= i < off + meta["chip_vocab"])
         shown = re.sub(r"(<\|chip[^|]*\|>)+", " [machine] ", text)
@@ -108,7 +121,7 @@ def main() -> None:
     if args.base:
         model, tok = load(args.base)
         for q, op, want in probs:
-            out = ask(model, tok, q, [], None, 400)
+            out = ask(model, tok, q, [], None, args.max_new, NUDGE if args.nudge else None)
             text = tok.decode(out, skip_special_tokens=True)
             got = answer_number(text)
             rep["base"].append({"q": q, "want": want, "answer": got, "ok": got == want})

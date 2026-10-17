@@ -21,9 +21,9 @@ HEX = list(range(TEXT_BASE, TEXT_BASE + 16))  # '0'..'9', 'a'..'f'
 NL, TR_OPEN, TR_CLOSE, TC_OPEN, TC_CLOSE, OTHER, FN_ADD, FN_MUL, FN_SUB = range(
     TEXT_BASE + 16, TEXT_BASE + 25)
 # inline arithmetic ("37 \\times 43 =", see inline_scan)
-SPACE, EQ, PLUS, MINUS, TIMES, BSL, TIMESW, COMMA, DOLLAR, LPAREN = range(TEXT_BASE + 25,
-                                                                       TEXT_BASE + 35)
-N_TEXT = 35
+SPACE, EQ, PLUS, MINUS, TIMES, BSL, TIMESW, COMMA, DOLLAR, LPAREN, WS = range(TEXT_BASE + 25,
+                                                                           TEXT_BASE + 36)
+N_TEXT = 36
 FUNCS = {"add": FN_ADD, "mul": FN_MUL, "sub": FN_SUB}  # tool names the circuit answers
 PRINT_OP = 0x00FD
 MAX_PRINT = 58  # digits per print (the write counter tops out at 64)
@@ -34,13 +34,15 @@ QWEN_TEXT = {**{TEXT_BASE + i: c for i, c in enumerate("0123456789abcdef")},
              NL: "\n", TR_OPEN: "<tool_response>", TR_CLOSE: "</tool_response>",
              TC_OPEN: "<tool_call>", TC_CLOSE: "</tool_call>", FN_ADD: "add", FN_MUL: "mul",
              FN_SUB: "sub", SPACE: " ", EQ: " =", PLUS: " +", MINUS: " -", TIMES: " \u00d7",
-             BSL: " \\", TIMESW: "times", COMMA: ",", DOLLAR: "$", LPAREN: "("}
+             BSL: " \\", TIMESW: "times", COMMA: ",", DOLLAR: "$", LPAREN: "(",
+             WS: "\n\n"}
 # other single tokens Qwen generates for the same thing: it writes <function=add> as "=add" and
 # <function=mul> as "=m" "ul", not the way its tokenizer splits the text
 # (never for a class the circuit prints: the tied lm_head rows would tie)
 EXTRA_TEXT = {FN_ADD: ["=add"], FN_MUL: ["ul"], FN_SUB: ["=sub", "ub"], EQ: ["="], PLUS: ["+"],
               MINUS: ["-", " \u2212", "\u2212"], TIMES: ["\u00d7", " *", "*"], BSL: ["\\"],
-              TIMESW: ["cdot"], DOLLAR: [" $", "$$", " $$", " \\$", "\\$"], LPAREN: [" ("]}
+              TIMESW: ["cdot"], DOLLAR: [" $", "$$", " $$", " \\$", "\\$"], LPAREN: [" ("],
+              WS: ["\n\n\n", "\n\n\n\n", "  ", "   ", "    ", "     ", " \n", " \n\n"]}
 INLINE_OPS = {PLUS: "add", MINUS: "sub", TIMES: "mul"}  # and TIMESW right after BSL: mul
 # Inline calls need at least this many digits in A and B together. Qwen gets small ones right,
 # and right after a trace its conv window holds chip tokens instead of the "=", so a short
@@ -69,7 +71,7 @@ class InlineScan:
     a backslash, or a comma right after a digit) must be exactly: digits, one operator, digits,
     then "=", with at least INLINE_MIN_DIGITS digits in the two numbers together. A comma
     between digits joins them (1,234). The first number must start after a
-    space, newline, "$", "(" or a chip token, so "2.5 * 3 =" and "x^2 + 1 =" are left alone.
+    space, newline, other whitespace, "$", "(" or a chip token, so "2.5 * 3 =" and "x^2 + 1 =" are left alone.
     Chip tokens are breakers too. Fed every token of the stream, in order.
     """
 
@@ -106,7 +108,7 @@ class InlineScan:
             self.d = 0
             if self.p == 1:
                 self.a_safe = prev is not None and (not is_text(prev) or prev in (SPACE, NL, DOLLAR,
-                                                                                LPAREN))
+                                                                                LPAREN, WS))
         elif cont:
             self.d += 1
         if brk:

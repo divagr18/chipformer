@@ -11,8 +11,8 @@ from chipformer.q35.lib import bcd
 
 BS = chr(92)
 WORDS = {" ": B.SPACE, " =": B.EQ, "=": B.EQ, " +": B.PLUS, "+": B.PLUS, " -": B.MINUS,
-         "-": B.MINUS, " ×": B.TIMES, "*": B.TIMES, " " + BS: B.BSL, "times": B.TIMESW,
-         ",": B.COMMA, "$": B.DOLLAR, " $": B.DOLLAR, "(": B.LPAREN, "\n": B.NL}
+         "-": B.MINUS, " ×": B.TIMES, "*": B.TIMES, " *": B.TIMES, " " + BS: B.BSL, "times": B.TIMESW,
+         ",": B.COMMA, "$": B.DOLLAR, " $": B.DOLLAR, "(": B.LPAREN, "\n": B.NL, "\n\n": B.WS}
 
 
 def classes(tokens: list[str]) -> list[int]:
@@ -50,19 +50,21 @@ CASES = [
     ([" ", "37", "*", "43", "="], [("mul", "37", "43")]),
     ([" ", " $", " ", "300", " +", " ", "4", " ="], [("add", "300", "4")]),
     ([" ", "100", " -", " ", "30", " ="], [("sub", "100", "30")]),
-    ([" ", "2", ".", "5", *TIMES, "3", " ="], []),  # decimal
-    (["x", "^", "2", " +", " ", "1", " ="], []),  # not a plain first number
-    ([" ", "2", " +", " ", "3", " +", " ", "4", " ="], []),  # chains are Qwen's
-    ([" ", "2", *TIMES, "3", " +", " ", "4", " ="], []),  # precedence
-    (["}", *TIMES, "3", " +", " ", "4", " ="], []),  # operator before the first number
-    (["-", "5", *TIMES, "3", " ="], []),  # negative
-    ([" ", "5", *TIMES, "-", "3", " ="], []),
-    (["(", "5", " +", " ", "3", ")", " ="], []),
+    (["\n\n", "42450", " *", " ", "8376", " ="], [("mul", "42450", "8376")]),
+    ([" ", "2", ".", "55", *TIMES, "300", " ="], []),  # decimal
+    (["x", "^", "22", " +", " ", "100", " ="], []),  # not a plain first number
+    ([" ", "20", " +", " ", "30", " +", " ", "40", " ="], []),  # chains are Qwen's
+    ([" ", "20", *TIMES, "30", " +", " ", "40", " ="], []),  # precedence
+    (["}", *TIMES, "30", " +", " ", "40", " ="], []),  # operator before the first number
+    (["-", "50", *TIMES, "30", " ="], []),  # negative
+    ([" ", "50", *TIMES, "-", "30", " ="], []),
+    (["(", "50", " +", " ", "30", ")", " ="], []),
     ([" ", "12", *TIMES, "3", " ="], []),  # small: Qwen's own
     ([" ", "5", " +", " ", "7", " ="], []),
-    ([" ", "5", " +", " ", "3", " apples", " ="], []),
-    ([" ", "3", " ", "4", *TIMES, "5", " ="], []),  # two numbers before the operator
-    ([" ", "5", " =", " ", "3", *TIMES, "4", " ="], []),
+    ([" ", "50", " +", " ", "30", " apples", " ="], []),
+    ([" ", "30", " ", "40", *TIMES, "50", " ="], []),  # two numbers before the operator
+    ([" ", "50", " =", " ", "30", *TIMES, "40", " ="], []),
+    (["x", "4245", *TIMES, "60", " ="], []),  # a letter right before the first number
 ]
 
 

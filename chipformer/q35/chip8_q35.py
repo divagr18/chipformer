@@ -161,7 +161,8 @@ def build(target: Target | None = None) -> Chip8Q35:
     fns = {op: T[cls] for op, cls in B.FUNCS.items()}
     fn_any = sum(fns.values(), Expr())
     (in_call,) = c.slot_head("in_call", {0: tco + tcc + rs}, {0: one}, {2: tco}, tco + tcc + rs)
-    safe = T[B.SPACE] + T[B.NL] + T[B.DOLLAR] + T[B.LPAREN] + c.mu  # may precede a first number
+    safe = (T[B.SPACE] + T[B.NL] + T[B.WS] + T[B.DOLLAR] + T[B.LPAREN]
+            + c.mu)  # may precede a first number
     prev_cols = {2: Chan(is_dig, (0, 1, 0, 0)), 3: Chan(is_dig, (0, 0, 1, 0)),
                  4: Chan(T[B.COMMA], (0, 1, 0, 0)), 5: Chan(T[B.BSL], (0, 1, 0, 0)),
                  6: Chan(safe, (0, 1, 0, 0)), 7: Chan(c.is_text, (0, 1, 0, 0))}
