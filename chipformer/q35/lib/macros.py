@@ -21,6 +21,9 @@ jump target in the instruction itself, T = 0x200 + 2 * XY.
     5008  BTRIM  if mem[I] == 0, V0 >= 2 and I is in the result: V0 -= 1, I += 1, PC stays;
                  else PC = the next instruction (strips leading zeros before a PRINT)
 
+    5X0B  BLD    A[j] = mem[I + j] for j < VX, then LA = VX (5X1B: into B and LB); PC = next
+    500C  BSTA   mem[I + j] = A[j] for j < LA; PC = next (the expression evaluator's moves)
+
 A record whose PC stays has no PC write (the circuit fetches from the unchanged PC).
 
 Each record's values come from the state before the record plus the carry chain inside it, so a
@@ -43,7 +46,8 @@ from chipformer import spec
 from chipformer.q35.lib import bcd
 
 BADD, BZERO, BMUL, BSUB, BDIV, BADB, BRSUB, BTRIM = 0x1, 0x2, 0x3, 0x4, 0x5, 0x6, 0x7, 0x8
-KINDS = (BADD, BZERO, BMUL, BSUB, BDIV, BADB, BRSUB, BTRIM)
+BLD, BSTA = 0xB, 0xC  # the expression evaluator's moves (eval.asm)
+KINDS = (BADD, BZERO, BMUL, BSUB, BDIV, BADB, BRSUB, BTRIM, BLD, BSTA)
 R_CELLS = 2 * bcd.MAX_DIGITS  # the result region BTRIM can read
 
 
@@ -112,6 +116,15 @@ def macro_writes(cells: list[int], op: int):
     nxt = (pc + 2) & 0xFFF
     kind = op & 0xF
     w = []
+    if kind == BLD:
+        n, i, to_b = cells[spec.V + (op >> 8 & 0xF)] & 31, cells[spec.I], op >> 4 & 1
+        base = bcd.B_ADDR if to_b else bcd.A_ADDR
+        w = [(base + j, cells[(i + j) & 0xFFF]) for j in range(n)] + [(bcd.LEN + to_b, n)]
+        return w + [(spec.PC, nxt)]
+    if kind == BSTA:
+        i = cells[spec.I]
+        w = [((i + j) & 0xFFF, cells[bcd.A_ADDR + j] & 15) for j in range(la & 31)]
+        return w + [(spec.PC, nxt)]
     if kind in (BADD, BSUB, BRSUB):
         n = max(la, lb) + 1
         carry = 0

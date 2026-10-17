@@ -14,7 +14,7 @@ WORDS = {" ": B.SPACE, " =": B.EQ, "=": B.EQ, " +": B.PLUS, "+": B.PLUS, " -": B
          "-": B.MINUS2, "−": B.MINUS2, " ×": B.TIMES, "*": B.TIMES, " *": B.TIMES, " " + BS: B.BSL, "times": B.TIMESW,
          ",": B.COMMA, "$": B.DOLLAR, " $": B.SDOLLAR, "$$": B.DDOLLAR, " $$": B.SDDOLLAR, "(": B.LPAREN, "\n": B.NL, "\n\n": B.WS,
          "/": B.DIV, " /": B.DIV, "÷": B.DIV, "div": B.FN_DIV, ".": B.PERIOD,
-         "(-": B.LPMINUS, " (-": B.SLPMINUS, ")": B.RPAREN, ")/": B.DIV, ")=": B.EQ,
+         "(-": B.LPMINUS, " (-": B.SLPMINUS, ")": B.RPAREN, ")/": B.RPDIV,
          " mod": B.MODOP, " %": B.MODOP, "mod": B.FN_MOD, "b": B.HEX[11], "gcd": B.FN_GCD,
          " gcd": B.FN_GCD}
 
@@ -26,7 +26,7 @@ def classes(tokens: list[str]) -> list[int]:
         if t.isdigit():
             out += [B.HEX[int(ch)] for ch in t]
         else:
-            out.append(WORDS.get(t, B.OTHER))
+            out.append(WORDS.get(t, B.CLASS_OF.get(t, B.OTHER)))
     return out
 
 
@@ -49,6 +49,7 @@ def printed(bm) -> str:
 
 
 TIMES = [" " + BS, "times", " "]
+EV = "eval"  # a whole expression (test_q35_expr.py)
 CASES = [
     (["$", "12", *TIMES, "34", " =", " "], [("mul", "12", "34")]),
     ([" ", "1", ",", "234", ",", "567", *TIMES, "8", " ="], [("mul", "1234567", "8")]),
@@ -61,22 +62,23 @@ CASES = [
     ([" ", "25", " -", " ", "1", ",", "786", ",", "338", " ="], [("sub", "25", "1786338")]),
     ([" ", "2500", "−", "17860", " ="], [("sub", "2500", "17860")]),
     (["\n\n", "42450", " *", " ", "8376", " ="], [("mul", "42450", "8376")]),
-    ([" ", "2", ".", "55", *TIMES, "300", " ="], []),  # decimal
+    ([" ", "2", ".", "55", *TIMES, "300", " ="], [EV]),  # decimal: an expression
     (["x", "^", "22", " +", " ", "100", " ="], []),  # not a plain first number
-    ([" ", "20", " +", " ", "30", " +", " ", "40", " ="], []),  # chains are Qwen's
-    ([" ", "20", *TIMES, "30", " +", " ", "40", " ="], []),  # precedence
+    ([" ", "20", " +", " ", "30", " +", " ", "40", " ="], [EV]),  # chains: expressions
+    ([" ", "20", *TIMES, "30", " +", " ", "40", " ="], [EV]),
     (["}", *TIMES, "30", " +", " ", "40", " ="], []),  # operator before the first number
     (["-", "50", *TIMES, "30", " ="], []),  # "-" after a letter: an operator
-    ([" ", "50", *TIMES, "-", "30", " ="], [("mul", "50", "30")]),  # signed
+    # signed numbers: the single-op path (the expression path stays quiet when it fires)
+    ([" ", "50", *TIMES, "-", "30", " ="], [("mul", "50", "30")]),
     (["\n", "-", "5000", *TIMES, "30", " ="], [("mul", "5000", "30")]),
     (["\n", "-", " ", "50", *TIMES, "30", " ="], [("mul", "50", "30")]),  # a list's "- "
     (["x", " -", " ", "12", *TIMES, "34", " ="], []),  # x - 12 * 34: "-" is an operator
-    ([" ", "12", " -", "34", *TIMES, "5", " ="], []),
+    ([" ", "12", " -", "34", *TIMES, "5", " ="], [EV]),  # 12 - 34 * 5: an expression
     (["\n", "-", "1418261", " /", " (-", "408", ")", " ="], [("div", "1418261", "408")]),
     (["$", "(-", "1418261", ")/", "(-", "408", ")", " ="], [("div", "1418261", "408")]),
     (["f", "(-", "3000", ")", *TIMES, "4", " ="], []),  # f(-3000): not a number's sign
     ([" ", "=", " -", "5", " +", " ", "1234567", " ="], []),  # add / sub: unsigned only
-    ([" ", "1234567", " -", " -", "5", " ="], []),
+    ([" ", "1234567", " -", " -", "5", " ="], [EV]),  # (the expression path takes it)
     (["\n", "-", "1234", " mod", " ", "56", " ="], []),
     ([" ", "1785", " mod", " ", "13", " ="], [("mod", "1785", "13")]),
     ([" ", "1785", " %", " ", "13", " ="], [("mod", "1785", "13")]),
@@ -84,7 +86,7 @@ CASES = [
     ([" ", "1785", " " + BS, "b", "mod", " ", "13", " ="], [("mod", "1785", "13")]),
     ([" ", "1785", " ", "mod", " ", "13", " ="], []),  # "mod" without a backslash
     ([" ", "gcd", "(", "1785", ",", " ", "13201915", ")", " ="], [("gcd", "1785", "13201915")]),
-    (["$", BS, "gcd", "(", "1785", ",", " ", "-", "35", ")=", "$"], [("gcd", "1785", "35")]),
+    (["$", BS, "gcd", "(", "1785", ",", " ", "-", "35", ")", " =", "$"], [("gcd", "1785", "35")]),
     ([" ", "1785", " gcd", "(", "12", ",", " ", "35", ")", " ="], []),  # gcd after a number
     ([" ", "gcd", "(", "1785", ",", "35", ")", " ="], []),  # "1785,35" is one number
     (["(", "50", " +", " ", "30", ")", " ="], []),
@@ -109,19 +111,20 @@ CASES = [
 @pytest.mark.parametrize("tokens,want", CASES)
 def test_scan(tokens, want):
     _bm, calls = run(tokens)
-    assert calls == want
+    assert [EV if c[0] == EV else c for c in calls] == want
 
 
 def test_scan_prints_and_chains():
     bm, calls = run(["$", "12", *TIMES, "34", " =", "$", " ", "and", " ", "408", *TIMES, "2", " ="])
     assert calls == [("mul", "12", "34"), ("mul", "408", "2")]
     assert printed(bm) == " 408$ 816."  # "$" closes the math it opened in, else "."
-    # after a "." closer the printed result does not start a new expression
+    # after a "." closer the single-op path does not go on from the printed result, but a whole
+    # expression does: "408." is a number (v18)
     bm = B.BridgeMachine(bcd.ROM, bcd.QUIRKS)
     bm.text(3)
     calls = bm.qwen(classes([" ", "12", *TIMES, "34", " ="]))
-    calls += bm.qwen(classes([*TIMES, "2", " ="]))  # the "." closer ends the expression
-    assert calls == [("mul", "12", "34")] and printed(bm) == " 408."
+    calls += bm.qwen(classes([*TIMES, "2", " ="]))
+    assert [c[0] for c in calls] == ["mul", "eval"] and printed(bm) == " 408. 816."
     bm = B.BridgeMachine(bcd.ROM, bcd.QUIRKS)
     bm.text(3)
     calls = bm.qwen(classes([" $$", " ", "3000", " +", " ", "4000", " ="]))

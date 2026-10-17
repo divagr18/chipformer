@@ -37,6 +37,14 @@ TOOLS = [{"type": "function", "function": {
                                 "for any remainder or modulo.")),
                        ("gcd", ("The greatest common divisor of two integers. Use it to reduce "
                                 "fractions."))]]
+# v18: a whole expression (the evals' "calc" flag offers it)
+CALC_TOOL = {"type": "function", "function": {
+    "name": "calc", "description": (
+        "Evaluate an arithmetic expression exactly: whole numbers and decimals with + - * / ^ "
+        "and brackets, e.g. (3.5 + 12) * 48 / 7. The value, or its first 10 decimals followed "
+        "by ... when it does not end. Use it for any calculation."),
+    "parameters": {"type": "object", "required": ["expression"], "properties": {
+        "expression": {"type": "string", "description": "the expression"}}}}}
 
 
 def problems(n: int, seed: int = 0, hard: bool = False) -> list[tuple[str, str, int]]:

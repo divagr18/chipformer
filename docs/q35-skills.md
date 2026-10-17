@@ -338,3 +338,70 @@ at 100% up to its digit limits.
 7. **8-bit BIOS maths.** Digit estimates (sqrt, Briggs normalisation) work on values up to 999
    in 8-bit registers. Use the 10H + L split as the circuit does, or two-register arithmetic, and
    fuzz the boundaries.
+
+## 9. P2 as built (v18) and where its trace tokens go
+
+**What v18 has** (branch `q35-v18-expr`):
+- The tape capture in the circuit: one head of up to 48 codes plus window counters, about 10 heads in all.
+- The expression CALL record, and two copy macros:
+  - BLD (5X0B / 5X1B): A or B = mem[I..I+VX), with its length.
+  - BSTA (500C): mem[I..] = A.
+- A BIOS evaluator in `lib/eval.asm` (the general shunting-yard over unreduced fractions) and
+  `lib/chain.asm` (chain mode).
+- The circuit is still 16 chip layers at hidden 4352 for the 4B (1,640 slots), and 3456 for the 0.8B.
+- The BIOS is about 3 KB, so the boot record is about 4.5k tokens.
+
+**Measured trace tokens per expression.** Median of 60 DM questions; the BIOS runs on the reference machine, and the circuit matches it.
+
+| module | v18 first (8b5957d) | chain mode (e5dcd6e) |
+|---|---|---|
+| mul_div_multiple_longer | 13.5k | 9.3k |
+| add_sub_multiple_longer | 11.9k | 7.5k |
+| mixed_longer | 14.7k | 17.7k (chain mode, then a restart) |
+
+**Where they go.** Take one mul_div question: `(-1)/(-1)*(-10)/(-4)*70/(-7)*28/(-4)*(6/1)/((-1848)/(-44))`. That is 40 tape cells and 16 numbers, giving 2,097 records and 10.2k tokens. A plain CHIP-8 record costs about 5 tokens: STEP, ADDR PC, VAL PC, and usually one more write.
+
+| part | records | per unit |
+|---|---|---|
+| reading the tape (fetch, dispatch, digits, fused-token stubs) | ~430 | ~10 per cell |
+| ending a number (length, leading zeros, limits, its sign or role bits) | ~300 | ~19 per number |
+| adding it to an accumulator (B = number, A = accumulator, macro, R to A, lengths, spill or reload) | ~430 | ~27 per number, plus the macro's own writes |
+| operators (unary or binary, deciding the mode, the next operand's bits) | ~390 | ~17 per operator |
+| brackets | ~200 | ~10 per bracket |
+| setup, the final print or div | ~350 | |
+
+So each number costs about 70 records, about 300-350 tokens, before any arithmetic. The general
+evaluator costs about 2x this, mostly in the operator stack, value headers and copies. Plain
+CHIP-8 can't get much lower: hand-tuning the general evaluator gained under 10%.
+
+**What circuit-level macros would save** (estimated from the counts above):
+
+1. **An operand-load macro, BNUM.**
+   - What it does: from tape index VX, take the digit run (stopping at the first non-digit code), skip its leading zeros, and write B = the digits and LB = their count. Then VX = the run's end and VF = [the run is "0"].
+   - What it replaces: the ~19 records of ending a number, plus the ~3 of loading B.
+   - Cost: one record of 2n + 5 tokens.
+   - Circuit: a run-length scan over the tape. It is a thermometer over "is a digit" of tape[VX + j], so it costs one RAM-bank read per write, like BLD, plus a "first non-digit" prefix chain. That chain is the hard part: a prefix-AND over up to 24 cells. It is about 2-3 heads and 1-2k units, and the depth risk is medium.
+   - Saves about 20 records per number, about 30% of chain mode.
+2. **An accumulate macro, BACC (Y bit: multiply or add).**
+   - What it does: ACC[k] = ACC[k] op B in place, where k = VY's bit 0, with its length.
+   - What it replaces: today's facc sequence of A = accumulator, macro, R to A, lengths, and the spill or reload, about 27 records.
+   - Cost: the macro's own digit writes plus about 3 records.
+   - Circuit: it reuses BMUL/BADD's datapath, with the accumulator as a third digit bank in place of A. A 24 × 24 product in one record exceeds JMAX, so it would keep BMUL's row loop.
+   - Saves about 20 records per number.
+3. **A tape-dispatch instruction (5XYD as in §1, plus a jump).**
+   - What it does: VX = tape[VY], VY += 1, then PC = TABLE + 2 · VX in one record.
+   - What it replaces: the 6-record fetch and dispatch per cell.
+   - Saves about 5 records per cell (40 cells: about 200 records).
+4. **No PC write for a sequential instruction.**
+   - Today a record whose PC stays has no PC write. The other way round, the default would be PC + 2, and staying macros (BMUL rows, BTRIM, BDIV) would write their PC.
+   - Saves 2 tokens on most records, about 35% of every BIOS trace, games included.
+   - It is also the deepest change: the circuit has to derive PC from the last PC write plus 2 × the records since it. That needs a counter head and a 12-bit add on the fetch path, which is the critical path.
+
+With 1-3, a mul_div chain like the one above would come to about 16 × (2n + 5 + 10) + 40 × 5 + 22 × 12 + 350 records. That is about 1.1k records, about 3-4k tokens with the macro writes. With 4 as well, about 2.5k. For comparison, the expression's own text is about 40 Qwen tokens; if Qwen worked it out step by step, it would write about 500-1,500 tokens.
+
+**Known limits of v18.**
+- A tool response has no "-", so a negative `calc` result prints "...".
+- Fractions print as 10 decimals and "...", not as reduced p/q. That needs the v16 gcd.
+- A decimal result followed by more maths (". 0.625. \times 8 =") reads as a number with two
+  "." and prints "...". An integer result goes on fine: "408. × 2 =" prints 816.
+- Mixed expressions pay for the chain-mode attempt before the general evaluator.

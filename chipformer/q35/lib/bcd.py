@@ -9,6 +9,8 @@ digits from I and halts. Leading zeros are stripped. Nothing ticks during a call
 never use the timers or wait for keys.
 """
 
+from pathlib import Path
+
 from chipformer import spec
 from chipformer.q35.lib.asm import assemble
 
@@ -21,7 +23,7 @@ DSTOP = LEN + 3  # BDIV / BADB stop at t = LA + DSTOP (div: DEC; mod, gcd: 0)
 # to R_ADDR as P[t] (t <= LA), "." (10) at P[LA + 1], P[t + 1] (t > LA), "..." (11) if inexact
 W_ADDR = 0x6BF
 DEC = 10  # decimals of an inexact quotient
-TMP = 0x700  # gcd: the remainder while A and B move
+TMP = 0x6E4  # gcd: the remainder while A and B move (after W; 0x700.. holds eval's code)
 T10, MUL, DIV, MOD = 0x700, 0x710, 0x780, 0x800
 MAX_DIGITS = 24
 QUIRKS = ("loadstore",)  # FX55/FX65 leave I unchanged
@@ -127,7 +129,16 @@ dp_go:  ld i, {R_ADDR}
         print
 div_z:  ld v0, 0
         print
+zeros:  db 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
 
+"""
+
+# mod and gcd (v16) next to v18's evaluator: the 4 KB are full, so their code fills four gaps
+# (eval.asm's {MODGCD1..4}): the end of eval's first part (below A_ADDR), two holes in the data
+# page (after LEN's cells, after R's 48 digits; nothing writes them), the end of eval's second
+# part (below TAPE) and the end of chain mode's code (below H). Asserts check each one.
+GAP_LEN, GAP_R = LEN + 4, R_ADDR + 48  # data-page holes: up to R_ADDR, up to W_ADDR
+MODGCD1 = f"""
 ; ---------------------------------------------------------------- mod: A mod B
 ; (A at W + 1, as for div); nothing if B starts with 0
 mod:    call args
@@ -140,7 +151,25 @@ rem_pr: ld i, {W_ADDR}            ; print W[vd .. ve]
         sub v0, vd
         add v0, 1
         print
-
+mg1_end:
+"""
+MODGCD2 = f"""
+        org {GAP_LEN}
+; ---------------------------------------------------------------- the shared parts
+args:   ld v0, 0                ; DS = 0 (the integer part only), W[0] = 0,
+        ld i, {DSTOP}           ; va = LA, vb = LB, v0 = B[0]
+        ld [i], v0
+        ld i, {W_ADDR}
+        ld [i], v0
+        ld i, {LEN}
+        ld v1, [i]
+        ld va, v0
+        ld vb, v1
+        ld i, {B_ADDR}
+        ld v0, [i]
+        ret
+args_end:
+        org {GAP_R}
 ; ---------------------------------------------------------------- gcd: gcd(A, B), by Euclid
 gcd:    call args
         se v0, 0
@@ -155,100 +184,32 @@ gcd_lp: call rem                ; W[vd .. ve] = A mod B
         ld v0, [i]
         sne v0, 0
         jp gcd_b                ; 0: the answer is B
-        ld vc, ve               ; vc = the remainder's length (the next LB), ve = LB (the next LA)
+        ld vc, ve               ; vc = the remainder's length (the next LB)
         sub vc, vd
         add vc, 1
-        ld ve, vb
-        ld i, {W_ADDR}          ; TMP = the remainder (copies move 6, 12 or 24 digits)
+        ld i, {W_ADDR}          ; the moves go through A with v18's BLD / BSTA macros
         add i, vd
-        ld v0, 6
-        sub v0, vc
-        se vf, 0
-        jp gr_6
-        ld vb, [i]
+        bld a, vc               ; A = the remainder
         ld i, {TMP}
-        ld [i], vb
-        ld v0, 12
-        sub v0, vc
-        se vf, 1
-        call g_r2
-        jp gr_d
-gr_6:   ld v5, [i]
+        bsta                    ; TMP = the remainder
+        ld i, {B_ADDR}
+        jp gcd_c
+gcd1_end:
+"""
+MODGCD3 = f"""
+gcd_c:  bld a, vb               ; A = B, LA = LB (the next A)
+        ld i, {W_ADDR + 1}
+        bsta                    ; W + 1 = B
         ld i, {TMP}
-        ld [i], v5
-gr_d:   ld i, {B_ADDR}          ; W + 1 = B (the next A)
-        ld v0, 6
-        sub v0, ve
-        se vf, 0
-        jp gb_6
-        ld vb, [i]
-        ld i, {W_ADDR + 1}
-        ld [i], vb
-        ld v0, 12
-        sub v0, ve
-        se vf, 1
-        call g_b2
-        jp gb_d
-gb_6:   ld v5, [i]
-        ld i, {W_ADDR + 1}
-        ld [i], v5
-gb_d:   ld i, {TMP}             ; B = TMP (the next B)
-        ld v0, 6
-        sub v0, vc
-        se vf, 0
-        jp gt_6
-        ld vb, [i]
-        ld i, {B_ADDR}
-        ld [i], vb
-        ld v0, 12
-        sub v0, vc
-        se vf, 1
-        call g_t2
-        jp gt_d
-gt_6:   ld v5, [i]
-        ld i, {B_ADDR}
-        ld [i], v5
-gt_d:   ld v0, ve
-        ld v1, vc
-        ld i, {LEN}
-        ld [i], v1              ; LA, LB
-        ld va, ve
+        bld b, vc               ; B = the remainder, LB = its length
+        ld va, vb
         ld vb, vc
         jp gcd_lp
 gcd_b:  ld i, {B_ADDR}
         ld v0, vb
         print
-g_r2:   ld i, {W_ADDR + 12}     ; the second 12 digits of a copy
-        add i, vd
-        ld vb, [i]
-        ld i, {TMP + 12}
-        ld [i], vb
-        ret
-g_b2:   ld i, {B_ADDR + 12}
-        ld vb, [i]
-        ld i, {W_ADDR + 13}
-        ld [i], vb
-        ret
-g_t2:   ld i, {TMP + 12}
-        ld vb, [i]
-        ld i, {B_ADDR + 12}
-        ld [i], vb
-        ret
-
-; ---------------------------------------------------------------- the shared parts
-args:   ld v0, 0                ; DS = 0 (the integer part only), W[0] = 0,
-        ld i, {DSTOP}           ; va = LA, vb = LB, v0 = B[0]
-        ld [i], v0
-        ld i, {W_ADDR}
-        ld [i], v0
-        ld i, {LEN}
-        ld v1, [i]
-        ld va, v0
-        ld vb, v1
-        ld i, {B_ADDR}
-        ld v0, [i]
-        ret
-
+"""
+MODGCD4 = f"""
 ; rem: A mod B for A at W[1 .. va] (W[0] = 0), B at B[0 .. vb) (B[0] != 0), LEN = LA, LB and
 ; DS = 0: the remainder, without leading zeros (one digit if it is 0), is W[vd .. ve]. BDIV and
 ; BADB run the integer part of A / B and leave the remainder in the last window.
@@ -281,16 +242,237 @@ st_chk: ld i, {W_ADDR}
         ret
         add vd, 1
         jp strip
-zeros:  db 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
-
 """
 
-ROM, LABELS = assemble(SRC)
-OPS = {op: LABELS[op] for op in ("add", "mul", "sub", "div", "mod", "gcd")}
+# ---------------------------------------------------------------- eval: a whole expression (v18)
+# The CALL record writes the tape (one code per token of the expression: bridge.TAPE_CODE, digits
+# 0..9, the symbols . + - * / ( ) ^ as 10..17, fused tokens such as ")/(" as 18.., which the
+# dispatch table expands), its length and MODE. eval (eval.asm) parses it by shunting-yard into
+# exact fractions n / d and prints the value: the integer, or n / d as div prints it, or "..."
+# when it can't (more than MAX_DIGITS digits anywhere, a division by 0, a malformed expression,
+# more than NVAL pending values). A value lives in a slot: H + 32 s = [sign, n length, n's place
+# (0: its digits follow, else a number on the tape), d length (0: d = 1), n's digits], D + 32 s
+# = d's digits; BLD / BSTA (macros.py) move digits around.
+# Memory: eval's code from 0x2AE to A_ADDR and from CODE2 to TAPE, then its data, then DBUF (10^k).
+CODE2 = 0x700
+TAPE, TLEN, MSAVE, CUR, DXY, SGN, EXP = 0xC00, 0xC30, 0xC31, 0xC32, 0xC34, 0xC36, 0xC38
+OPST, XTAB, H, D = 0xC50, 0xC80, 0xE00, 0xF00  # operator stack, ROM tables, value slots
+NVAL = 6  # value slots (offsets 0 .. 160); T6 and T7 are temporaries
+T6, T7 = 192, 224
+END = 63  # after the tape
+H1, H3, H4, SGN1, EXP1, LEN1, MAXD1 = H + 1, H + 3, H + 4, SGN + 1, EXP + 1, LEN + 1, MAX_DIGITS + 1
+TAPE_M1 = TAPE - 1  # a number's place p: its digits from TAPE + p - 1
+# chain mode (chain.asm): its sign parity, accumulator lengths, the first number, accumulators
+GP, L0, L1, PEND, FOP, ACC0, ACC1, FST, CODE3 = (0xC3A, 0xC3B, 0xC3C, 0xC3D, 0xC40, 0x0A0, 0x0C0,
+                                                OPST, 0xCA0)
+VMAX, W1 = 32 * NVAL, W_ADDR + 1
+T6_DL, T6_D, T7_NL, T7_N = H + T6 + 3, D + T6, H + T7 + 1, H + T7 + 4
+SYM_SUB = dict(zip(".+-*/()^", ("s_pt", "s_add", "s_sub", "s_mul", "s_div", "s_lp", "s_rp", "s_pow")))
+
+
+def _dispatch() -> tuple[str, str, str]:
+    """The tape codes' handlers (each symbol of a fused token in turn), the jump table on codes
+    and the one on operators (reduce)."""
+    from chipformer.q35 import bridge
+
+    handlers, jtab = [], []
+    for code in range(64):
+        if code < 10:
+            jtab.append("        jp dig")
+        elif code in bridge.EXPANSION:
+            calls = [f"        call {SYM_SUB[ch]}" for ch in bridge.EXPANSION[code]]
+            handlers.append(f"h{code}:" + "\n".join(calls)[3:] + "\n        jp ev_lp")
+            jtab.append(f"        jp h{code}")
+        else:
+            jtab.append("        jp h_end" if code == END else "        jp err")
+    ops = {4: "r_add", 5: "r_sub", 8: "r_mul", 9: "r_div", 16: "r_pow"}
+    rtab = [f"        jp {ops.get(code, 'err')}" for code in range(17)]
+    return "\n".join(handlers), "\n".join(jtab), "\n".join(rtab)
+
+
+HANDLERS, JTAB, RTAB = _dispatch()
+_NAMES = {k: v for k, v in globals().items() if k.isupper()}
+EVAL_SRC = (Path(__file__).with_name("eval.asm").read_text(encoding="utf-8")
+            .format(**_NAMES, DBUF_DB=", ".join(["1"] + ["0"] * MAX_DIGITS),                    **dict(zip(("CHAIN1", "CHAIN2"), Path(__file__).with_name("chain.asm")
+                               .read_text(encoding="utf-8").format(**_NAMES)
+                               .split("; ---- part 2")))))
+
+ROM, LABELS = assemble(SRC + EVAL_SRC)
+OPS = {op: LABELS[op] for op in ("add", "mul", "sub", "div", "mod", "gcd", "eval")}
 # The entries are compiled into the circuit's CALL record (chip8_q35.py), so they are part of the
 # weights: moving a routine means rebuilding every checkpoint. Add new code after the entries.
-assert {k: OPS[k] for k in ("add", "sub", "mul")} == {"add": 0x202, "sub": 0x206, "mul": 0x20A}, OPS
+assert {k: v for k, v in OPS.items() if k in ("add", "sub", "mul")} == {
+    "add": 0x202, "sub": 0x206, "mul": 0x20A}, OPS
 W_OPS = ("div", "mod", "gcd")  # A goes to W + 1: they work on it in place
+assert LABELS["sm_t"] < 0x400 and LABELS["am_t"] < 0x400, "macro targets must sit below 0x400"
+# compiled into the weights (the expression CALL record): eval's entry, the tape and its length
+# (q35-int: div, mod and gcd come first, so eval sits later than v18's 0x2CA)
+EVAL_ENTRY = 0x2CE
+assert (OPS["eval"], TAPE, TLEN) == (EVAL_ENTRY, 0xC00, 0xC30), (hex(OPS["eval"]), TAPE, TLEN)
+assert W_ADDR + 1 + MAX_DIGITS + DEC <= TMP and TMP + MAX_DIGITS <= CODE2, "gcd's TMP"
+assert LABELS["code1_end"] <= A_ADDR and LABELS["eval_end"] <= TAPE, "eval's code overflows"
+assert LABELS["dbuf"] + MAX_DIGITS < CODE3 and spec.FONT_BASE + 80 <= ACC0 < ACC1 + 32 <= 0x200
+assert LABELS["chain_end"] <= H, "chain mode's code overflows"
+# mod / gcd's pieces in the data page: clear of LEN's cells, R's 48 digits (mul) and W
+assert DSTOP < GAP_LEN and LABELS["args_end"] <= R_ADDR, "args overflows its hole"
+assert LABELS["gcd1_end"] <= W_ADDR, "gcd overflows its hole"
+
+
+class EvalError(Exception):
+    pass
+
+
+def eval_value(tape: list[int]):
+    """What eval computes, as (sign, n, d) with n, d strings (d None for 1), or EvalError: the
+    reference for eval.asm, including its limits."""
+    from chipformer.q35 import bridge
+
+    syms = []
+    for code in tape:
+        syms += [(None, code)] if code < 10 else [(s, None) for s in bridge.EXPANSION[code]]
+    vals, ops = [], []
+    num, dec, operand = None, None, False  # digits, decimals (None: no ".")
+
+    def fits(s):
+        s = s.lstrip("0") or "0"
+        if len(s) > MAX_DIGITS:
+            raise EvalError("too long")
+        return s
+
+    def commit():
+        nonlocal num, dec, operand
+        if len(vals) >= NVAL:
+            raise EvalError("too many values")
+        k = dec or 0
+        vals.append([0, fits(num), "1" + "0" * k if k else None])
+        num, dec, operand = None, None, True
+
+    def mul(a, b):
+        return fits(str(int(a) * int(b)))
+
+    def reduce():
+        op = ops.pop()
+        if op == "neg":
+            if not vals:
+                raise EvalError("no operand")
+            vals[-1][0] ^= 1
+            return
+        if len(vals) < 2:
+            raise EvalError("no operand")
+        y = vals.pop()
+        x = vals[-1]
+        sx, nx, dx = x
+        sy, ny, dy = y
+        if op in "+-":
+            if op == "-":
+                sy ^= 1
+            if dx is None and dy is None:
+                t6, t7, d = nx, ny, None
+            else:
+                t6 = nx if dy is None else mul(nx, dy)
+                t7 = ny if dx is None else mul(ny, dx)
+                d = dx if dy is None else dy if dx is None else mul(dx, dy)
+            if sx == sy:
+                n, s = fits(str(int(t6) + int(t7))), sx
+            else:
+                a, b = int(t6), int(t7)
+                n, s = fits(str(abs(a - b))), sx if a >= b else sy
+            x[:] = [s, n, d]
+        elif op == "*":
+            x[:] = [sx ^ sy, mul(nx, ny), dx if dy is None else dy if dx is None else mul(dx, dy)]
+        elif op == "/":
+            if int(ny) == 0:
+                raise EvalError("division by 0")
+            x[:] = [sx ^ sy, nx if dy is None else mul(nx, dy), ny if dx is None else mul(dx, ny)]
+        else:  # ^
+            if dy is not None or len(ny) > 2:
+                raise EvalError("exponent")
+            e = int(ny)
+            if e == 0:
+                x[:] = [0, "1", None]
+                return
+            n, d = nx, dx
+            for _ in range(e - 1):
+                n = mul(n, nx)
+                d = None if dx is None else mul(d, dx)
+            s = sx if e % 2 else 0
+            if sy:
+                if int(n) == 0:
+                    raise EvalError("division by 0")
+                n, d = d or "1", n
+            x[:] = [s, n, d]
+
+    PREC = {"+": 1, "-": 1, "*": 2, "/": 2, "neg": 3, "^": 4}
+    for s, d in syms:
+        if s is None:
+            num = (num or "") + str(d)
+            if dec is not None:
+                dec += 1
+            continue
+        if s == ".":
+            if num is None or dec is not None:
+                raise EvalError("bad .")
+            dec = 0
+            continue
+        if num is not None:
+            commit()
+        if s == "(":
+            if operand:
+                push_binary("*", ops, PREC, reduce)
+            ops.append("(")
+            operand = False
+        elif s == ")":
+            while ops and ops[-1] != "(":
+                reduce()
+            if ops:
+                ops.pop()
+            operand = True
+        elif not operand:
+            if s == "-":
+                ops.append("neg")
+            elif s != "+":
+                raise EvalError("operator without an operand")
+        else:
+            push_binary(s, ops, PREC, reduce)
+            operand = False
+    if num is not None:
+        commit()
+    while ops:
+        if ops[-1] == "(":
+            ops.pop()
+        else:
+            reduce()
+    if len(vals) != 1:
+        raise EvalError("not one value")
+    return tuple(vals[0])
+
+
+def push_binary(s, ops, prec, reduce):
+    while ops and ops[-1] != "(" and (prec[ops[-1]] > prec[s]
+                                       or (prec[ops[-1]] == prec[s] and s != "^")):
+        reduce()
+    ops.append(s)
+
+
+def eval_text(tape: list[int]) -> tuple[bool, str]:
+    """(negative, digits) as eval prints them: the integer, the quotient as div prints it, or
+    "..." when eval gives up."""
+    from chipformer.q35 import evals
+
+    try:
+        s, n, d = eval_value(tape)
+    except EvalError:
+        return False, "..."
+    neg = bool(s) and int(n) != 0
+    if d is None:
+        return neg, n
+    return neg, evals.div_text(int(n), int(d))
+
+
+def eval_writes(tape: list[int], mode: int) -> list[tuple[int, int]]:
+    """The CALL record of an expression: the tape, its length, the mode, then PC = eval."""
+    return [(TAPE + i, c) for i, c in enumerate(tape)] + [(TLEN, len(tape)), (MODE, mode),
+                                                          (spec.PC, OPS["eval"])]
 
 
 def call_writes(op: str, a: str, b: str, mode: int = 0) -> list[tuple[int, int]]:

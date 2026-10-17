@@ -97,6 +97,10 @@ def _encode(op: str, args: list[str], labels: dict[str, int]) -> int:
         return 0x5013 | r[0] << 8
     if op == "BTRIM":
         return 0x5008
+    if op == "BLD":  # bld a, vX / bld b, vX
+        return 0x500B | {"A": 0, "B": 1}[a[0]] << 4 | r[1] << 8
+    if op == "BSTA":
+        return 0x500C
     if op == "JP":
         if len(args) == 2:
             return 0xB000 | n(1)
