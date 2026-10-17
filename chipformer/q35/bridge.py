@@ -106,6 +106,8 @@ class InlineScan:
 
         if t in (TC_OPEN, TC_CLOSE) or t in (spec.STEP, spec.BOOT):
             self.in_call = t == TC_OPEN
+        if t == TC_OPEN:
+            self.op = None  # a tool call needs its own function name
         cont = dig and (isd(prev) or (prev == COMMA and isd(prev2)))
         run_start = dig and not cont
         tw_op = t == TIMESW and prev == BSL

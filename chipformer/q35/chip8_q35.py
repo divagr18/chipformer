@@ -233,8 +233,12 @@ def build(target: Target | None = None) -> Chip8Q35:
         data[12 + i] = fns[op] + inl[op]
     at_fn = c.node(c.t_and([fn_any, in_call]) + c.t_and([op_tok, one - in_call]), "op.at")
     data[12 + len(ops)] = at_fn + peq(1) - 1
-    lk = {0: is_dig + peq(1) - 1, 1: is_dig + peq(2) - 1, 2: at_fn, 127: brk - fn_any}
-    out = c.slot_head("call.args", lk, {0: one, 1: one, 2: one, 127: one}, data, brk - fn_any)
+    # <tool_call> clears the routine (a row of zeros), so a tool call needs a name inside it: an
+    # inline operator in earlier text must not make the template's "<tool_call></tool_call>" fire
+    lk = {0: is_dig + peq(1) - 1, 1: is_dig + peq(2) - 1, 2: at_fn + tco,
+          127: brk - fn_any - tco}
+    out = c.slot_head("call.args", lk, {0: one, 1: one, 2: one, 127: one}, data,
+                      brk - fn_any - tco)
     la_bits, lb_bits, op_oh = out[0:5], out[5:10], out[10:10 + len(ops)]
     op_ok = out[10 + len(ops)]
     a_safe, a_o1, a_o2 = c.slot_head("a.safe", {0: run_start + peq(1) - 1}, {0: one},

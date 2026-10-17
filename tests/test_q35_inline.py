@@ -128,6 +128,22 @@ def test_circuit_with_tool_calls(circuit):
     check(circuit, bm)
 
 
+def test_template_tool_tags_do_not_fire(circuit):
+    """Qwen's tool instructions show an empty "<tool_call></tool_call>": after inline operators in
+    earlier text it must not start a call (the routine is cleared at <tool_call>)."""
+    bm = B.BridgeMachine(bcd.ROM, bcd.QUIRKS)
+    bm.text(3)
+    calls = bm.qwen(classes([" ", "-", " ", "x", " +", " ", "y", " ", "*", " "])
+                    + [B.TC_OPEN, B.TC_CLOSE, B.NL] + classes([" ", "1234", " +"]) + [B.OTHER] * 3)
+    assert calls == []
+    check(circuit, bm)
+    bm.tool_call("mul", "37", "43")  # and a real call afterwards still works
+    while not bm.halted:
+        bm.step()
+    bm.text(3)
+    check(circuit, bm)
+
+
 def test_circuit_fuzz(circuit):
     """Random streams of the classes the capture cares about: the circuit fires exactly where
     the reference does, and the records and prints that follow are exact."""
