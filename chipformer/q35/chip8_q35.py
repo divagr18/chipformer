@@ -165,8 +165,9 @@ def build(target: Target | None = None) -> Chip8Q35:
             + c.mu)  # may precede a first number
     prev_cols = {2: Chan(is_dig, (0, 1, 0, 0)), 3: Chan(is_dig, (0, 0, 1, 0)),
                  4: Chan(T[B.COMMA], (0, 1, 0, 0)), 5: Chan(T[B.BSL], (0, 1, 0, 0)),
-                 6: Chan(safe, (0, 1, 0, 0)), 7: Chan(c.is_text, (0, 1, 0, 0))}
-    prev_dig, prev2_dig, prev_cm, prev_bs, prev_safe, prev_text = c.slot_head(
+                 6: Chan(safe, (0, 1, 0, 0)), 7: Chan(c.is_text, (0, 1, 0, 0)),
+                 8: Chan(T[B.EQ], (0, 1, 0, 0))}
+    prev_dig, prev2_dig, prev_cm, prev_bs, prev_safe, prev_text, prev_eq = c.slot_head(
         "prev", {0: one}, {0: one}, prev_cols, one)
     cont = c.node(c.t_and([is_dig, prev_dig]) + c.t_and([is_dig, prev_cm, prev2_dig]), "arg.cont")
     run_start = c.node(c.t_and([is_dig, one - prev_dig, one - prev_cm])
@@ -178,14 +179,23 @@ def build(target: Target | None = None) -> Chip8Q35:
     neutral = (is_dig + T[B.SPACE] + T[B.DOLLAR] + T[B.LPAREN] + T[B.BSL] + T[B.EQ] + op_tok
                + comma_join)
     brk = one - neutral  # chip tokens included
-    reset = c.node(c.t_and([tco]) + c.t_and([brk - tco, one - in_call]), "arg.reset")
+    # the window also starts afresh right after "=" (so "x^2 = A op B =" still counts)
+    after_eq = [prev_eq, one - brk, one - in_call]
+    reset = c.node(c.t_and([tco]) + c.t_and([brk - tco, one - in_call]) + c.t_and(after_eq),
+                   "arg.reset")
+    op_reset = c.node(c.t_and([brk]) + c.t_and(after_eq), "op.reset")
+    # a digit or operator right after "=" is reset, not counted (the decay must be exactly 238)
+    both_d = c.and_([is_dig, prev_eq, one - in_call], "after_eq.digit")
+    both_o = c.and_([op_tok, prev_eq, one - in_call], "after_eq.op")
     (xp,) = c.slot_head("arg.count", {0: reset, 1: one - reset}, {0: one - reset, 1: one - reset},
-                        {2: reset}, one - reset, 110 * run_start + 238 * reset, tiny=2.0**-90)
+                        {2: reset}, one - reset, 110 * (run_start - both_d) + 238 * reset,
+                        tiny=2.0**-90)
     (xd,) = c.slot_head("digit.count", {0: run_start, 1: one - run_start},
                         {0: one - run_start, 1: one - run_start}, {2: run_start},
                         one - run_start, 110 * cont + 238 * run_start, tiny=2.0**-90)
-    (xo,) = c.slot_head("op.count", {0: brk, 1: one - brk}, {0: one - brk, 1: one - brk},
-                        {2: brk}, one - brk, 110 * op_tok + 238 * brk, tiny=2.0**-90)
+    (xo,) = c.slot_head("op.count", {0: op_reset, 1: one - op_reset},
+                        {0: one - op_reset, 1: one - op_reset}, {2: op_reset}, one - op_reset,
+                        110 * (op_tok - both_o) + 238 * op_reset, tiny=2.0**-90)
 
     def thermo(xv, gate, n, name):  # [count > m] for m < n, from x = 2^-count
         return [c.node([(1, one - gate, 7 * one - 8 * 2**m * xv),
@@ -194,7 +204,7 @@ def build(target: Target | None = None) -> Chip8Q35:
 
     cp = thermo(xp, reset, 3, "p")  # p = argument number (1, 2)
     cd = thermo(xd, run_start, B.MAX_ARG + 1, "d")  # d = digit index within the argument
-    co = thermo(xo, brk, 2, "ops")  # operators since the last breaker
+    co = thermo(xo, op_reset, 2, "ops")  # operators since the last breaker
 
     def peq(v):
         return cp[v - 1] - cp[v]
@@ -790,15 +800,20 @@ def build(target: Target | None = None) -> Chip8Q35:
                    + c.t_and([big, tool, cnt[lim + 2]], -1)
                    + c.t_and([cnt[0], mode]) + c.t_ge(z, 1, -255, JMAX + 1, -1, lits=[small, mode])
                    + c.t_and([big, mode, cnt[lim]], -1), "print.digit")
+    nz = c.node(c.t_ge(v0, 1, 0, 255), "print.nonempty")
     upto = c.node(c.t_lt(z, 6, -255, JMAX + 1, lits=[small, tool])
                   + c.t_and([big, tool, one - cnt[lim + 5]])
-                  + c.t_lt(z, 1, -255, JMAX + 1, lits=[small, mode])
-                  + c.t_and([big, mode, one - cnt[lim]]), "print.upto")
+                  + c.t_lt(z, 2, -255, JMAX + 1, lits=[small, mode, nz])
+                  + c.t_lt(z, 1, -255, JMAX + 1, lits=[small, mode, one - nz])
+                  + c.t_and([big, mode, one - cnt[lim + 1]]), "print.upto")
+    # inline: a space after the digits, so Qwen does not read on into the number
+    trail = c.node(c.t_eq(z, 1, -255, JMAX + 1, lits=[small, mode, nz])
+                   + c.t_and([big, mode, jeq(lim + 1)]), "print.trail")
     in_print = [k["fd"][0], c.is_step + c.is_text, one - calling]
     code = {cls: TEXT_CODE + cls - B.TEXT_BASE for cls in (B.NL, B.TR_OPEN, B.TR_CLOSE, B.SPACE)}
     for lits, cls in [([tool, jeq(0)], B.NL), ([tool, jeq(1)], B.TR_OPEN), ([tool, jeq(2)], B.NL),
                       ([tool, nl_end], B.NL), ([tool, trc], B.TR_CLOSE), ([tool, nl_last], B.NL),
-                      ([mode, jeq(0)], B.SPACE)]:
+                      ([mode, jeq(0)], B.SPACE), ([trail], B.SPACE)]:
         case(in_print + lits, 2, code[cls])
     case(in_print + [digit], 2, list(vread[:4]) + [1])  # TEXT_CODE + low nibble
     # who predicts the next token: the circuit on chip tokens and inside a print, else Qwen

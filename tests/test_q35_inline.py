@@ -63,7 +63,9 @@ CASES = [
     ([" ", "5", " +", " ", "7", " ="], []),
     ([" ", "50", " +", " ", "30", " apples", " ="], []),
     ([" ", "30", " ", "40", *TIMES, "50", " ="], []),  # two numbers before the operator
-    ([" ", "50", " =", " ", "30", *TIMES, "40", " ="], []),
+    ([" ", "50", " =", " ", "30", *TIMES, "40", " ="], [("mul", "30", "40")]),  # fresh after =
+    (["x", "^", "2", " =", " ", "4818396", *TIMES, "7", " ="], [("mul", "4818396", "7")]),
+    ([" ", "50", " =", "30", *TIMES, "40", " ="], []),  # a number right after "=" is not counted
     (["x", "4245", *TIMES, "60", " ="], []),  # a letter right before the first number
 ]
 
@@ -77,13 +79,13 @@ def test_scan(tokens, want):
 def test_scan_prints_and_chains():
     bm, calls = run(["$", "12", *TIMES, "34", " =", "$", " ", "and", " ", "408", *TIMES, "2", " ="])
     assert calls == [("mul", "12", "34"), ("mul", "408", "2")]
-    assert printed(bm) == " 408 816"
+    assert printed(bm) == " 408  816 "
     # the printed result is the first number of the next expression
     bm = B.BridgeMachine(bcd.ROM, bcd.QUIRKS)
     bm.text(3)
     calls = bm.qwen(classes([" ", "12", *TIMES, "34", " ="]))
     calls += bm.qwen(classes([*TIMES, "2", " ="]))
-    assert calls == [("mul", "12", "34"), ("mul", "408", "2")] and printed(bm) == " 408 816"
+    assert calls == [("mul", "12", "34"), ("mul", "408", "2")] and printed(bm) == " 408  816 "
 
 
 def test_negative_sub_prints_nothing():
@@ -116,7 +118,7 @@ def test_circuit_with_tool_calls(circuit):
     while not bm.halted:
         bm.step()
     bm.qwen(classes([" ", "675", " -", " ", "5", " =", "."]))
-    assert printed(bm) == " 576???675??? 670"  # ? = the tool response's tags and newlines
+    assert printed(bm) == " 576 ???675??? 670 "  # ? = the tool response's tags and newlines
     check(circuit, bm)
 
 

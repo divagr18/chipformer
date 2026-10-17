@@ -59,8 +59,8 @@ def readout(cells: list[int]) -> list[int]:
 
     i, n = cells[spec.I], min(cells[spec.V], MAX_PRINT)
     digits = [HEX[cells[(i + k) & 0xFFF] & 15] for k in range(n)]
-    if cells[bcd.MODE] & 1:  # an inline call: just " digits"
-        return [SPACE, *digits]
+    if cells[bcd.MODE] & 1:  # an inline call: just " digits " (the space ends the number)
+        return [SPACE, *digits, SPACE] if digits else [SPACE]
     return [NL, TR_OPEN, NL, *digits, NL, TR_CLOSE, NL]
 
 
@@ -101,19 +101,21 @@ class InlineScan:
         neutral = text and (dig or op_tok or t in (SPACE, DOLLAR, LPAREN, BSL, EQ)
                             or (t == COMMA and isd(prev)))
         brk = not neutral
-        if t == TC_OPEN or (brk and not self.in_call):
+        after_eq = prev == EQ and not brk and not self.in_call  # a fresh window after "="
+        if t == TC_OPEN or (brk and not self.in_call) or after_eq:
             self.p = 0
-        if run_start:
+        elif run_start:
             self.p += 1
-            self.d = 0
             if self.p == 1:
                 self.a_safe = prev is not None and (not is_text(prev) or prev in (SPACE, NL, DOLLAR,
                                                                                 LPAREN, WS))
+        if run_start:
+            self.d = 0
         elif cont:
             self.d += 1
-        if brk:
+        if brk or after_eq:
             self.nops = 0
-        if op_tok:
+        elif op_tok:
             self.nops += 1
         if dig and self.p in (1, 2):
             self.lens[self.p] = self.d + 1 if self.d < MAX_ARG else 0
