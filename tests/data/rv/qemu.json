@@ -199,6 +199,14 @@
   "exit": 0,
   "stdout": ""
  },
+ "rv32um-div": {
+  "exit": 0,
+  "stdout": ""
+ },
+ "rv32um-divu": {
+  "exit": 0,
+  "stdout": ""
+ },
  "rv32um-mul": {
   "exit": 0,
   "stdout": ""
@@ -212,6 +220,26 @@
   "stdout": ""
  },
  "rv32um-mulhu": {
+  "exit": 0,
+  "stdout": ""
+ },
+ "rv32um-rem": {
+  "exit": 0,
+  "stdout": ""
+ },
+ "rv32um-remu": {
+  "exit": 0,
+  "stdout": ""
+ },
+ "rv32uzba-sh1add": {
+  "exit": 0,
+  "stdout": ""
+ },
+ "rv32uzba-sh2add": {
+  "exit": 0,
+  "stdout": ""
+ },
+ "rv32uzba-sh3add": {
   "exit": 0,
   "stdout": ""
  }

@@ -1,16 +1,21 @@
-/* The chipformer RV32 address map (P1): RAM at 0 (data / rodata / TLS / bss / heap from 0x100,
-   the stack below 0x8000), code in ROM at 0x10000 (128 KB). crt0 points tp at __tls_base (the
-   single thread's TLS block: .tdata then .tbss). */
+/* The chipformer RV32 address map (P2): RAM at 0 (data / TLS / bss / heap from 0x100, the stack
+   below 0x8000), read-only data in the DROM at 0x20000 (128 KB), code in the ROM at 0x40000
+   (256 KB). crt0 points tp at __tls_base (the single thread's TLS block: .tdata then .tbss). */
 ENTRY(_start)
 MEMORY
 {
   RAM (rw) : ORIGIN = 0x100, LENGTH = 0x7F00
-  ROM (rx) : ORIGIN = 0x10000, LENGTH = 128K
+  DROM (r) : ORIGIN = 0x20000, LENGTH = 128K
+  ROM (rx) : ORIGIN = 0x40000, LENGTH = 256K
 }
 SECTIONS
 {
   .text : { *(.text.init) *(.text .text.*) } > ROM
-  .data : { *(.rodata .rodata.* .srodata .srodata.*) *(.data .data.* .sdata .sdata.*) } > RAM
+  .rodata : {
+    *(.rodata .rodata.* .srodata .srodata.*)
+    *(.init_array .init_array.* .fini_array .fini_array.* .eh_frame .eh_frame_hdr)
+  } > DROM
+  .data : { *(.data .data.* .sdata .sdata.*) } > RAM
   .tdata : { __tls_base = .; *(.tdata .tdata.*) } > RAM
   .tbss : { *(.tbss .tbss.*) } > RAM
   .bss : {

@@ -5,8 +5,13 @@ SECTIONS
 {
   . = 0x100000;
   .text : { *(.text.init) *(.text .text.*) }
+  . = 0x180000;
+  .rodata : {
+    *(.rodata .rodata.* .srodata .srodata.*)
+    *(.init_array .init_array.* .fini_array .fini_array.* .eh_frame .eh_frame_hdr)
+  }
   . = 0x200000;
-  .data : { *(.rodata .rodata.* .srodata .srodata.*) *(.data .data.* .sdata .sdata.*) }
+  .data : { *(.data .data.* .sdata .sdata.*) }
   .tdata : { __tls_base = .; *(.tdata .tdata.*) }
   .tbss : { *(.tbss .tbss.*) }
   .bss : {

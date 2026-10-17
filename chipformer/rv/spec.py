@@ -16,12 +16,15 @@ Token families (chip vocabulary ids from 0):
   BYTE  final; putchar (ecall a7 = 1): the byte a0 & 255
   FLT   not final; a fault: payload = cause (FAULTS), then 8 HEX digits of the PC, then HALT
   HEX   not final; a hex digit of a fault record
+  QS    not final; DIV/DIVU/REM/REMU: k0, the index of the first quotient digit computed (0..8)
+  QD    not final; a quotient digit: payload k << 4 | q (digit k of 8, most significant first)
   NT, ST0, ST1, SS0, SS1, HALT   final controls (ST/SS: the RAM value head, address bit 6)
   GO    not final: the start of a run (after a state snapshot)
 
 Records:
 
   rd-writing instruction (ALU, MUL, load, LUI, AUIPC, CSR read)  F0 | V F1 | V V F2 (by size)
+  DIV / DIVU / REM / REMU with rd != x0                          QS QD.. then the value record
   the same with rd = x0, not-taken branch, FENCE                NT
   taken branch, JAL, JALR                                        J  (the link is in-circuit)
   SW                                                             ST0 / ST1
@@ -31,15 +34,20 @@ Records:
   a fault                                                        FLT(cause) HEX x 8 HALT
   before the instruction, when n == 63                           R
 
-Memory (P1):
+Memory (P2):
 
-  RAM  0x0000_0000 + 32 KB   words; data / .rodata / bss / heap from 0x100, the stack below
-                             0x8000 (data pointers below 16 KB fit a 1-token value)
-  ROM  0x0001_0000 + 128 KB  code only, pre-decoded (rom_fields), filled from a snapshot
+  RAM   0x0000_0000 + 32 KB   words; data / bss / heap from 0x100, the stack below 0x8000
+                              (data pointers below 16 KB fit a 1-token value)
+  DROM  0x0002_0000 + 128 KB  read-only data (.rodata), bytes; loads only
+  ROM   0x0004_0000 + 256 KB  code only, pre-decoded (ref.rom_word), filled from a snapshot
+
+A DIV-class record: QS(k0), then QD(k << 4 | q_k) for k = k0..7, then the result's value record.
+q_k are the hex digits of |A| / |B| (most significant first); k0 skips digits that are known to
+be 0 from the operands' sizes (see ref.div_start), so small quotients take few tokens.
 """
 
 FAMILY_SIZES = [("V", 1 << 15), ("F0", 1 << 15), ("F1", 1 << 15), ("F2", 4), ("J", 1 << 16),
-                ("R", 1 << 16), ("BYTE", 256), ("FLT", 8), ("HEX", 16)]
+                ("R", 1 << 16), ("BYTE", 256), ("FLT", 8), ("HEX", 16), ("QS", 16), ("QD", 128)]
 FAMILIES = {}
 _base = 0
 for _n, _s in FAMILY_SIZES:
@@ -55,7 +63,8 @@ PAYLOAD_BITS = {n: (s - 1).bit_length() for n, s in FAMILY_SIZES}
 FAULTS = ["illegal", "ebreak", "misaligned load", "misaligned store", "load out of range",
           "store out of range", "bad jump", "ecall"]
 
-ROM_BASE, ROM_WORDS = 0x10000, 1 << 15  # 128 KB (two sublayers)
+ROM_BASE, ROM_WORDS = 0x40000, 1 << 16  # 256 KB of code (two sublayers)
+DROM_BASE, DROM_WORDS = 0x20000, 1 << 15  # 128 KB of read-only data (one sublayer)
 RAM_BASE, RAM_WORDS = 0x0, 1 << 13  # 32 KB (two sublayers)
 DATA_BASE = 0x100  # .data starts here (address 0 stays a null pointer)
 SP_INIT = RAM_BASE + 4 * RAM_WORDS

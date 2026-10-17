@@ -1,37 +1,59 @@
-"""Reference RV32IM: an ISA emulator, the pre-decoded ROM, and the trace (records) the circuit
-must produce.
+"""Reference RV32IM + Zba: an ISA emulator, the pre-decoded ROM, and the trace (records) the
+circuit must produce.
 
-``Rv32``      plain RV32IM semantics (cross-checked against qemu-riscv32 on gcc-built ELFs).
-``rom_fields``  the circuit's view of an instruction word: (uop, rdw, rs1, rs2, imm). The ROM is a
-              compiled image, so static facts are folded in: rdw = rd if the instruction writes
-              rd else 0, AUIPC/LUI and the stub CSR reads are constants (imm = the value), branch
-              and JAL targets are ROM word indices (bit 16: the target is bad), ECALL reads a7
-              and a0 as rs1 / rs2.
+``Rv32``      plain RV32IM + Zba semantics (cross-checked against qemu-riscv32 on gcc-built ELFs).
+``rom_word``  the circuit's view of an instruction: one pre-decoded 32-bit ROM word (see below).
 ``Machine``   the traced machine: ``record()`` returns the next record's tokens and commits it.
+
+The ROM word is four bytes, each a field the circuit decodes in one MLP stage:
+
+  b0 = uop | S0 << 7        b1 = RD << 3 | S1..S3     b2 = RS1 << 3 | S4..S6     b3 = RS2 << 3 | S7..S9
+
+RD / RS1 / RS2 are 5-bit register slots (the regfile's three read ports query them) and S0..S9
+are spare bits. Static facts are folded in, so every format fits:
+
+  R-type (ALU, MUL, DIV, Zba)   RD = rd, RS1 = rs1, RS2 = rs2
+  I-type (ALU imm, loads, JALR)  RD = rd, RS1 = rs1, imm12 = RS2 (bits 0..4) + S0..S6 (bits 5..11)
+  stores                         RD = the data register, RS1 = base, imm12 as I-type
+  branches                       RS1, RS2; the target as a signed word offset: RD (bits 0..4) +
+                                 S0..S5 (bits 5..10); S6 = the target is bad (misaligned / not ROM)
+  JAL                            RD = rd; the target's ROM word index: RS1 (0..4) + RS2 (5..9) +
+                                 S0..S5 (10..15); S6 = bad
+  LUI / AUIPC                    RD = rd; the value's upper 20 bits: RS1 (0..4) + RS2 (5..9) +
+                                 S0..S9 (10..19); AUIPC's are (pc + imm) >> 12 (its low 12 bits
+                                 are the PC's, in-circuit)
+  CSR reads (stubs)              LUI rd, 0, or MISA rd; anything else ILLEGAL
+  ECALL                          RS1 = 17 (a7), RS2 = 10 (a0)
 """
 
 from dataclasses import dataclass, field
 
 from chipformer.rv import spec as S
 
-UOPS = ["ILLEGAL", "CONST", "ADDI", "SLTI", "SLTIU", "XORI", "ORI", "ANDI", "SLLI", "SRLI",
-        "SRAI", "ADD", "SUB", "SLL", "SLT", "SLTU", "XOR", "SRL", "SRA", "OR", "AND",
+UOPS = ["ILLEGAL", "LUI", "AUIPC", "MISA",
+        "ADDI", "SLTI", "SLTIU", "XORI", "ORI", "ANDI", "SLLI", "SRLI", "SRAI",
+        "ADD", "SUB", "SLL", "SLT", "SLTU", "XOR", "SRL", "SRA", "OR", "AND",
         "LB", "LH", "LW", "LBU", "LHU", "SB", "SH", "SW",
         "BEQ", "BNE", "BLT", "BGE", "BLTU", "BGEU", "JAL", "JALR",
         "ECALL", "EBREAK", "FENCE",
         "MUL", "MULH", "MULHSU", "MULHU", "DIV", "DIVU", "REM", "REMU",
-        "CSRRW", "CSRRS", "CSRRC", "CSRRWI", "CSRRSI", "CSRRCI"]
-# uops 64..127 are reserved for the custom-0 / custom-1 accelerators (P2)
+        "SH1ADD", "SH2ADD", "SH3ADD"]
+# uops 64..127 are reserved for the custom-0 / custom-1 accelerators
 CSR_STUBS = {0xC00: 0, 0xC01: 0, 0xC02: 0, 0xC80: 0, 0xC81: 0, 0xC82: 0, 0xF14: 0,
              0x301: S.MISA}  # cycle, time, instret (+h), mhartid, misa
 U = {n: i for i, n in enumerate(UOPS)}
-WRITES_RD = {"CONST", "ADDI", "SLTI", "SLTIU", "XORI", "ORI", "ANDI", "SLLI", "SRLI", "SRAI",
-             "ADD", "SUB", "SLL", "SLT", "SLTU", "XOR", "SRL", "SRA", "OR", "AND",
+WRITES_RD = {"LUI", "AUIPC", "MISA", "ADDI", "SLTI", "SLTIU", "XORI", "ORI", "ANDI", "SLLI",
+             "SRLI", "SRAI", "ADD", "SUB", "SLL", "SLT", "SLTU", "XOR", "SRL", "SRA", "OR", "AND",
              "LB", "LH", "LW", "LBU", "LHU", "JAL", "JALR",
-             "MUL", "MULH", "MULHSU", "MULHU", "DIV", "DIVU", "REM", "REMU"}
-MUL_OPS = {"MUL", "MULH", "MULHSU", "MULHU"}  # (DIV / REM: libgcc in P1, an illegal fault here)
+             "MUL", "MULH", "MULHSU", "MULHU", "DIV", "DIVU", "REM", "REMU",
+             "SH1ADD", "SH2ADD", "SH3ADD"}
+MUL_OPS = {"MUL", "MULH", "MULHSU", "MULHU"}
+DIV_OPS = {"DIV", "DIVU", "REM", "REMU"}
+ZBA = {"SH1ADD": 1, "SH2ADD": 2, "SH3ADD": 3}
 IMM_OPS = {"ADDI", "SLTI", "SLTIU", "XORI", "ORI", "ANDI", "SLLI", "SRLI", "SRAI"}
 BRANCH_OPS = {"BEQ", "BNE", "BLT", "BGE", "BLTU", "BGEU"}
+LOAD_OPS = {"LB", "LH", "LW", "LBU", "LHU"}
+STORE_OPS = {"SB", "SH", "SW"}
 M32 = 0xFFFFFFFF
 
 
@@ -84,6 +106,8 @@ def decode(w: int) -> Inst:
             return Inst("SUB" if f3 == 0 else "SRA", rd, rs1, rs2)
         if f7 == 1:
             return Inst(["MUL", "MULH", "MULHSU", "MULHU", "DIV", "DIVU", "REM", "REMU"][f3], rd, rs1, rs2)
+        if f7 == 0x10 and f3 in (2, 4, 6):
+            return Inst({2: "SH1ADD", 4: "SH2ADD", 6: "SH3ADD"}[f3], rd, rs1, rs2)
     if w == 0x00000073:
         return Inst("ECALL")
     if opc == 0x73 and f3 in (1, 2, 3, 5, 6, 7):
@@ -135,6 +159,8 @@ def alu(op: str, a: int, b: int) -> int:
         r = sa if sb == 0 else (0 if (sa, sb) == (-1 << 31, -1) else sa - sb * int(sa / sb))
     elif op == "REMU":
         r = a if b == 0 else a % b
+    elif op in ZBA:
+        r = (a << ZBA[op]) + b
     else:
         raise ValueError(op)
     return r & M32
@@ -146,13 +172,52 @@ def taken(op: str, a: int, b: int) -> bool:
             "BLTU": a < b, "BGEU": a >= b}[op]
 
 
+def nibbles_used(v: int) -> int:
+    """How many of the 8 nibble prefixes v >> 4i (i = 0..7) are nonzero."""
+    return sum(1 for i in range(8) if v >> 4 * i)
+
+
+def div_start(op: str, a: int, b: int) -> int:
+    """k0, the first quotient digit a DIV-class record computes (digits 0..k0-1 are 0).
+
+    |A| < 16^dA and |B| >= 16^(dB-1), so |A| / |B| has at most dA - dB + 1 hex digits. dA counts
+    the nonzero prefixes of a's raw bits (8 when a negative signed operand sets bit 31: an
+    overestimate, which is safe) and dB those of |B| - 1 for a negative signed b, else of b (an
+    underestimate when b < 0, also safe). b = 0 computes all 8 digits (the quotient is all ones)."""
+    sb = op in ("DIV", "REM") and b >> 31
+    da = nibbles_used(a)
+    db = nibbles_used((~b & M32) if sb else b)
+    return 0 if b == 0 else min(max(7 - da + db, 0), 8)
+
+
+def div_parts(op: str, a: int, b: int) -> tuple[int, list[int], int]:
+    """(k0, the quotient digits k0..7 of |A| / |B|, the result) of a DIV-class instruction."""
+    signed = op in ("DIV", "REM")
+    sa, sb = signed and a >> 31 == 1, signed and b >> 31 == 1
+    ua, ub = (-a) & M32 if sa else a, (-b) & M32 if sb else b
+    q = ua // ub if ub else M32
+    k0 = div_start(op, a, b)
+    assert q >> 4 * (8 - k0) == 0 if k0 < 8 else q == 0, (op, a, b, k0)
+    digits = [q >> 4 * (7 - k) & 15 for k in range(k0, 8)]
+    qs = (-q) & M32 if sa != sb and b else q  # the signed quotient
+    res = qs if op in ("DIV", "DIVU") else (a - qs * b) & M32
+    assert res == alu(op, a, b), (op, a, b)
+    return k0, digits, res
+
+
+def div_record(op: str, a: int, b: int) -> list[int]:
+    k0, digits, res = div_parts(op, a, b)
+    return ([S.tok("QS", k0)] + [S.tok("QD", (k0 + i) << 4 | q) for i, q in enumerate(digits)]
+            + S.value_record(res))
+
+
 class Fault(Exception):
     pass
 
 
 @dataclass
 class Rv32:
-    """Plain RV32IM with a flat byte memory (dict pages) and ecall exit/putchar."""
+    """Plain RV32IM + Zba with a flat byte memory (dict pages) and ecall exit/putchar."""
 
     mem: dict[int, int] = field(default_factory=dict)
     x: list[int] = field(default_factory=lambda: [0] * 32)
@@ -188,12 +253,12 @@ class Rv32:
                 nxt = (self.pc + ins.imm) & M32
         elif op == "EBREAK":
             self.halted = True
-        elif op in ("LB", "LH", "LW", "LBU", "LHU"):
+        elif op in LOAD_OPS:
             ea = (a + ins.imm) & M32
             n = {"LB": 1, "LBU": 1, "LH": 2, "LHU": 2, "LW": 4}[op]
             v = self.load(ea, n)
             res = (sx(v, 8 * n) if op in ("LB", "LH") else v) & M32
-        elif op in ("SB", "SH", "SW"):
+        elif op in STORE_OPS:
             ea = (a + ins.imm) & M32
             self.store(ea, b, {"SB": 1, "SH": 2, "SW": 4}[op])
         elif op == "ECALL":
@@ -209,8 +274,8 @@ class Rv32:
                 self.halted = True
         elif op == "FENCE":
             pass
-        elif op == "ILLEGAL":
-            raise Fault(f"illegal instruction {w:#010x} at {self.pc:#x}")
+        elif op == "ILLEGAL" or op.startswith("CSR"):
+            raise Fault(f"unsupported instruction {w:#010x} at {self.pc:#x}")
         elif op in IMM_OPS:
             res = alu(op, a, ins.imm & M32)
         else:
@@ -231,33 +296,52 @@ def csr_read(ins: Inst) -> int | None:
     return CSR_STUBS.get(ins.imm) if pure else None
 
 
-def rom_target(pc: int, off: int) -> int:
-    """A static jump target as a ROM word index, with bit 16 set if it is not a valid target."""
-    t = (pc + off) & M32
-    ok = t % 4 == 0 and S.ROM_BASE <= t < S.ROM_BASE + 4 * S.ROM_WORDS
-    return ((t - S.ROM_BASE) >> 2 & 0xFFFF) | (0 if ok else 1 << 16)
+def in_rom(t: int) -> bool:
+    return t % 4 == 0 and S.ROM_BASE <= t < S.ROM_BASE + 4 * S.ROM_WORDS
 
 
-def rom_fields(w: int, pc: int) -> tuple[int, int, int, int, int]:
-    """(uop, rdw, rs1, rs2, imm & 0xFFFFFFFF) of the instruction word w at pc."""
+def pack(uop: str, rd: int = 0, rs1: int = 0, rs2: int = 0, spare: int = 0) -> int:
+    """The ROM word from its uop, register slots and spare bits S0..S9."""
+    b0 = U[uop] | (spare & 1) << 7
+    b1 = rd << 3 | (spare >> 1 & 7)
+    b2 = rs1 << 3 | (spare >> 4 & 7)
+    b3 = rs2 << 3 | (spare >> 7 & 7)
+    return b0 | b1 << 8 | b2 << 16 | b3 << 24
+
+
+def rom_word(w: int, pc: int) -> int:
+    """The pre-decoded ROM word of the instruction word w at pc (format in the module doc)."""
     ins = decode(w)
-    op = ins.op
-    imm = ins.imm
-    rs1, rs2 = ins.rs1, ins.rs2
-    if op in ("LUI", "AUIPC"):
-        imm = ins.imm if op == "LUI" else pc + ins.imm
-        op = "CONST"
-    elif op.startswith("CSR"):
+    op, imm = ins.op, ins.imm
+    if op.startswith("CSR"):
         v = csr_read(ins)
-        op, imm, rs1 = ("CONST", v, 0) if v is not None else ("ILLEGAL", 0, 0)
-    elif op in ("DIV", "DIVU", "REM", "REMU"):
-        op = "ILLEGAL"
-    elif op == "JAL" or op in BRANCH_OPS:
-        imm = rom_target(pc, ins.imm)
-    elif op == "ECALL":
-        rs1, rs2 = 17, 10  # a7 (the call) and a0 (its argument)
-    rdw = ins.rd if op in WRITES_RD else 0
-    return U[op], rdw, rs1, rs2, imm & M32
+        if v is None:
+            return pack("ILLEGAL")
+        return pack("MISA", ins.rd) if v else pack("LUI", ins.rd)
+    if op in ("LUI", "AUIPC"):
+        up = (imm if op == "LUI" else pc + imm) >> 12 & 0xFFFFF
+        return pack(op, ins.rd, up & 31, up >> 5 & 31, up >> 10)
+    if op in IMM_OPS or op in LOAD_OPS or op == "JALR":
+        i = imm & 0xFFF
+        return pack(op, ins.rd, ins.rs1, i & 31, i >> 5)
+    if op in STORE_OPS:
+        i = imm & 0xFFF
+        return pack(op, ins.rs2, ins.rs1, i & 31, i >> 5)
+    if op in BRANCH_OPS:
+        t = (pc + imm) & M32
+        off = (imm >> 2) & 0x7FF  # signed word offset, 11 bits
+        bad = int(not in_rom(t))
+        return pack(op, off & 31, ins.rs1, ins.rs2, off >> 5 | bad << 6)
+    if op == "JAL":
+        t = (pc + imm) & M32
+        wi = (t - S.ROM_BASE) >> 2 & 0xFFFF
+        bad = int(not in_rom(t))
+        return pack(op, ins.rd, wi & 31, wi >> 5 & 31, wi >> 10 | bad << 6)
+    if op == "ECALL":
+        return pack(op, 0, 17, 10)
+    if op in ("EBREAK", "FENCE", "ILLEGAL"):
+        return pack(op)
+    return pack(op, ins.rd, ins.rs1, ins.rs2)  # R-type
 
 
 # --- the traced machine -----------------------------------------------------------------------
@@ -265,7 +349,7 @@ def rom_fields(w: int, pc: int) -> tuple[int, int, int, int, int]:
 
 @dataclass
 class Machine:
-    """State the trace commits: registers, RAM words, anchor, n. ROM is read-only."""
+    """State the trace commits: registers, RAM words, anchor, n. ROM and DROM are read-only."""
 
     rom: list[int]  # instruction words from ROM_BASE
     ram: list[int]  # words from RAM_BASE
@@ -274,6 +358,7 @@ class Machine:
     n: int = 0
     halted: bool = False
     steps: int = 0  # instructions executed
+    drom: bytes = b""  # read-only data from DROM_BASE
 
     @classmethod
     def from_program(cls, prog, entry: int | None = None) -> "Machine":
@@ -287,7 +372,9 @@ class Machine:
         x[2] = S.SP_INIT
         rom = list(prog.text) + [0] * (S.ROM_WORDS - len(prog.text))
         e = prog.entry if entry is None else entry
-        return cls(rom, ram, x, (e - S.ROM_BASE) >> 2)
+        rodata = getattr(prog, "rodata", b"")
+        assert len(rodata) <= 4 * S.DROM_WORDS, "rodata does not fit the DROM"
+        return cls(rom, ram, x, (e - S.ROM_BASE) >> 2, drom=bytes(rodata))
 
     out: bytearray = field(default_factory=bytearray)  # putchar output
     fault: tuple[int, int] | None = None  # (cause, pc) of the fault that halted the run
@@ -299,6 +386,14 @@ class Machine:
 
     def ram_index(self, ea: int) -> int | None:
         return (ea - S.RAM_BASE) >> 2 if 0 <= ea - S.RAM_BASE < 4 * S.RAM_WORDS else None
+
+    def drom_word(self, ea: int) -> int | None:
+        """The DROM word holding byte ea, or None outside the DROM."""
+        o = ea - S.DROM_BASE
+        if not 0 <= o < 4 * S.DROM_WORDS:
+            return None
+        o &= ~3
+        return int.from_bytes(self.drom[o:o + 4].ljust(4, b"\0"), "little")
 
     def record(self) -> list[int]:
         """The next record's tokens; commits it (state as after its last token)."""
@@ -325,7 +420,7 @@ class Machine:
             return [S.tok("NT")]
 
         def jump(target, link):
-            if target % 4 or not S.ROM_BASE <= target < S.ROM_BASE + 4 * S.ROM_WORDS:
+            if not in_rom(target):
                 return fault("bad jump")
             if link and ins.rd:
                 x[ins.rd] = (pc + 4) & M32
@@ -343,17 +438,18 @@ class Machine:
                 return jump((pc + ins.imm) & M32, False)
             self.n += 1
             return [S.tok("NT")]
-        if op in ("LB", "LH", "LW", "LBU", "LHU"):
+        if op in LOAD_OPS:
             ea = (a + ins.imm) & M32
             n = {"LB": 1, "LBU": 1, "LH": 2, "LHU": 2, "LW": 4}[op]
             if ea % n:
                 return fault("misaligned load")
             i = self.ram_index(ea)
-            if i is None:
+            word = self.ram[i] if i is not None else self.drom_word(ea)
+            if word is None:
                 return fault("load out of range")
-            wv = self.ram[i] >> 8 * (ea & 3) & ((1 << 8 * n) - 1)
+            wv = word >> 8 * (ea & 3) & ((1 << 8 * n) - 1)
             return commit_rd(sx(wv, 8 * n) if op in ("LB", "LH") else wv)
-        if op in ("SB", "SH", "SW"):
+        if op in STORE_OPS:
             ea = (a + ins.imm) & M32
             n = {"SB": 1, "SH": 2, "SW": 4}[op]
             if ea % n:
@@ -387,8 +483,14 @@ class Machine:
         if op == "FENCE":
             self.n += 1
             return [S.tok("NT")]
-        if op in ("ILLEGAL", "DIV", "DIVU", "REM", "REMU"):
+        if op == "ILLEGAL":
             return fault("illegal")
+        if op in DIV_OPS:
+            self.n += 1
+            if not ins.rd:
+                return [S.tok("NT")]
+            x[ins.rd] = div_parts(op, a, b)[2]
+            return div_record(op, a, b)
         if op in IMM_OPS:
             return commit_rd(alu(op, a, ins.imm & M32))
         return commit_rd(alu(op, a, b))

@@ -22,24 +22,26 @@ def segments(path) -> tuple[int, list[tuple[int, bytes]]]:
 
 
 def program(path) -> Program:
-    """A ROM-map ELF as a Program: code words from ROM_BASE, data bytes from RAM_BASE."""
+    """A ROM-map ELF as a Program: code words from ROM_BASE, read-only data from DROM_BASE,
+    data bytes from RAM_BASE."""
     entry, segs = segments(path)
-    text = bytearray()
-    data = bytearray()
+    regions = {"rom": (S.ROM_BASE, 4 * S.ROM_WORDS), "drom": (S.DROM_BASE, 4 * S.DROM_WORDS),
+               "ram": (S.RAM_BASE, 4 * S.RAM_WORDS)}
+    bufs = {k: bytearray() for k in regions}
     for vaddr, blob in segs:
-        if vaddr >= S.ROM_BASE:
-            end = vaddr - S.ROM_BASE + len(blob)
-            text += bytes(max(0, end - len(text)))
-            text[vaddr - S.ROM_BASE:end] = blob
+        for k, (base, size) in regions.items():
+            if base <= vaddr and vaddr + len(blob) <= base + size:
+                b = bufs[k]
+                end = vaddr - base + len(blob)
+                b += bytes(max(0, end - len(b)))
+                b[vaddr - base:end] = blob
+                break
         else:
-            assert S.RAM_BASE <= vaddr and vaddr + len(blob) <= S.RAM_BASE + 4 * S.RAM_WORDS, \
-                f"segment at {vaddr:#x} outside ROM/RAM"
-            end = vaddr - S.RAM_BASE + len(blob)
-            data += bytes(max(0, end - len(data)))
-            data[vaddr - S.RAM_BASE:end] = blob
-    text += bytes(-len(text) % 4)
+            raise AssertionError(f"segment at {vaddr:#x} (+{len(blob)}) outside ROM/DROM/RAM")
+    text = bufs["rom"] + bytes(-len(bufs["rom"]) % 4)
     words = [int.from_bytes(text[i:i + 4], "little") for i in range(0, len(text), 4)]
-    return Program(words, bytes(data), {"_start": entry}, data_base=S.RAM_BASE)
+    return Program(words, bytes(bufs["ram"]), {"_start": entry}, data_base=S.RAM_BASE,
+                   rodata=bytes(bufs["drom"]))
 
 
 def load_into(cpu, path) -> None:

@@ -82,10 +82,29 @@ def test_value_records_roundtrip():
         assert [S.is_final(t) for t in rec] == [False] * (len(rec) - 1) + [True]
 
 
-def test_rom_fields_cover_rv32i():
+def test_rom_words_cover_the_programs():
+    """Every instruction of every program pre-decodes to a known uop (only CSR writes, which
+    the machine does not have, become ILLEGAL)."""
     for name in sorted(QEMU):
         p = elf.program(DATA / f"{name}.elf")
         for i, w in enumerate(p.text):
-            if w:
-                uop, rdw, _, _, imm = ref.rom_fields(w, S.ROM_BASE + 4 * i)
-                assert 0 <= uop < 256 and 0 <= rdw < 32 and 0 <= imm < 2**32
+            op = ref.decode(w).op
+            if w and op != "ILLEGAL":
+                rw = ref.rom_word(w, S.ROM_BASE + 4 * i)
+                assert 0 < rw & 0x7F < len(ref.UOPS) or op.startswith("CSR"), (name, hex(w))
+
+
+def test_div_records():
+    """DIV-class records: QS(k0), the digits k0..7 of |A| / |B|, then the value; the skipped
+    digits are 0 and the result is the ISA's (div_parts asserts both)."""
+    rng = random.Random(1)
+    M = 0xFFFFFFFF
+    edge = [0, 1, 2, 7, 15, 16, 255, 256, 0x7FFFFFFF, 0x80000000, 0x80000001, M, M - 1, 10, 1000]
+    vals = edge + [rng.getrandbits(rng.choice([4, 8, 16, 24, 32])) for _ in range(500)]
+    for op in ("DIV", "DIVU", "REM", "REMU"):
+        for _ in range(5000):
+            a, b = rng.choice(vals), rng.choice(vals)
+            rec = ref.div_record(op, a, b)
+            k0, digits, res = ref.div_parts(op, a, b)
+            assert S.family(rec[0]) == ("QS", k0) and len(digits) == 8 - k0
+            assert S.decode_value(rec[1 + len(digits):]) == res == ref.alu(op, a, b)

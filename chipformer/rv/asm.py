@@ -1,12 +1,14 @@
 """A small two-pass RV32IM assembler for tests (gcc in WSL is the real toolchain).
 
     label:                      define a label
-    .text / .data               switch section (text at ROM_BASE, data at DATA_BASE)
+    .text / .data / .rodata     switch section (text at ROM_BASE, data at DATA_BASE, rodata at
+                                DROM_BASE)
     .word 1, 2, label           32-bit words      .byte / .half    likewise
     .space N                    N zero bytes      .align N         to 2^N bytes
     ; or #                      comment
 
-Instructions: the RV32I and M base set with ABI register names, plus the pseudo-instructions
+Instructions: RV32IM and Zba (sh1add / sh2add / sh3add) with ABI register names, plus the
+pseudo-instructions
 li, la, mv, not, neg, seqz, snez, nop, j, jr, ret, call, tail, beqz, bnez, blez, bgez, bltz,
 bgtz, bgt, ble, bgtu, bleu.
 """
@@ -14,7 +16,7 @@ bgtz, bgt, ble, bgtu, bleu.
 
 import re
 
-from chipformer.rv.spec import DATA_BASE, ROM_BASE
+from chipformer.rv.spec import DATA_BASE, DROM_BASE, ROM_BASE
 
 ABI = ["zero", "ra", "sp", "gp", "tp", "t0", "t1", "t2", "s0", "s1"] + [f"a{i}" for i in range(8)] \
     + [f"s{i}" for i in range(2, 12)] + ["t3", "t4", "t5", "t6"]
@@ -24,7 +26,8 @@ R_OPS = {  # funct7, funct3 (opcode 0x33)
     "add": (0, 0), "sub": (0x20, 0), "sll": (0, 1), "slt": (0, 2), "sltu": (0, 3), "xor": (0, 4),
     "srl": (0, 5), "sra": (0x20, 5), "or": (0, 6), "and": (0, 7),
     "mul": (1, 0), "mulh": (1, 1), "mulhsu": (1, 2), "mulhu": (1, 3), "div": (1, 4),
-    "divu": (1, 5), "rem": (1, 6), "remu": (1, 7)}
+    "divu": (1, 5), "rem": (1, 6), "remu": (1, 7),
+    "sh1add": (0x10, 2), "sh2add": (0x10, 4), "sh3add": (0x10, 6)}
 I_OPS = {"addi": 0, "slti": 2, "sltiu": 3, "xori": 4, "ori": 6, "andi": 7}
 SH_OPS = {"slli": (0, 1), "srli": (0, 5), "srai": (0x20, 5)}
 LOADS = {"lb": 0, "lh": 1, "lw": 2, "lbu": 4, "lhu": 5}
@@ -77,8 +80,9 @@ def hi_lo(v):
 
 class Program:
     def __init__(self, text: list[int], data: bytes, labels: dict[str, int],
-                 data_base: int = DATA_BASE):
+                 data_base: int = DATA_BASE, rodata: bytes = b""):
         self.text, self.data, self.labels, self.data_base = text, data, labels, data_base
+        self.rodata = rodata  # read-only data from DROM_BASE
 
     @property
     def entry(self) -> int:
@@ -101,11 +105,16 @@ def assemble(src: str) -> Program:
             lines.append((op.lower(), args))
     labels: dict[str, int] = {}
     for pass_ in range(2):
-        text, data = [], bytearray()
+        text, data, rodata = [], bytearray(), bytearray()
         sec = "text"
 
         def here():
-            return ROM_BASE + 4 * len(text) if sec == "text" else DATA_BASE + len(data)
+            if sec == "text":
+                return ROM_BASE + 4 * len(text)
+            return DATA_BASE + len(data) if sec == "data" else DROM_BASE + len(rodata)
+
+        def buf():
+            return data if sec == "data" else rodata
 
         def val(s):
             s = s.strip()
@@ -143,19 +152,19 @@ def assemble(src: str) -> Program:
                 n = {".word": 4, ".half": 2, ".byte": 1}[op]
                 for a in args:
                     v = val(a) & ((1 << 8 * n) - 1)
-                    if sec == "data":
-                        data += v.to_bytes(n, "little")
+                    if sec != "text":
+                        buf().extend(v.to_bytes(n, "little"))
                     else:
                         assert n == 4
                         text.append(v)
                 continue
             if op == ".space":
-                data += bytes(val(args[0]))
+                buf().extend(bytes(val(args[0])))
                 continue
             if op == ".align":
                 a = 1 << val(args[0])
-                if sec == "data":
-                    data += bytes(-len(data) % a)
+                if sec != "text":
+                    buf().extend(bytes(-len(buf()) % a))
                 continue
             if op == ".globl":
                 continue
@@ -250,4 +259,4 @@ def assemble(src: str) -> Program:
                 emit(csr << 20 | reg(a[1]) << 15 | 1 << 12 | 0x73)
             else:
                 raise ValueError(f"unknown instruction {op} {args}")
-    return Program(text, bytes(data), labels)
+    return Program(text, bytes(data), labels, rodata=bytes(rodata))
