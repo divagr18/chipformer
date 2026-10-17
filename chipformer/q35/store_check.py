@@ -94,23 +94,18 @@ def hf_model(c, vocab_tokens: list[int], dtype=None):
     check_bf16("final norm", norm)
     sd["model.norm.weight"] = norm.to(dtype)
     config = Qwen3_5TextConfig(**tc)
-    with torch.device("meta"):  # (no full-size fp32 copy: the weights come in as they are)
+    old = torch.get_default_dtype()
+    torch.set_default_dtype(dtype)  # (no full-size fp32 copy of the model)
+    try:
         model = Qwen3_5ForCausalLM(config)
-    missing, unexpected = model.load_state_dict(sd, strict=False, assign=True)
+    finally:
+        torch.set_default_dtype(old)
+    for p in model.parameters():
+        p.data.zero_()
+    missing, unexpected = model.load_state_dict(sd, strict=False)
     assert not unexpected, unexpected[:5]
-    for name, p in list(model.named_parameters()):  # the inert attention layer: zeros
-        if p.is_meta:
-            mod, attr = model.get_submodule(name.rsplit(".", 1)[0]), name.rsplit(".", 1)[1]
-            setattr(mod, attr, torch.nn.Parameter(torch.zeros(p.shape, dtype=dtype),
-                                                  requires_grad=False))
-    for name, b in list(model.named_buffers()):
-        if b.is_meta:
-            mod, attr = model.get_submodule(name.rsplit(".", 1)[0]), name.rsplit(".", 1)[1]
-            mod.register_buffer(attr, torch.zeros(b.shape, dtype=b.dtype), persistent=False)
+    del sd
     model.tie_weights()
-    from transformers.models.qwen3_5 import modeling_qwen3_5 as q
-
-    model.model.rotary_emb = q.Qwen3_5TextRotaryEmbedding(config=config)
     model.layout = lay
     return model.to(dtype).eval()
 

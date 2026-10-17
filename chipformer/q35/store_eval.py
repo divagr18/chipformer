@@ -66,9 +66,9 @@ class Runner:
             logits[IM_START] = float("-inf")
             t = int(logits.argmax())
             out.append(t)
+            cache, logits = self.feed(cache, [t])  # (the cache holds every token, the end too)
             if t in stop:
                 break
-            cache, logits = self.feed(cache, [t])
         return cache, out
 
     def decode(self, ids: list[int]) -> str:
@@ -291,18 +291,20 @@ def exact(args):
         else:
             sm.call(op, nm)
         sm.qwen_text(plain(rng.randint(5, args.gap)))
+    from chipformer import spec
+
+    # chip tokens -> their merged ids; text tokens -> their Qwen id
     ids = [S.qid_of(t) if S.qid_of(t) is not None else
-           (t + lo if t < lo else S.full_qid(t)) for t in sm.tokens]
-    # chip tokens -> their merged ids; class tokens without an id -> their Qwen id
+           (t + lo if t < spec.VOCAB_SIZE else S.full_qid(t)) for t in sm.tokens]
     pred = []
-    cache = None
     with torch.no_grad():
         from transformers import DynamicCache
 
         cache = DynamicCache(config=r.model.config)
-        for i in range(0, len(ids), 2048):
-            x = torch.tensor([ids[i:i + 2048]], device=r.dev)
+        for i in range(0, len(ids), 1024):
+            x = torch.tensor([ids[i:i + 1024]], device=r.dev)
             lg = r.model(input_ids=x, past_key_values=cache, use_cache=True).logits[0]
+            lg[:, IM_START] = float("-inf")
             pred += lg.argmax(-1).tolist()
     bad = [p for p in range(len(ids) - 1) if sm.generated[p + 1] and pred[p] != ids[p + 1]]
     n = sum(sm.generated[1:])
