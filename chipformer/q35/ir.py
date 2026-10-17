@@ -203,6 +203,12 @@ def silu_ok(x: np.ndarray) -> np.ndarray:
     return (x == 0) | (x >= 18) | (x <= -104)
 
 
+def dead(x: np.ndarray) -> np.ndarray:
+    """x is so negative that silu gives exactly 0 however the hardware rounds it (a gate or key
+    switched off on text tokens by overlay.py: x need not be a bf16 value)."""
+    return bf16(x) <= -104
+
+
 # --- evaluation ---------------------------------------------------------------------
 
 
@@ -217,14 +223,16 @@ def ev(e: Expr, m: np.ndarray) -> np.ndarray:
 def conv(c: Chan, m: np.ndarray, check: bool) -> np.ndarray:
     """silu(conv(projection)) as computed in bf16; must equal the exact value."""
     x = ev(c.expr, m)
+    # without lag taps a dead projection only reaches its own silu
+    off = dead(c.taps[0] * bf16(x)) if not any(c.taps[1:]) else np.zeros(len(x), bool)
     if check:
-        require(is_bf16(x), "projection", x)
+        require(is_bf16(x) | off, "projection", x)
     out = np.zeros_like(x)
     for lag, w in enumerate(c.taps):
         if w:
             out[lag:] += w * x[: len(x) - lag]
     if check:
-        require(is_bf16(out) & silu_ok(out), "conv output (silu input)", out)
+        require((is_bf16(out) & silu_ok(out)) | off, "conv output (silu input)", out)
     return np.maximum(out, 0.0)
 
 
@@ -284,7 +292,7 @@ def eval_head(node: Head, m: np.ndarray, chip: np.ndarray, check: bool) -> None:
     if check:
         require(is_bf16(a) & np.isin(a, list(DECAY)), "decay selector a", a)
         for col, zz in z.items():
-            require(is_bf16(zz) & silu_ok(zz), f"gate z[{col}]", zz)
+            require((is_bf16(zz) & silu_ok(zz)) | dead(zz), f"gate z[{col}]", zz)
         nz = (k > 0).sum(1)
         require(nz <= 1, "key must be one-hot", nz)
         require(~((nz > 0) & ~chip), "key on a text token", nz)
