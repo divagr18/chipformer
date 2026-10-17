@@ -43,6 +43,14 @@ def exact_matmuls() -> None:
 exact_matmuls()  # importing this module makes the process's matmuls safe for the circuit
 
 
+def nonzero_cols(w: torch.Tensor, chunk: int = 16384) -> torch.Tensor:
+    """``(w != 0).any(0)`` without materializing the whole mask (output heads are large)."""
+    nz = torch.zeros(w.shape[1], dtype=torch.bool, device=w.device)
+    for i in range(0, w.shape[0], chunk):
+        nz |= (w[i:i + chunk] != 0).any(0)
+    return nz
+
+
 def _hull(mask: torch.Tensor) -> tuple[int, int]:
     idx = mask.nonzero().flatten()
     return (int(idx[0]), int(idx[-1]) + 1) if len(idx) else (0, 0)
@@ -151,7 +159,7 @@ def compact(model, qwen: bool | str = True, n_chip: int | None = None) -> dict:
     if qwen is True and isinstance(model.lm_head, torch.nn.Linear):
         w = model.lm_head.weight
         emb = lm.embed_tokens.weight
-        c0, c1 = _hull((w != 0).any(0))
+        c0, c1 = _hull(nonzero_cols(w))
         if w.data_ptr() == emb.data_ptr():
             ce0, ce1 = _hull((emb != 0).any(0))
             c0, c1 = min(c0, ce0), max(c1, ce1)

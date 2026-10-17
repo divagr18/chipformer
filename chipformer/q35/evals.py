@@ -53,14 +53,26 @@ KINDS = ("base", "merged", "merged_inline", "merged_plain", "pytool_inline", "py
 # (bridge.InlineScan) at "=", the exact result is injected as text " R " (oraclec: " R,RRR ")
 BIOS_KINDS = ("merged", "merged_inline")  # the prompt starts with the BIOS boot record
 TOOL_KINDS = ("merged", "pytool_inline", "pytool")
-FLAGS = ("think", "nb", "nudge", "fp")  # suffixes: thinking mode, <|im_start|> banned, nudge,
+FLAGS = ("think", "nb", "nudge", "nudge2", "fp", "tc", "mix")  # suffixes: thinking mode, <|im_start|> banned, nudge,
 # fp = RoPE positions frozen on chip tokens (BatchDecoder freeze_chip_positions)
+# tc = chip tokens invisible to Qwen's layers (BatchDecoder transparent_chip)
 CONDS = ("base", "base_think", "merged", "merged_nb", "merged_nudge", "merged_nb_nudge",
-         "merged_inline", "merged_inline_nudge", "merged_inline_fp", "merged_inline_nudge_fp",
-         "base_nudge", "oracle_nudge", "oraclec_nudge", "merged_plain", "pytool_inline", "pytool_inline_nudge", "pytool", "pytool_nudge")
+         "merged_inline", "merged_inline_nudge", "merged_inline_fp", "merged_inline_nudge_fp", "merged_inline_fp_tc", "merged_inline_nudge_fp_tc",
+         "base_nudge", "oracle_nudge", "oraclec_nudge", "oracle_nudge-close", "oracle_nudge2",
+         "oracle_nudge2-close", "merged_plain", "pytool_inline", "pytool_inline_nudge", "pytool", "pytool_nudge")
 IM_START = 248045
+NUDGE2 = ("Exact arithmetic: whenever you write a calculation like `a \\times b =`, `a + b =` or "
+          "`a - b =` with whole numbers, its exact result is filled in right after the `=`. That "
+          "number is final and correct: never write another number after it or recompute it; just "
+          "continue your sentence after it. So never do long multiplication or addition by hand: "
+          "write the whole calculation and let the result appear.")
 NUDGE = ("You have tools for exact arithmetic ({names}). Use them for every arithmetic step "
          "they cover instead of calculating by hand.")
+# mix (a tool kind): products inline, sums and differences of big numbers through the tools
+NUDGE_MIX = ("Exact arithmetic: whenever you write a multiplication of whole numbers like "
+             "`a \\times b =`, its exact result is filled in right after the `=`, so never "
+             "multiply long numbers by hand: write the whole product and let the result appear. "
+             "For additions and subtractions of large numbers, call the add and sub tools.")
 
 
 def parse_cond(cond: str) -> tuple[str, set]:
@@ -323,6 +335,9 @@ class Ctx:
         self.nl = tok("\n", add_special_tokens=False).input_ids[0]
         self.space = tok(" ", add_special_tokens=False).input_ids[0]
         self.digits = {tok(str(d), add_special_tokens=False).input_ids[0] for d in range(10)}
+        # v11 closes an inline result with "$", "$$" or "." (one token each)
+        self.closers = {i[0] for i in (tok(c, add_special_tokens=False).input_ids
+                                       for c in ("$", "$$", ".")) if len(i) == 1}
         self.chip = chip  # (offset, n) or None
         self.think_close = tok.convert_tokens_to_ids("</think>")
         self.think_force = None  # tokens that end an over-budget thinking block (run sets it)
@@ -353,7 +368,7 @@ class Ctx:
         return "".join(parts)
 
 
-def oracle(ctx: Ctx, cmap: dict, commas: bool):
+def oracle(ctx: Ctx, cmap: dict, fmt_: str):
     """Hook for the oracle conditions: feeds every token's class to bridge.InlineScan (the
     circuit's capture rule) and, when it fires at "=", returns " R " as text tokens (nothing for
     A - B < 0), so base Qwen sees what the circuit would print, without chip tokens."""
@@ -377,8 +392,18 @@ def oracle(ctx: Ctx, cmap: dict, commas: bool):
         v = PY_TOOLS[op](int(a), int(b))
         if v < 0:
             return []
-        r = f"{v:,}" if commas else str(v)
-        return [ctx.space] + [comma if c == "," else digit[c] for c in r] + [ctx.space]
+        if fmt_ == "{close}":  # close the math or the sentence after the number
+            text = ctx.tok.decode(out, skip_special_tokens=True)
+            if text.count("$$") % 2:
+                r = f" {v}$$"
+            elif text.replace("$$", "").count("$") % 2:
+                r = f" {v}$"
+            else:
+                r = f" {v}."
+        else:
+            r = fmt_.format(r=v, rc=f"{v:,}")
+        return [ctx.space if c == " " else comma if c == "," else digit[c] if c in digit
+                else ctx.tok(c, add_special_tokens=False).input_ids[0] for c in r]
 
     run.every = True
     return run
@@ -443,8 +468,8 @@ class _Row:
             self.printing = False  # the newline after </tool_response> is the circuit's
         elif self.printing == "inline" and t in ctx.digits:
             pass
-        elif self.printing == "inline" and t == ctx.space:  # v9 closes the number with a space
-            self.printing = False
+        elif self.printing == "inline" and (t == ctx.space or t in ctx.closers):
+            self.printing = False  # v9 closes the number with a space, v11 with $ / $$ / .
         else:
             self.printing = False
             self.n_qwen += 1
@@ -499,6 +524,7 @@ def decode_all(bd, ctx, prompts: list[list[int]], budget: int, hook, on_done) ->
                 on_done(i, r.result())
                 continue
             rows.load_row(b, bd.small, len(prompts[i]))
+            bd.mark_prompt(n, b, prompts[i])  # _tc: its chip slots
             tok[b, 0] = t
             pos[b] = len(prompts[i])
             if rpos is not None:
@@ -567,25 +593,27 @@ def inline_fires(text: str, pred) -> list[dict]:
     first len(true) digits: ``exact`` = the digits start with the true value, ``appended`` = the
     digits Qwen added after it (for A - B < 0, everything shown is Qwen's)."""
     out = []
-    for m in re.finditer(r"\[machine:\d+\]( ?)((?:\d|,(?=\d))*)", text):
+    for m in re.finditer(r"\[machine:\d+\]( ?-?)((?:\d|,(?=\d))*)", text):
         before = MARK.sub("", text[:m.start()])
         if before.rstrip().endswith("</tool_call>") or m.end() == len(text):
             continue  # a tool call, or a run cut off by the budget / context before its print
         e = INLINE_RE.search(before[-200:])
-        shown = m[2].replace(",", "")
+        # v13+ prints A - B < 0 as " -digits" (before: nothing)
+        shown = ("-" if "-" in m[1] else "") + m[2].replace(",", "")
         machine = shown
         f = {"expr": e[0].strip() if e else before[-40:], "printed": shown[:60]}
         if e:
             a, b = int(e[1].replace(",", "")), int(e[3].replace(",", ""))
             op = INLINE_OPS[e[2]]
             v = PY_TOOLS[op](a, b)
-            t = str(v) if v >= 0 else ""
+            t = str(v) if v >= 0 or shown.startswith("-") else ""
             exact = shown.startswith(t)
             machine = t if exact else shown
             f |= {"op": op, "a": a, "b": b, "true": str(v), "exact": exact,
                   "appended": shown[len(t):][:60] if exact else ""}
         later = MARK.sub("", text[m.end():]).replace(",", "")
-        ech = re.match(r" ?(\d+)", later)  # a number Qwen writes right after the print (v9: " R ")
+        # a number Qwen writes right after the print (v9 " R ", v11 " R$" / " R$$" / " R.")
+        ech = re.match(r"(?:\$\$|\$|\.)?[ \t]*\$?[ \t]*(\d+)", later)
         f["echo"] = (None if not ech or not machine or f.get("appended") else
                      "same" if ech[1] == machine else "diff")
         f["reused"] = bool(machine) and machine in later
@@ -602,13 +630,22 @@ def judge(p: dict, text: str, think: bool) -> dict:
     full = text
     m = USER_TURN.search(text)
     lenient = None
-    if m:  # lenient: a oxed{} answer Qwen wrote inside the user turn it made up
+    if m:  # lenient: a boxed answer Qwen wrote inside the user turn it made up
         rest = text[m.start():]
         boxes = [_balanced(rest, b.end()) for b in re.finditer(r"\\boxed\s*\{", rest)]
         v = to_number(boxes[-1]) if boxes else None
         lenient = v if isinstance(v, Fraction) else (Fraction(Decimal(v[0])) if v else None)
         text = text[:m.start()]
     pred, src = extract_answer(text, think)
+    fake_resp = False
+    if pred is None and lenient is None:
+        # lenient: Qwen's last number, counting <tool_response> blocks it wrote itself (with
+        # <|im_start|> banned it sometimes answers inside one instead of continuing)
+        own = re.sub(r"<tool_call>.*?(</tool_call>|$)", " ", MARK.sub(" ", text), flags=re.DOTALL)
+        own = re.sub(r"<\|[^|]*\|>", " ", own)
+        nums = NUM.findall(re.sub(r"(?<=\d),(?=\d{3}\b)", "", own))
+        if nums:
+            lenient, fake_resp = Fraction(Decimal(nums[-1])), True
     gold_steps = {Fraction(s) for s in p.get("steps", [])} | {Fraction(Decimal(p["gold"]))}
     want_calls = [(o, _key(o, Fraction(x), Fraction(y))) for o, x, y in p.get("calls", [])]
     rec_calls = []
@@ -630,7 +667,7 @@ def judge(p: dict, text: str, think: bool) -> dict:
         rec_calls.append(e)
     fires = inline_fires(full, pred)
     return {"pred": fmt(pred) if pred is not None else None, "source": src, "inline": fires,
-            "correct": is_correct(pred, p["gold"]), "user_turn": bool(m),
+            "correct": is_correct(pred, p["gold"]), "user_turn": bool(m), "fake_resp": fake_resp,
             "correct_lenient": is_correct(pred, p["gold"]) or is_correct(lenient, p["gold"]),
             "calls": rec_calls}
 
@@ -681,8 +718,12 @@ def default_model(cond: str) -> str:
 def build_prompt(tok, question: str, cond: str, bios: list[int]) -> list[int]:
     kind, flags = parse_cond(cond)
     msgs = [{"role": "user", "content": question + SUFFIX}]
-    if "nudge" in flags:  # tool kinds: use the tools; others: the inline-arithmetic nudge
-        if kind in TOOL_KINDS:
+    if "nudge" in flags or "nudge2" in flags or "mix" in flags:  # tools: use them; others: inline
+        if "mix" in flags:
+            nudge = NUDGE_MIX
+        elif "nudge2" in flags:  # the inline nudge, plus: the filled-in number is final
+            nudge = NUDGE2
+        elif kind in TOOL_KINDS:
             nudge = NUDGE.format(names=", ".join(tool_names()))
         else:
             from chipformer.q35 import demo
@@ -789,7 +830,9 @@ def run(args) -> None:
         from chipformer.q35.spikes_replay import class_map
 
         cmeta = json.loads((Path(args.class_model) / "chipformer.json").read_text())
-        hook = oracle(ctx, class_map(tok, cmeta), kind == "oraclec")
+        fmt_ = args.oracle_fmt or (" {rc} " if kind == "oraclec" else " {r} ")
+        print(f"oracle format {fmt_!r}", flush=True)
+        hook = oracle(ctx, class_map(tok, cmeta), fmt_)
     banned = []
     if "nb" in flags or kind == "merged_inline":
         gc = Path(mpath) / "generation_config.json"
@@ -823,7 +866,8 @@ def run(args) -> None:
                       eos=sorted(ctx.stop), sizes=[min(args.batch, len(todo))],
                       compile=not args.no_compile,
                       **({"skip_qwen": True} if args.fast and chip else {}),
-                      **({"freeze_chip_positions": True} if "fp" in flags else {}))
+                      **({"freeze_chip_positions": True} if "fp" in flags else {}),
+                      **({"transparent_chip": True} if "tc" in flags else {}))
     if kind == "merged" and not args.no_selftest:  # (tool mode)
         selftest(bd, ctx, tok, bios)
     t0 = time.time()
@@ -885,12 +929,20 @@ def failure(r: dict) -> str:
         return "invalid_call"
     if r.get("user_turn"):
         return "user_turn"
+    if r.get("fake_resp") and r.get("correct_lenient"):
+        return "answer_in_own_tool_response"
     if r["pred"] is None:
         return "no_answer"
     return "qwen_wrong_tools" if r["calls"] else "qwen_wrong"
 
 
-PAIRS = [("oracle_nudge", "base_nudge"), ("oraclec_nudge", "base_nudge"),
+PAIRS = [("merged_inline_nudge-v11", "base_nudge"), ("merged_inline_nudge_fp-v11", "base_nudge"),
+         ("merged_inline_nudge_fp-v11", "merged_inline_nudge-v11"), ("merged_inline-v11", "base"),
+         ("merged_inline_nudge-v11", "oracle_nudge-close"),
+         ("merged_inline_fp-v11", "merged_inline-v11"), ("merged_inline_fp-v11", "base"),
+         ("oracle_nudge", "base_nudge"), ("oraclec_nudge", "base_nudge"),
+         ("oracle_nudge-close", "base_nudge"), ("oracle_nudge2", "base_nudge"),
+         ("oracle_nudge2-close", "base_nudge"),
          ("merged_inline_nudge", "oracle_nudge"), ("merged_inline_fp", "merged_inline"), ("merged_inline_nudge_fp", "merged_inline_nudge"),
          ("merged_inline_nudge_fp", "base_nudge"), ("merged_inline", "base"), ("merged_nb-v9", "base"), ("merged_inline", "merged_nb-v9"),
          ("merged_inline-v8", "base"), ("merged_inline_nudge-v8", "base_nudge"), ("merged_inline_nudge", "base"),
@@ -1085,6 +1137,8 @@ def main() -> None:
     r.add_argument("--tag", help="model tag appended to the condition name (e.g. v6)")
     r.add_argument("--class-model", default=str(ROOT / "dist" / "q4-v9"),
                    help="oracle: merged checkpoint whose text classes define the inline grammar")
+    r.add_argument("--oracle-fmt", help="oracle: injected text, {r} = result, {rc} = with commas "
+                   "(default ' {r} ', oraclec ' {rc} '); name the variant with --tag")
     for name in ("summary", "rescore"):
         s = sub.add_parser(name)
         s.add_argument("--out", default=str(ROOT / "dist" / "evals"))

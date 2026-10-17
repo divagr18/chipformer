@@ -84,18 +84,20 @@ class _Rows:
     """Batched cache: linear-attention layers (stock ``LinearAttentionLayer``), and full-attention
     layers whose ``update`` writes each row at its own position."""
 
-    def __init__(self, cfg, small, batch: int, max_len: int, pos: torch.Tensor):
+    def __init__(self, cfg, small, batch: int, max_len: int, pos: torch.Tensor,
+                 kvpos: torch.Tensor | None = None):
         from transformers.cache_utils import Cache, LinearAttentionLayer, StaticLayer
 
         self.view = max_len  # attention reads slots [0, view): a compile-time constant
         owner = self
+        slot = pos if kvpos is None else kvpos  # KV slot per row (transparent: text count)
 
         class RowKV(StaticLayer):
             def update(self, key_states, value_states, *args, **kwargs):
                 # decode only: one new position per row
-                rows = torch.arange(pos.shape[0], device=pos.device)
-                self.keys[rows, :, pos] = key_states[:, :, 0]
-                self.values[rows, :, pos] = value_states[:, :, 0]
+                rows = torch.arange(slot.shape[0], device=slot.device)
+                self.keys[rows, :, slot] = key_states[:, :, 0]
+                self.values[rows, :, slot] = value_states[:, :, 0]
                 return self.keys[:, :, :owner.view], self.values[:, :, :owner.view]
 
         layers = []
@@ -238,7 +240,8 @@ class BatchDecoder:
                  compile: bool = True, sizes=None, mode: str = "graphs",
                  fullgraph: bool = True, skip_qwen: bool = False, chip_per_full: int = 3,
                  fold_gqa: bool = False, view: int = 0, prefetch: int = 2,
-                 freeze_chip_positions: bool = False, kv_len: str | None = None):
+                 freeze_chip_positions: bool = False, kv_len: str | None = None,
+                 transparent_chip: bool = False):
         from transformers import StaticCache
 
         from chipformer.q35.fast import _n_chip_layers, chip_meta, exact_matmuls
@@ -289,10 +292,19 @@ class BatchDecoder:
         assert not (self.kv_exact and compile), "kv_len='generate' needs compile=False"
         meta = chip_meta(model)
         self.rpos = {}  # batch size -> RoPE position buffer (``pos`` itself unless frozen)
-        self.freeze = freeze_chip_positions and meta is not None
+        self.freeze = (freeze_chip_positions or transparent_chip) and meta is not None
         if meta is not None:
             self.chip_lo = meta["chip_token_offset"]
             self.chip_hi = self.chip_lo + meta["chip_vocab"]
+        # transparent_chip (implies freeze_chip_positions): chip tokens are invisible to Qwen's
+        # layers. A chip-token input leaves their conv windows as they were (the stock model
+        # shifts in a zero), and Qwen's full attention keeps its KV by text position: a chip
+        # token's key goes to the slot the next text token overwrites, so text keys are
+        # contiguous and no query ever reads a chip key. Qwen's decode steps then compute what
+        # they would on the same text with the chip tokens deleted (dist/spikes/b26_*.py).
+        self.transparent = transparent_chip and meta is not None
+        if meta is not None:
+            self.n_chip = _n_chip_layers(model)
         self.skip_qwen = skip_qwen and meta is not None
         if self.skip_qwen:
             self.n_chip, self.chip_dims = _n_chip_layers(model), meta["chip_dims_offset"]
@@ -310,22 +322,37 @@ class BatchDecoder:
             # non-chip tokens before it (chip layers have no RoPE; Qwen sees contiguous text)
             rpos = _mark(torch.zeros(n, dtype=torch.long, device=self.dev)) if self.freeze else pos
             self.rpos[n] = rpos
-            rows = _Rows(self.cfg, self.small, n, self.max_len, pos)
+            transparent = self.transparent
+            kvpos = rpos if transparent else pos  # the KV slot each row writes
+            rows = _Rows(self.cfg, self.small, n, self.max_len, pos, kvpos)
             cache, slots, lm, head = rows.cache, self.slots, self.lm, self.head
+            if transparent:
+                kinds = self.cfg.layer_types
+                qlin = [cache.layers[i] for i in range(self.n_chip, len(kinds))
+                        if kinds[i] == "linear_attention"]
+                lo, hi = self.chip_lo, self.chip_hi
 
             def step(tok, pos):
                 # slots past the view are masked anyway: reading fewer of them is bit-identical
                 # (fully masked key blocks add exact zeros; dist/spikes/b14_fold.py)
-                mask = (slots[None, :rows.view] <= pos[:, None])[:, None, None, :]
+                mask = slots[None, :rows.view] <= kvpos[:, None]
+                if transparent:
+                    ischip = (tok[:, 0] >= lo) & (tok[:, 0] < hi)
+                    saved = [L.conv_states[0].clone() for L in qlin]
                 h = lm(input_ids=tok, position_ids=rpos[:, None], past_key_values=cache,
-                       attention_mask={"full_attention": mask, "linear_attention": None},
+                       attention_mask={"full_attention": mask[:, None, None, :],
+                                       "linear_attention": None},
                        use_cache=True).last_hidden_state[:, -1]
+                if transparent:  # chip inputs: Qwen's conv windows stay as they were
+                    for L, c in zip(qlin, saved):
+                        L.conv_states[0].copy_(torch.where(ischip[:, None, None], c,
+                                                           L.conv_states[0]))
                 return self._argmax(head(h))
 
             chip = kconst = None
             act = _mark(torch.ones(n, dtype=torch.bool, device=self.dev))
             if self.skip_qwen:
-                chip, kconst = self._chip_step(rows, n, act)
+                chip, kconst = self._chip_step(rows, n, act, kvpos)
             if self.compile:
                 # "graphs": inductor kernels, captured below as one plain CUDA graph per step
                 # kind (no cudagraph-tree bookkeeping between the two kinds of step)
@@ -336,7 +363,7 @@ class BatchDecoder:
             self.levels[n] = (rows, tok, pos, step, chip, kconst, act)
         return self.levels[n]
 
-    def _chip_step(self, rows, n, act):
+    def _chip_step(self, rows, n, act, kvpos):
         """The step for rows whose input is a chip token. Qwen's layers are exact no-ops there
         (muted: residual unchanged, DeltaNet state unchanged, conv window shifts in a zero,
         full attention stores a value of 0 under a fixed key; dist/spikes/b5_skip.py checks all
@@ -354,12 +381,13 @@ class BatchDecoder:
         c0 = self.head.c0 if isinstance(self.head, SparseLinear) else 0
         c1 = c0 + w.shape[1]
         if not isinstance(self.head, SparseLinear):
-            from chipformer.q35.fast import _hull
+            from chipformer.q35.fast import _hull, nonzero_cols
 
-            c1 = _hull((w != 0).any(0))[1]
+            c1 = _hull(nonzero_cols(w))[1]
         block = w[:, d0 - c0:c1 - c0].contiguous()
         chip_layers = lm.layers[:n_chip]
         chip_lin = [cache.layers[i] for i in range(n_chip) if kinds[i] == "linear_attention"]
+        transparent = self.transparent
         def chip(tok, pos):
             # rows with act False (text rows waiting for a full step) come out untouched;
             # ``act`` is the level's buffer, all True unless the caller sets it
@@ -374,11 +402,12 @@ class BatchDecoder:
                                                         L.recurrent_states[0], r))
             idx = torch.arange(pos.shape[0], device=pos.device)
             for L, k in zip(attn, kconst):
-                L.keys[idx, :, pos] = torch.where(a3, k, L.keys[idx, :, pos])
-                L.values[idx, :, pos] = torch.where(a3, 0.0, L.values[idx, :, pos])
-            for L in lin:
-                c = L.conv_states[0]
-                c.copy_(torch.where(a3, torch.nn.functional.pad(c[..., 1:], (0, 1)), c))
+                L.keys[idx, :, kvpos] = torch.where(a3, k, L.keys[idx, :, kvpos])
+                L.values[idx, :, kvpos] = torch.where(a3, 0.0, L.values[idx, :, kvpos])
+            if not transparent:  # transparent: Qwen's conv windows stay as they were
+                for L in lin:
+                    c = L.conv_states[0]
+                    c.copy_(torch.where(a3, torch.nn.functional.pad(c[..., 1:], (0, 1)), c))
             h = lm.norm(h)[:, -1, d0:c1]
             return self._argmax(torch.nn.functional.linear(h, block))
 
@@ -411,11 +440,43 @@ class BatchDecoder:
     def _is_text(self, tok):
         return (tok < self.chip_lo) | (tok >= self.chip_hi)
 
+    def chip_mask(self, ids: list[int]) -> torch.Tensor:
+        """[len(ids)] bool on the device: which tokens are chip tokens."""
+        x = torch.tensor(ids, device=self.dev)
+        return (x >= self.chip_lo) & (x < self.chip_hi)
+
+    def mark_prompt(self, n: int, b: int, ids: list[int]) -> None:
+        """Call after loading a prefilled prompt into row ``b`` of the batch-``n`` level. With
+        transparent_chip it moves the row's full-attention KV to text positions (the prefill
+        wrote one slot per token); a no-op otherwise."""
+        if not self.transparent:
+            return
+        text = (~self.chip_mask(ids)).nonzero().flatten()
+        if len(text) == len(ids):
+            return
+        for L in self.levels[n][0].cache.layers:
+            if getattr(L, "keys", None) is not None:
+                L.keys[b, :, :len(text)] = L.keys[b, :, text]
+                L.values[b, :, :len(text)] = L.values[b, :, text]
+
     def _prefill_into(self, cache, ids: list[int]) -> int:
         cache.reset()
         x = torch.tensor([ids], device=self.dev)
+        mask = torch.ones_like(x)
+        if self.transparent:
+            ch = self.chip_mask(ids)
+            if bool(ch.any()):
+                # chip keys are invisible (a chip query keeps its own). A leading run of chip
+                # tokens (the BIOS) also matches Qwen's zero-padded conv window exactly; chip
+                # tokens later in a prompt still shift zeros into the conv windows.
+                n = len(ids)
+                size = next(L.max_cache_len for L in cache.layers if hasattr(L, "max_cache_len"))
+                q = torch.arange(n, device=self.dev)[:, None]
+                k = torch.arange(size, device=self.dev)[None, :]
+                vis = (k <= q) & (~torch.nn.functional.pad(ch, (0, size - n))[None, :] | (k == q))
+                mask = {"full_attention": vis[None, None], "linear_attention": None}
         h = self.lm(input_ids=x, position_ids=self._rope_positions(ids)[None],
-                    attention_mask=torch.ones_like(x), past_key_values=cache,
+                    attention_mask=mask, past_key_values=cache,
                     use_cache=True).last_hidden_state[:, -1:]
         return int(self._argmax(self.head(h)[0, -1]))
 
@@ -445,7 +506,7 @@ class BatchDecoder:
             attn = [rows.cache.layers[i] for i in range(self.n_chip, len(kinds))
                     if kinds[i] == "full_attention"]
             for L, kc in zip(attn, kconst):
-                kc.copy_(L.keys[0, :, k])
+                kc.copy_(L.keys[0, :, int((self.rpos[n] if self.transparent else pos)[0])])
             tok.fill_(boot[k])
             pos.zero_()
             for _ in range(3):
@@ -593,6 +654,7 @@ class BatchDecoder:
                 plen[b] = len(prompts[i])
                 if self.freeze:
                     rpos[b] = sum(not self.chip_lo <= x < self.chip_hi for x in prompts[i])
+                self.mark_prompt(n, b, prompts[i])
                 return
             tok[b, 0] = 0  # an idle row decodes garbage at slot 0 until it is reused
             pos[b] = 0
