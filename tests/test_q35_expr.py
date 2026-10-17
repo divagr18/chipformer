@@ -184,14 +184,22 @@ def test_circuit_scan(circuit, tokens, want):
     check(circuit, bm)
 
 
-def test_circuit_prints_and_tool(circuit):
-    """Negative and inexact results, "...", and the tool calc(expression), in one session."""
+def test_circuit_prints(circuit):
+    """A negative result and "..." in one session."""
     bm, calls = scan([" $", " ", "(", "3", " -", " ", "40", ")", " ", "*", " ", "2", " =", "$",
                       " ", "and", " ", "(", "12", " /", " ", "0", ")", " +", " ", "5", " ="])
-    assert [c[0] for c in calls] == ["eval", "eval"]
+    assert [c[0] for c in calls] == ["eval", "eval"] and printed(bm) == " -74$ ...."
+    bm.text(2)
+    check(circuit, bm)
+
+
+def test_circuit_tool(circuit):
+    """The tool calc(expression): the tape is the call's argument, the result a tool response."""
+    bm = B.BridgeMachine(bcd.ROM, bcd.QUIRKS)
+    bm.text(3)
     bm.calc_call(classes(["(", "3", "+", "4", ")*", "5"]))
     while not bm.halted:
         bm.step()
     bm.text(2)
-    assert printed(bm).endswith("???35???")
+    assert printed(bm) == "???35???"
     check(circuit, bm)
