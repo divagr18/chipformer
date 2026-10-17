@@ -2,41 +2,59 @@
 
 They live in CHIP-8's unused 5XYN space (5XY0 is the usual skip) and work on the BIOS layout
 (bcd.py): digits most significant first at A_ADDR / B_ADDR, lengths at LEN / LEN+1, result at
-R_ADDR. Writes go least significant first so a carry flows from one write to the next.
+R_ADDR. Writes go least significant first so a carry flows from one write to the next. T is a
+jump target in the instruction itself, T = 0x200 + 2 * XY.
 
-    5XY1  BADD   R[0..n) = A + B, n = max(LA, LB) + 1, then V7 = n
+    5XY1  BADD   R[0..n) = A + B, n = max(LA, LB) + 1, then V0 = n, I = R_ADDR; PC = T
     5XY2  BZERO  R[0..n) = 0, n = LA + LB, then V7 = n
-    5XY4  BSUB   R[0..n) = A - B (for A >= B), n = max(LA, LB) + 1, then V7 = n
-    5XY3  BMAC   one schoolbook row with b = B[VX]:
-                 for i = LA-1 .. 0:  R[i+VX+1] = (R[i+VX+1] + A[i] * b + carry) mod 10, carry = ..div 10
-                 then R[VX] = carry
+    5XY4  BSUB   R[0..n) = A - B mod 10^n, n = max(LA, LB) + 1, then V0 = n, I = R_ADDR;
+                 PC = T if A >= B, else the next instruction
+    5XY7  BRSUB  R[0..n) = B - A (for B >= A), then V0 = n (0 for a tool call: MODE bit 1
+                 clear), I = R_ADDR, MODE |= 8 (the print starts with " -"); PC = T
+    5X03  BMUL   one schoolbook row of A * B; VX = rows done, row r = LB - 1 - VX:
+                 for i = LA-1 .. 0:  R[i+r+1] = (R[i+r+1] + A[i] * B[r] + carry) mod 10, carry = ..div 10
+                 then R[r] = carry, VX += 1, and after the last row V0 = LA + LB, I = R_ADDR;
+                 PC stays (the next row) until the last row
+    5X13  BMUL0  the first row (VX = 0): the same with R read as 0 (no BZERO needed); PC = the
+                 next instruction (a BMUL), or the one after it if LB = 1
+    5008  BTRIM  if mem[I] == 0, V0 >= 2 and I is in the result: V0 -= 1, I += 1, PC stays;
+                 else PC = the next instruction (strips leading zeros before a PRINT)
 
 Each record's values come from the state before the record plus the carry chain inside it, so a
-multiplication costs about LB records of LA + 2 writes instead of thousands of instructions.
+multiplication costs LB records of LA + 4 writes.
 """
 
 from chipformer import spec
 from chipformer.q35.lib import bcd
 
-BADD, BZERO, BMAC, BSUB = 0x1, 0x2, 0x3, 0x4
+BADD, BZERO, BMUL, BSUB, BRSUB, BTRIM = 0x1, 0x2, 0x3, 0x4, 0x7, 0x8
+KINDS = (BADD, BZERO, BMUL, BSUB, BRSUB, BTRIM)
+R_CELLS = 2 * bcd.MAX_DIGITS  # the result region BTRIM can read
+
+
+def target(op: int) -> int:
+    return 0x200 + 2 * (op >> 4 & 0xFF)
 
 
 def macro_writes(cells: list[int], op: int):
     """The record for opcode ``op`` if it is a macro, else None."""
-    if op >> 12 != 5 or op & 0xF not in (BADD, BZERO, BMAC, BSUB):
+    if op >> 12 != 5 or op & 0xF not in KINDS:
         return None
     la, lb = cells[bcd.LEN], cells[bcd.LEN + 1]
     A = [cells[bcd.A_ADDR + i] for i in range(la)]
     B = [cells[bcd.B_ADDR + i] for i in range(lb)]
-    pc = (cells[spec.PC] + 2) & 0xFFF
+    pc = cells[spec.PC]
+    nxt = (pc + 2) & 0xFFF
     kind = op & 0xF
     w = []
-    if kind in (BADD, BSUB):
+    if kind in (BADD, BSUB, BRSUB):
         n = max(la, lb) + 1
         carry = 0
         for k in range(n):  # w-th write is digit k from the right
             a = A[la - 1 - k] if k < la else 0
             b = B[lb - 1 - k] if k < lb else 0
+            if kind == BRSUB:
+                a, b = b, a
             if kind == BADD:
                 s = a + b + carry
                 w.append((bcd.R_ADDR + n - 1 - k, s % 10))
@@ -45,18 +63,37 @@ def macro_writes(cells: list[int], op: int):
                 s = a - b - carry
                 w.append((bcd.R_ADDR + n - 1 - k, s % 10))
                 carry = int(s < 0)
-        w.append((spec.V + 7, n))
+        mode = cells[bcd.MODE]
+        w.append((spec.V, n if kind != BRSUB or mode & 1 else 0))
+        w.append((spec.I, bcd.R_ADDR))
+        if kind == BRSUB:
+            w.append((bcd.MODE, mode | 8))
+        new_pc = nxt if kind == BSUB and carry else target(op)
     elif kind == BZERO:
         n = la + lb
         w = [(bcd.R_ADDR + k, 0) for k in range(n)] + [(spec.V + 7, n)]
-    else:
-        row = cells[spec.V + (op >> 8 & 0xF)]
-        b = B[row] if row < lb else 0
+        new_pc = nxt
+    elif kind == BMUL:
+        x, first = op >> 8 & 0xF, op >> 4 & 0xF == 1
+        d = cells[spec.V + x]
+        row = lb - 1 - d
+        b = B[row] if 0 <= row < lb else 0
         carry = 0
         for i in range(la - 1, -1, -1):
             k = i + row + 1
-            t = cells[bcd.R_ADDR + k] + A[i] * b + carry
+            t = (0 if first else cells[bcd.R_ADDR + k]) + A[i] * b + carry
             w.append((bcd.R_ADDR + k, t % 10))
             carry = t // 10
         w.append((bcd.R_ADDR + row, carry))
-    return w + [(spec.PC, pc)]
+        w.append((spec.V + x, (d + 1) & 0xFF))
+        last = d + 1 == lb
+        if last:
+            w += [(spec.V, la + lb), (spec.I, bcd.R_ADDR)]
+        new_pc = ((nxt + 2) & 0xFFF if last else nxt) if first else nxt if last else pc
+    else:  # BTRIM
+        i, v0 = cells[spec.I], cells[spec.V]
+        z = bcd.R_ADDR <= i < bcd.R_ADDR + R_CELLS and cells[i] & 15 == 0 and v0 >= 2
+        if z:
+            w = [(spec.V, v0 - 1), (spec.I, i + 1)]
+        new_pc = pc if z else nxt
+    return w + [(spec.PC, new_pc)]
