@@ -197,3 +197,42 @@ class Circ(Graph):
         return self.head(name, {s: sel(c) for s, c in queries.items()},
                          {s: sel(c) for s, c in keys.items()}, v, a, z,
                          [(col, 2.0**7) for col in cols], tiny=tiny)
+
+
+def sel(c, e):
+    """Key / query pre-activation K * (2e - 1) for a 0/1 (or <= 0 when false) form e."""
+    if isinstance(e, Chan):
+        return Chan(e.expr * (2 * K) - c.one * K, e.taps)
+    return Chan(e * (2 * K) - c.one * K)
+
+
+def chan(e, scale):
+    if isinstance(e, Chan):
+        return Chan(e.expr * scale, e.taps)
+    return Chan(e * scale)
+
+
+def thead(c, name, keys, queries, vheads, tiny=0.0):
+    """A head of 0/1 tables: one dict per value head with data {column: 0/1 form or Chan},
+    ref (1 where a written row carries the ballast), optional gate (0/1: its outputs), beta
+    (write gate) and into (dims to add the outputs onto). Returns each value head's outputs."""
+    specs = []
+    for x in vheads:
+        v = {col: chan(e, A_BIT) for col, e in x["data"].items()}
+        for col in REF_COLS:
+            v[col] = chan(x["ref"], A_REF)
+        gate = c.one if x.get("gate") is None else x["gate"]
+        cols = sorted(x["data"])
+        specs.append({"v": v, "a": x.get("a", 0), "z": {col: K * gate for col in cols},
+                      "outs": [(col, 2.0**7) for col in cols], "beta": x.get("beta"),
+                      "into": x.get("into")})
+    first, rest = specs[0], specs[1:]
+    outs = c.head(name, {s: sel(c, e) for s, e in queries.items()},
+                  {s: sel(c, e) for s, e in keys.items()}, first["v"], first["a"], first["z"],
+                  first["outs"], tiny=tiny, beta=first["beta"], into=first["into"], vx=rest)
+    res, i = [], 0
+    for x in specs:
+        n = len(x["outs"])
+        res.append(outs[i:i + n])
+        i += n
+    return res

@@ -1,0 +1,178 @@
+{
+ "c-crc32": {
+  "exit": 57,
+  "stdout": ""
+ },
+ "c-sieve": {
+  "exit": 47,
+  "stdout": ""
+ },
+ "c-sort": {
+  "exit": 253,
+  "stdout": ""
+ },
+ "c-strops": {
+  "exit": 180,
+  "stdout": ""
+ },
+ "rv32ui-add": {
+  "exit": 0,
+  "stdout": ""
+ },
+ "rv32ui-addi": {
+  "exit": 0,
+  "stdout": ""
+ },
+ "rv32ui-and": {
+  "exit": 0,
+  "stdout": ""
+ },
+ "rv32ui-andi": {
+  "exit": 0,
+  "stdout": ""
+ },
+ "rv32ui-auipc": {
+  "exit": 0,
+  "stdout": ""
+ },
+ "rv32ui-beq": {
+  "exit": 0,
+  "stdout": ""
+ },
+ "rv32ui-bge": {
+  "exit": 0,
+  "stdout": ""
+ },
+ "rv32ui-bgeu": {
+  "exit": 0,
+  "stdout": ""
+ },
+ "rv32ui-blt": {
+  "exit": 0,
+  "stdout": ""
+ },
+ "rv32ui-bltu": {
+  "exit": 0,
+  "stdout": ""
+ },
+ "rv32ui-bne": {
+  "exit": 0,
+  "stdout": ""
+ },
+ "rv32ui-jal": {
+  "exit": 0,
+  "stdout": ""
+ },
+ "rv32ui-jalr": {
+  "exit": 0,
+  "stdout": ""
+ },
+ "rv32ui-lb": {
+  "exit": 0,
+  "stdout": ""
+ },
+ "rv32ui-lbu": {
+  "exit": 0,
+  "stdout": ""
+ },
+ "rv32ui-ld_st": {
+  "exit": 0,
+  "stdout": ""
+ },
+ "rv32ui-lh": {
+  "exit": 0,
+  "stdout": ""
+ },
+ "rv32ui-lhu": {
+  "exit": 0,
+  "stdout": ""
+ },
+ "rv32ui-lui": {
+  "exit": 0,
+  "stdout": ""
+ },
+ "rv32ui-lw": {
+  "exit": 0,
+  "stdout": ""
+ },
+ "rv32ui-or": {
+  "exit": 0,
+  "stdout": ""
+ },
+ "rv32ui-ori": {
+  "exit": 0,
+  "stdout": ""
+ },
+ "rv32ui-sb": {
+  "exit": 0,
+  "stdout": ""
+ },
+ "rv32ui-sh": {
+  "exit": 0,
+  "stdout": ""
+ },
+ "rv32ui-simple": {
+  "exit": 0,
+  "stdout": ""
+ },
+ "rv32ui-sll": {
+  "exit": 0,
+  "stdout": ""
+ },
+ "rv32ui-slli": {
+  "exit": 0,
+  "stdout": ""
+ },
+ "rv32ui-slt": {
+  "exit": 0,
+  "stdout": ""
+ },
+ "rv32ui-slti": {
+  "exit": 0,
+  "stdout": ""
+ },
+ "rv32ui-sltiu": {
+  "exit": 0,
+  "stdout": ""
+ },
+ "rv32ui-sltu": {
+  "exit": 0,
+  "stdout": ""
+ },
+ "rv32ui-sra": {
+  "exit": 0,
+  "stdout": ""
+ },
+ "rv32ui-srai": {
+  "exit": 0,
+  "stdout": ""
+ },
+ "rv32ui-srl": {
+  "exit": 0,
+  "stdout": ""
+ },
+ "rv32ui-srli": {
+  "exit": 0,
+  "stdout": ""
+ },
+ "rv32ui-st_ld": {
+  "exit": 0,
+  "stdout": ""
+ },
+ "rv32ui-sub": {
+  "exit": 0,
+  "stdout": ""
+ },
+ "rv32ui-sw": {
+  "exit": 0,
+  "stdout": ""
+ },
+ "rv32ui-xor": {
+  "exit": 0,
+  "stdout": ""
+ },
+ "rv32ui-xori": {
+  "exit": 0,
+  "stdout": ""
+ }
+}
