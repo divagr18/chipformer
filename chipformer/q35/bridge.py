@@ -42,6 +42,10 @@ EXTRA_TEXT = {FN_ADD: ["=add"], FN_MUL: ["ul"], FN_SUB: ["=sub", "ub"], EQ: ["="
               MINUS: ["-", " \u2212", "\u2212"], TIMES: ["\u00d7", " *", "*"], BSL: ["\\"],
               TIMESW: ["cdot"], DOLLAR: [" $", "$$", " $$", " \\$", "\\$"], LPAREN: [" ("]}
 INLINE_OPS = {PLUS: "add", MINUS: "sub", TIMES: "mul"}  # and TIMESW right after BSL: mul
+# Inline calls need at least this many digits in A and B together. Qwen gets small ones right,
+# and right after a trace its conv window holds chip tokens instead of the "=", so a short
+# printed result can read to it like the start of a new expression.
+INLINE_MIN_DIGITS = 4
 
 
 def is_text(t: int) -> bool:
@@ -63,7 +67,8 @@ class InlineScan:
 
     Text since the last *breaker* token (anything but digits, spaces, operators, "=", "$", "(",
     a backslash, or a comma right after a digit) must be exactly: digits, one operator, digits,
-    then "=". A comma between digits joins them (1,234). The first number must start after a
+    then "=", with at least INLINE_MIN_DIGITS digits in the two numbers together. A comma
+    between digits joins them (1,234). The first number must start after a
     space, newline, "$", "(" or a chip token, so "2.5 * 3 =" and "x^2 + 1 =" are left alone.
     Chip tokens are breakers too. Fed every token of the stream, in order.
     """
@@ -118,7 +123,8 @@ class InlineScan:
         if op_tok and not self.in_call:
             self.op, self.op_ok = ("mul" if tw_op else INLINE_OPS[t]), self.p == 1
         if (t == EQ and not self.in_call and self.p == 2 and self.nops == 1 and self.op_ok
-                and self.a_safe and self.lens[1] and self.lens[2] and self.op):
+                and self.a_safe and self.lens[1] and self.lens[2] and self.op
+                and self.lens[1] + self.lens[2] >= INLINE_MIN_DIGITS):
             a = "".join(str(self.digits[1, w]) for w in range(self.lens[1]))
             b = "".join(str(self.digits[2, w]) for w in range(self.lens[2]))
             return self.op, a, b

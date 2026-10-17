@@ -44,11 +44,11 @@ def printed(bm) -> str:
 
 TIMES = [" " + BS, "times", " "]
 CASES = [
-    (["$", "12", *TIMES, "3", " =", " "], [("mul", "12", "3")]),
+    (["$", "12", *TIMES, "34", " =", " "], [("mul", "12", "34")]),
     ([" ", "1", ",", "234", ",", "567", *TIMES, "8", " ="], [("mul", "1234567", "8")]),
     ([" ", "37", " ×", " ", "43", " ="], [("mul", "37", "43")]),
     ([" ", "37", "*", "43", "="], [("mul", "37", "43")]),
-    ([" ", " $", " ", "3", " +", " ", "4", " ="], [("add", "3", "4")]),
+    ([" ", " $", " ", "300", " +", " ", "4", " ="], [("add", "300", "4")]),
     ([" ", "100", " -", " ", "30", " ="], [("sub", "100", "30")]),
     ([" ", "2", ".", "5", *TIMES, "3", " ="], []),  # decimal
     (["x", "^", "2", " +", " ", "1", " ="], []),  # not a plain first number
@@ -58,6 +58,8 @@ CASES = [
     (["-", "5", *TIMES, "3", " ="], []),  # negative
     ([" ", "5", *TIMES, "-", "3", " ="], []),
     (["(", "5", " +", " ", "3", ")", " ="], []),
+    ([" ", "12", *TIMES, "3", " ="], []),  # small: Qwen's own
+    ([" ", "5", " +", " ", "7", " ="], []),
     ([" ", "5", " +", " ", "3", " apples", " ="], []),
     ([" ", "3", " ", "4", *TIMES, "5", " ="], []),  # two numbers before the operator
     ([" ", "5", " =", " ", "3", *TIMES, "4", " ="], []),
@@ -71,20 +73,20 @@ def test_scan(tokens, want):
 
 
 def test_scan_prints_and_chains():
-    bm, calls = run(["$", "12", *TIMES, "3", " =", "$", " ", "and", " ", "36", *TIMES, "2", " ="])
-    assert calls == [("mul", "12", "3"), ("mul", "36", "2")]
-    assert printed(bm) == " 36 72"
+    bm, calls = run(["$", "12", *TIMES, "34", " =", "$", " ", "and", " ", "408", *TIMES, "2", " ="])
+    assert calls == [("mul", "12", "34"), ("mul", "408", "2")]
+    assert printed(bm) == " 408 816"
     # the printed result is the first number of the next expression
     bm = B.BridgeMachine(bcd.ROM, bcd.QUIRKS)
     bm.text(3)
-    calls = bm.qwen(classes([" ", "12", *TIMES, "3", " ="]))
+    calls = bm.qwen(classes([" ", "12", *TIMES, "34", " ="]))
     calls += bm.qwen(classes([*TIMES, "2", " ="]))
-    assert calls == [("mul", "12", "3"), ("mul", "36", "2")] and printed(bm) == " 36 72"
+    assert calls == [("mul", "12", "34"), ("mul", "408", "2")] and printed(bm) == " 408 816"
 
 
 def test_negative_sub_prints_nothing():
-    bm, calls = run([" ", "3", " -", " ", "5", " ="])
-    assert calls == [("sub", "3", "5")] and printed(bm) == " "
+    bm, calls = run([" ", "30", " -", " ", "50", " ="])
+    assert calls == [("sub", "30", "50")] and printed(bm) == " "
 
 
 @pytest.fixture(scope="module")

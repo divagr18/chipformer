@@ -224,6 +224,7 @@ def build(target: Target | None = None) -> Chip8Q35:
     la_, lb_ = from_bits(la_bits), from_bits(lb_bits)
     trig = c.and_([T[B.EQ], one - in_call, peq(2), co[0] - co[1], op_ok, a_safe,
                    c.node(c.t_ge(la_, 1, 0, 31), "la>0"), c.node(c.t_ge(lb_, 1, 0, 31), "lb>0"),
+                   c.node(c.t_ge(la_ + lb_, B.INLINE_MIN_DIGITS, 0, 62), "inline.big"),
                    sum(op_oh, Expr())], "inline.trig")
     # 1 from an inline trigger until the next text token: the mode of the CALL record
     (inline_mode,) = c.slot_head("inline.mode", {0: c.is_text}, {0: one}, {2: trig}, c.is_text)

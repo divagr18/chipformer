@@ -1,12 +1,15 @@
 """Qwen uses the computer in its weights: exact arithmetic through its own tool calls.
 
-    python -m chipformer.q35.demo MERGED [--base BASE] [--n 10]
+    python -m chipformer.q35.demo MERGED [--base BASE] [--n 10] [--inline]
 
 The prompt starts with the BIOS (bcd.py's routines, as a boot record of chip tokens, which
 Qwen's layers ignore) and declares ``add`` / ``mul`` tools in Qwen's usual chat template. When
 Qwen calls one, the circuit takes over at </tool_call>: it writes the arguments into the
 machine's memory, runs the routine, prints the result inside <tool_response> and hands back.
 There is no host program and no tool executor: one ``generate()`` call does everything.
+
+With --inline no tools are declared: wherever Qwen writes "A op B =" in its answer, the circuit
+takes over at "=" and prints the result as plain text.
 """
 
 import argparse
@@ -78,6 +81,7 @@ def main() -> None:
     ap.add_argument("--n", type=int, default=10)
     ap.add_argument("--max-new", type=int, default=4000)
     ap.add_argument("--out")
+    ap.add_argument("--inline", action="store_true", help="no tools: inline arithmetic only")
     args = ap.parse_args()
     meta = json.loads((Path(args.merged) / "chipformer.json").read_text())
     off = meta["chip_token_offset"]
@@ -87,14 +91,16 @@ def main() -> None:
     model, tok = load(args.merged)
     for q, op, want in probs:
         t = time.time()
-        out = ask(model, tok, q, bios, TOOLS, args.max_new)
+        out = ask(model, tok, q, bios, None if args.inline else TOOLS, args.max_new)
         text = tok.decode(out, skip_special_tokens=False)
         n_chip = sum(1 for i in out if off <= i < off + meta["chip_vocab"])
         shown = re.sub(r"(<\|chip[^|]*\|>)+", " [machine] ", text)
         resp = re.search(r"<tool_response>\s*(\d+)\s*</tool_response>", text)
         tail = text.split("</tool_response>")[-1]
         got = answer_number(tail) if resp else answer_number(text)
+        inline = re.findall(r"(?:<\|chip[^|]*\|>)+ (\d+)", text)
         rep["merged"].append({"q": q, "want": want, "tool_result": int(resp[1]) if resp else None,
+                              "inline_results": [int(v) for v in inline],
                               "answer": got, "ok": got == want, "chip_tokens": n_chip,
                               "seconds": round(time.time() - t, 1), "text": shown[-400:]})
         print(json.dumps(rep["merged"][-1], ensure_ascii=False), flush=True)
