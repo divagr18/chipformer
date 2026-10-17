@@ -219,21 +219,36 @@ def build_merged(src, dst, hidden: int | None = None, m: int | None = None,
         from chipformer.q35.store import Vocab
 
         vocab = Vocab(src / "tokenizer.json")
-    c = chip8_q35.build(Target(tc["linear_num_key_heads"], tc["linear_num_value_heads"], inter),
-                        store=vocab)
-    keep = set(c.keep)
+    target = Target(tc["linear_num_key_heads"], tc["linear_num_value_heads"], inter)
+    per_dim = (2 * tc["linear_num_key_heads"] * tc["linear_key_head_dim"]
+               + 3 * tc["linear_num_value_heads"] * tc["linear_value_head_dim"] + 3 * inter)
+
+    def circuit(schedule):
+        c = chip8_q35.build(target, store=vocab, schedule=schedule)
+        keep = set(c.keep)
+        plan = None
+        if overlay:
+            from chipformer.q35 import overlay as ov
+
+            plan = ov.build(c, keep)
+            print(plan.summary(), flush=True)
+        alloc = allocate(c, None, keep, inter, overlay=plan.dims if plan else None,
+                         overlay_cap=d0)
+        h, m_ = pick_hidden(d0, 1 + alloc.n_slots) if hidden is None else (hidden, m)
+        # weights (roughly): every layer and the embedding grow with the width
+        size = h * ((tc["num_hidden_layers"] + c.n_layers()) * per_dim + v0)
+        return size, c, keep, plan, alloc, h, m_
+
+    # The list scheduler (ir.Graph.reschedule) saves chip layers, but packs work closer, so more
+    # circuit dims are live at once: build both and keep the smaller checkpoint (4B: scheduled;
+    # 0.8B, whose overlay pool is full: build order)
+    options = [circuit(True)] + ([] if hidden is not None else [circuit(False)])
+    size, c, keep, plan, alloc, hidden, m = min(options, key=lambda o: o[0])
+    print(f"circuit: {c.n_layers()} layers, {alloc.n_slots} chip slots, hidden {hidden}",
+          flush=True)
     code = [next(iter(e.terms)) for e in c.code]
     id_code = [next(iter(e.terms)) for e in c.store.yc] if store else []
     tau, mu = next(iter(c.tau.terms)), next(iter(c.mu.terms))
-    plan = None
-    if overlay:
-        from chipformer.q35 import overlay as ov
-
-        plan = ov.build(c, keep)
-        print(plan.summary(), flush=True)
-    alloc = allocate(c, None, keep, inter, overlay=plan.dims if plan else None, overlay_cap=d0)
-    if hidden is None:
-        hidden, m = pick_hidden(d0, 1 + alloc.n_slots)
     lay = Layout(hidden=hidden, off=d0, m=m, slots=alloc.slots, over=alloc.over)
     assert d0 + m + 1 + alloc.n_slots <= hidden, (alloc.n_slots, hidden)
     lay.scale  # noqa: B018 - asserts m * B^2 / hidden is a power of 4
