@@ -176,7 +176,7 @@ class BridgeMachine(Machine):
     def _emit(self, tokens: list[int], generated: bool) -> None:
         self.fired = None
         for t in tokens:
-            self.fired = self.scan.feed(t)
+            self.fired = self.scan.feed(t & 0xFFFF)  # (a token may carry a Qwen id above)
         super()._emit(tokens, generated)
 
     def qwen(self, classes: list[int]) -> list[tuple[str, str, str]]:
