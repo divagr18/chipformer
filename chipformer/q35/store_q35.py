@@ -265,6 +265,7 @@ def counter(c, name, reset, count, tiny=2.0**-118):
         v[col] = Chan((one - reset) * A_REF)
     (x,) = c.head(name, {s: sel(c, e) for s, e in q.items()}, {s: sel(c, e) for s, e in k.items()},
                   v, 110 * count + 238 * reset, {2: K * one}, [(2, 2.0**(7 + XS))], tiny=tiny)
+    c.big.add(next(iter(x.terms)))  # up to 2^XS: see emit.allocate
     return x
 
 

@@ -101,7 +101,10 @@ def allocate(g: Graph, clearable: set[int] | None, keep: set[int], unit_cap: int
             if o in keep or (clearable is not None and o not in clearable):
                 continue
             born = g.dims[o].level  # the old value must already be in the sublayer's input
-            if by_ffn and last[o] <= level and born < level and units.get(level, 0) < unit_cap:
+            # (a large old value is not subtracted in the MLP that writes the new one: the sum
+            # would round; a clear in the MLP before a head is alone in its slot, so exact)
+            if (by_ffn and o not in getattr(g, "big", ()) and last[o] <= level and born < level
+                    and units.get(level, 0) < unit_cap):
                 units[level] = units.get(level, 0) + 1
                 a.subtract[d] = o
             elif not by_ffn and last[o] <= level - 1 and born < level - 1 and level >= 3                     and units.get(level - 1, 0) < unit_cap:

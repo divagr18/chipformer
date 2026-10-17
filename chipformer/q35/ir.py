@@ -121,6 +121,9 @@ class Graph:
         self.dims: list[Dim] = [Dim("one", "one", 0)]
         self.token_fns: dict[int, object] = {}
         self.full_fns: set[int] = set()  # features that see the whole token (TOKEN_MASK)
+        # dims that can hold large values (> 2^8): their slot is never handed over by a
+        # subtraction in the MLP that writes the new value (1 - 2^26 is not exact in fp32)
+        self.big: set[int] = set()
         self.nodes: list[FFN | Head] = []
         self.one = Expr({ONE: 1})
         self.units: dict[int, int] = {}  # sublayer -> FFN units used

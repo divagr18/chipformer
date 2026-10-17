@@ -12,6 +12,7 @@ before the question (no padding).
 """
 
 import argparse
+import re
 import copy
 import json
 import random
@@ -46,7 +47,7 @@ class Runner:
         return self.tok.encode(text, add_special_tokens=False)
 
     @torch.no_grad()
-    def feed(self, cache, ids: list[int], chunk: int = 4096):
+    def feed(self, cache, ids: list[int], chunk: int = 2048):
         """Prefill ``ids`` into ``cache``; the logits of the last position."""
         from transformers import DynamicCache
 
@@ -59,11 +60,14 @@ class Runner:
         return cache, out.logits[0, -1].float()
 
     @torch.no_grad()
-    def generate(self, cache, ids: list[int], max_new: int, stop=(IM_END, EOT)):
+    def generate(self, cache, ids: list[int], max_new: int, stop=(IM_END,)):
+        """Greedy, with <|im_start|> and <|endoftext|> banned (Qwen ends a turn with <|im_end|>;
+        evals' "nb" and "ne")."""
         cache, logits = self.feed(cache, ids)
         out = []
         for _ in range(max_new):
             logits[IM_START] = float("-inf")
+            logits[EOT] = float("-inf")
             t = int(logits.argmax())
             out.append(t)
             cache, logits = self.feed(cache, [t])  # (the cache holds every token, the end too)
@@ -115,8 +119,21 @@ def strings(rng: random.Random, r: Runner, n: int) -> list[str]:
     return out
 
 
+def fires_inline(r: Runner, ids: list[int]) -> bool:
+    """Would the circuit answer an inline "A op B =" in this text? Prefilled history must not
+    contain one: the prompt would lack the circuit's answer and leave it mid-call."""
+    from chipformer.q35.bridge import InlineScan
+
+    vocab = getattr(r, "_vocab", None)
+    if vocab is None:
+        vocab = r._vocab = S.Vocab(Path(r.tok.name_or_path) / "tokenizer.json")
+    scan = InlineScan()
+    return any(scan.feed(vocab.cls(q) if q < S.SPECIAL else 0) for q in ids)
+
+
 def padding(rng: random.Random, r: Runner, n_tokens: int) -> list[int]:
-    """Unrelated chat turns (GSM8K questions and answers when available) of about n tokens."""
+    """Unrelated chat turns (GSM8K questions and answers when available) of about n tokens, none
+    of which the circuit's inline arithmetic would answer (see fires_inline)."""
     pairs = []
     try:
         from datasets import load_dataset
@@ -131,10 +148,23 @@ def padding(rng: random.Random, r: Runner, n_tokens: int) -> list[int]:
     rng.shuffle(pairs)
     out = []
     for q, a in pairs:
-        out += r.ids(turn("user", q) + turn("assistant", a))
+        a = re.sub(r"<<[^>]*>>", "", a)  # GSM8K's calculator annotations
+        ids = r.ids(turn("user", q) + turn("assistant", a))
+        if fires_inline(r, ids):
+            continue
+        out += ids
         if len(out) >= n_tokens:
             break
     return out
+
+
+def is_exact(name: str, ans: str, want: str) -> bool:
+    """The answer is the stored text (allowing quotes, backticks, a final period and a leading
+    "name:")."""
+    a = ans.strip()
+    if a.startswith(name + ":"):
+        a = a[len(name) + 1:].strip()
+    return a.strip("`\"' ") == want or a.strip("`\"' .") == want
 
 
 def final_answer(r: Runner, gen: list[int]) -> str:
@@ -183,7 +213,7 @@ def recall(args):
             _, gen = merged.generate(copy.deepcopy(c2), q, 300)
             ans, tt = final_answer(merged, gen), tool_text(merged, gen)
             rows.append({"name": name, "want": s, "answer": ans, "tool": tt,
-                         "exact": ans == s or ans.strip("`\"' .") == s, "tool_exact": tt == s})
+                         "exact": is_exact(name, ans, s), "tool_exact": tt == s})
         res["conditions"][f"merged_pad{pad}"] = rows
         print(f"merged pad {pad}: exact {sum(x['exact'] for x in rows)}/{len(rows)}, "
               f"tool exact {sum(x['tool_exact'] for x in rows)} ({time.time() - t0:.0f}s)",
@@ -207,7 +237,7 @@ def recall(args):
             _, gen = base.generate(copy.deepcopy(c2), q, 120)
             ans = final_answer(base, gen)
             rows.append({"name": name, "want": s, "answer": ans,
-                         "exact": ans == s or ans.strip("`\"' .") == s})
+                         "exact": is_exact(name, ans, s)})
         res["conditions"][f"base_pad{pad}"] = rows
         print(f"base pad {pad}: exact {sum(x['exact'] for x in rows)}/{len(rows)}", flush=True)
     rows = []  # the string right before its question
@@ -218,7 +248,7 @@ def recall(args):
         _, gen = base.generate(None, q, 120)
         ans = final_answer(base, gen)
         rows.append({"name": name, "want": s, "answer": ans,
-                     "exact": ans == s or ans.strip("`\"' .") == s})
+                     "exact": is_exact(name, ans, s)})
     res["conditions"]["base_in_context"] = rows
     print(f"base in context: exact {sum(x['exact'] for x in rows)}/{len(rows)}", flush=True)
     Path(args.out).write_text(json.dumps(res, indent=2, ensure_ascii=False))
