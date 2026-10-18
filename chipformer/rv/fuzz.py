@@ -105,6 +105,9 @@ def free_run(c, progs: list, batch: int, device="cuda", compile_=True, v2=False)
                                      f"expected {S.name(want[t])}")
             total_tok += len(r)
             total_instr += ref.trace_stats(r)["instructions"]
+        if (i // batch) % 20 == 0:
+            print(f"  .. {i + len(chunk)} / {len(progs)} rows, {total_instr} instructions, "
+                  f"{time.time() - t0:.0f} s", flush=True)
     return {"programs": len(progs), "instructions": total_instr, "tokens": total_tok,
             "seconds": time.time() - t0}
 

@@ -1090,6 +1090,9 @@ def byte_rows(words: np.ndarray, n_heads: int) -> list:
     return out
 
 
+_ROM_CACHE: dict = {}
+
+
 def snapshot(c: RvCore, m: "RF.Machine") -> None:
     """Load a machine's state into the circuit's tables (the heads' initial states), as at the
     start of a record (j = 0)."""
@@ -1107,12 +1110,16 @@ def snapshot(c: RvCore, m: "RF.Machine") -> None:
     quo = np.zeros(HD)
     quo[list(REF_COLS)] = A_REF
     c.tables["quo"].init = [{d: quo.copy() for d in range(8)} for _ in range(2)]
-    rom = np.array([RF.rom_word(wd, S.ROM_BASE + 4 * i) if wd else 0
-                    for i, wd in enumerate(m.rom)], dtype=np.int64)
-    for h, vh in enumerate(byte_rows(rom, S.ROM_WORDS >> 11)):
+    key = (hash(tuple(m.rom)), hash(m.drom))  # (rows of one firmware share ROM and DROM)
+    if _ROM_CACHE.get("key") != key:
+        rom = np.array([RF.rom_word(wd, S.ROM_BASE + 4 * i) if wd else 0
+                        for i, wd in enumerate(m.rom)], dtype=np.int64)
+        drom = np.frombuffer(m.drom.ljust(4 * S.DROM_WORDS, bytes(1)), dtype="<u4").astype(np.int64)
+        _ROM_CACHE.update(key=key, rom=byte_rows(rom, S.ROM_WORDS >> 11),
+                          drom=byte_rows(drom, S.DROM_WORDS >> 11))
+    for h, vh in enumerate(_ROM_CACHE["rom"]):
         c.tables[f"rom{h}"].init = vh
-    drom = np.frombuffer(m.drom.ljust(4 * S.DROM_WORDS, b"\0"), dtype="<u4").astype(np.int64)
-    for h, vh in enumerate(byte_rows(drom, S.DROM_WORDS >> 11)):
+    for h, vh in enumerate(_ROM_CACHE["drom"]):
         c.tables[f"drom{h}"].init = vh
     for port in (1, 2):
         for h in range(4):

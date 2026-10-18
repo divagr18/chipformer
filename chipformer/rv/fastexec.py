@@ -159,15 +159,15 @@ class Executor:
         for st in self.steps:
             if isinstance(st, tuple):
                 continue
-            S = st["S"][row]
-            S.zero_()
+            buf = np.zeros(st["S"].shape[1:], np.float32)
             j = 0
             for n in st["heads"]:
                 init = n.init or []
                 for x in range(len(n.vheads())):
                     for r, vec in (init[x] if x < len(init) else {}).items():
-                        S[j, r] = torch.tensor(vec, dtype=torch.float32, device=self.dev)
+                        buf[j, r] = vec
                     j += 1
+            st["S"][row].copy_(torch.from_numpy(buf))
 
     def embed(self, toks):
         out = np.zeros((len(toks), self.D))
