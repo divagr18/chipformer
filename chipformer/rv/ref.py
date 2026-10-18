@@ -24,6 +24,28 @@ are spare bits. Static facts are folded in, so every format fits:
                                  are the PC's, in-circuit)
   CSR reads (stubs)              LUI rd, 0, or MISA rd; anything else ILLEGAL
   ECALL                          RS1 = 17 (a7), RS2 = 10 (a0)
+  digit-file ops (R-type)        RD, RS1, RS2
+  BPRD                           k: RS2 (bits 0..4) + S0..S1 (bits 5..6); S7..S9 = dD
+
+The digit file: 8 registers d0..d7 of 128 decimal digits (index 0 least significant). Custom-0
+(opcode 0x0B, R-type, funct7 = 0) takes its operands from rs2 = dD | dS << 3 | ovw << 6 | n << 7
+| off << 13 | m << 20 (registers dD / dS, the overwrite flag, n = digits 0..63, off 0..127,
+m = min(multiplier, 9); the common words fit a one-token value); custom-1 (opcode 0x2B, I-type) is
+BPRD:
+
+  BMAC  f3 0   for i < n: v = (ovw ? 0 : dD[i + off]) + dS[i] * m + c; dD[i + off] = v % 10,
+               c = v // 10 (c = 0 at i = 0); rd = c        (add: m = 1; mul-row; ovw: copy / scale /
+                                                              zero with m = 0)
+  BMSB  f3 1   for i < n: v = dD[i + off] - dS[i] * m - b; dD[i + off] = v % 10, b = the borrow;
+               rd = b                                      (sub: m = 1; the div-digit step)
+  BLD   f3 2   for i < n: dD[i + off] = min(mem8[(rs1 - 1 - i) & 0x7FFF] & 15, 9); rd = 0
+               (the ASCII digits ending at rs1 - 1, least significant last)
+  BGET  f3 3   rd = dD[off]
+  BSCAN f3 4   rd = the number n (<= 63) of ASCII digits at mem8[(rs1 + i) & 0x7FFF], i = 0..
+  BPRD  0x2B   putchar('0' + dD[k]), k = imm[6:0], dD = rd & 7 (I-type)
+
+Rows past 127 read as 0 and are not written. A row op's record is a BD token per digit (the
+digit and the carry / borrow out), then rd's value record.
 """
 
 from dataclasses import dataclass, field
@@ -38,10 +60,13 @@ UOPS = ["ILLEGAL", "LUI", "AUIPC", "MISA",
         "ECALL", "EBREAK", "FENCE",
         "MUL", "MULH", "MULHSU", "MULHU", "DIV", "DIVU", "REM", "REMU",
         "SH1ADD", "SH2ADD", "SH3ADD"]
-# uops 64..127 are reserved for the custom-0 / custom-1 accelerators
+CUSTOM = {"BMAC": 64, "BMSB": 65, "BLD": 66, "BGET": 67, "BPRD": 68,
+          "BSCAN": 69}  # uops 64..127: custom
 CSR_STUBS = {0xC00: 0, 0xC01: 0, 0xC02: 0, 0xC80: 0, 0xC81: 0, 0xC82: 0, 0xF14: 0,
              0x301: S.MISA}  # cycle, time, instret (+h), mhartid, misa
-U = {n: i for i, n in enumerate(UOPS)}
+U = {n: i for i, n in enumerate(UOPS)} | CUSTOM
+UOPS = UOPS + list(CUSTOM)
+BN_ROW = {"BMAC", "BMSB", "BLD"}
 WRITES_RD = {"LUI", "AUIPC", "MISA", "ADDI", "SLTI", "SLTIU", "XORI", "ORI", "ANDI", "SLLI",
              "SRLI", "SRAI", "ADD", "SUB", "SLL", "SLT", "SLTU", "XOR", "SRL", "SRA", "OR", "AND",
              "LB", "LH", "LW", "LBU", "LHU", "JAL", "JALR",
@@ -69,6 +94,9 @@ class Inst:
     rs1: int = 0
     rs2: int = 0
     imm: int = 0  # sign-extended immediate (branch/jump: byte offset)
+    dd: int = 0  # digit-file registers and the overwrite flag (custom ops)
+    ds: int = 0
+    ovw: int = 0
 
 
 def decode(w: int) -> Inst:
@@ -108,6 +136,10 @@ def decode(w: int) -> Inst:
             return Inst(["MUL", "MULH", "MULHSU", "MULHU", "DIV", "DIVU", "REM", "REMU"][f3], rd, rs1, rs2)
         if f7 == 0x10 and f3 in (2, 4, 6):
             return Inst({2: "SH1ADD", 4: "SH2ADD", 6: "SH3ADD"}[f3], rd, rs1, rs2)
+    if opc == 0x0B and f3 < 5 and f7 == 0:
+        return Inst(["BMAC", "BMSB", "BLD", "BGET", "BSCAN"][f3], rd, rs1, rs2)
+    if opc == 0x2B and f3 == 0:
+        return Inst("BPRD", imm=w >> 20 & 0x7F, dd=rd & 7)
     if w == 0x00000073:
         return Inst("ECALL")
     if opc == 0x73 and f3 in (1, 2, 3, 5, 6, 7):
@@ -339,6 +371,10 @@ def rom_word(w: int, pc: int) -> int:
         return pack(op, ins.rd, wi & 31, wi >> 5 & 31, wi >> 10 | bad << 6)
     if op == "ECALL":
         return pack(op, 0, 17, 10)
+    if op in CUSTOM:
+        if op == "BPRD":
+            return pack(op, 0, 0, imm & 31, imm >> 5 | ins.dd << 7)
+        return pack(op, ins.rd, ins.rs1, ins.rs2)
     if op in ("EBREAK", "FENCE", "ILLEGAL"):
         return pack(op)
     return pack(op, ins.rd, ins.rs1, ins.rs2)  # R-type
@@ -359,6 +395,7 @@ class Machine:
     halted: bool = False
     steps: int = 0  # instructions executed
     drom: bytes = b""  # read-only data from DROM_BASE
+    bn: list = field(default_factory=lambda: [[0] * 128 for _ in range(8)])  # the digit file
 
     @classmethod
     def from_program(cls, prog, entry: int | None = None) -> "Machine":
@@ -485,6 +522,8 @@ class Machine:
             return [S.tok("NT")]
         if op == "ILLEGAL":
             return fault("illegal")
+        if op in CUSTOM:
+            return self.digit_op(ins, a, b)
         if op in DIV_OPS:
             self.n += 1
             if not ins.rd:
@@ -494,6 +533,56 @@ class Machine:
         if op in IMM_OPS:
             return commit_rd(alu(op, a, ins.imm & M32))
         return commit_rd(alu(op, a, b))
+
+    def ram_byte(self, ea: int) -> int:
+        """A byte of RAM at ea mod 32 KB (the digit-file ops' addressing)."""
+        ea &= 0x7FFF
+        return self.ram[ea >> 2] >> 8 * (ea & 3) & 0xFF
+
+    def digit_op(self, ins: Inst, a: int, b: int) -> list[int]:
+        """A digit-file instruction's record (see the module doc)."""
+        op, f, x = ins.op, self.bn, self.x
+        self.n += 1
+        if op == "BPRD":
+            c = 48 + f[ins.dd][ins.imm]
+            self.out.append(c)
+            return [S.tok("BYTE", c)]
+        if op == "BSCAN":
+            n = 0
+            while n < 63 and 48 <= self.ram_byte(a + n) <= 57:
+                n += 1
+            toks = [S.tok("SC")] * n
+            if ins.rd:
+                x[ins.rd] = n
+                return toks + S.value_record(n)
+            return toks + [S.tok("NT")]
+        dd, ds, ovw = b & 7, b >> 3 & 7, b >> 6 & 1
+        n, off, m = b >> 7 & 63, b >> 13 & 127, min(b >> 20 & 15, 9)
+        if op == "BGET":
+            v = f[dd][off]
+            if ins.rd:
+                x[ins.rd] = v
+                return S.value_record(v)
+            return [S.tok("NT")]
+        toks, c = [], 0
+        for i in range(n):
+            r = i + off
+            d = f[dd][r] if r < 128 else 0
+            if op == "BLD":
+                v, c = min(self.ram_byte(a - 1 - i) & 15, 9), 0
+            elif op == "BMAC":
+                v = (0 if ovw else d) + f[ds][i] * m + c
+                v, c = v % 10, v // 10
+            else:
+                v = d - f[ds][i] * m - c
+                v, c = v % 10, (v % 10 - v) // 10
+            if r < 128:
+                f[dd][r] = v
+            toks.append(S.tok("BD", v | c << 4))
+        if ins.rd:
+            x[ins.rd] = c
+            return toks + S.value_record(c)
+        return toks + [S.tok("NT")]
 
     def run(self, max_records: int = 10**6) -> list[int]:
         """The whole trace from GO to HALT."""

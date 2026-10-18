@@ -7,7 +7,8 @@ Per sublayer, all of a layer's heads run as batched tensors:
             and the output columns it writes; one matmul per sublayer
   decay     the state times 1 / 0.5 / 0, only for the value heads that ever decay
   write     keys are one-hot: one row scatter per value head (where beta and a key are set)
-  read      queries are at most 2-hot: a top-2 row gather, normalized by the ballast columns
+  read      queries are at most k-hot (2, or a head's ``qhot``): a top-k row gather, normalized
+            by the ballast columns
   MLP       relu(x[R] @ Wb) * (x[R] @ Wa) @ Wd over the layer's units, written to its dims
 
 This is the IR's semantics in fp32 (every value the circuit produces is exact there), not the
@@ -52,6 +53,30 @@ class Lin:
         return y
 
 
+class SparseLin:
+    """Lin from its nonzeros only: y[:, n] = sum of w * xs[:, lag, d] (a gather, a product and a
+    scatter-add; the sums are of exactly representable terms, so any order is exact)."""
+
+    def __init__(self, w: np.ndarray, device):
+        w = w if w.ndim == 3 else w[None]
+        self.n, self.D = w.shape[2], w.shape[1]
+        lag, d, n = np.nonzero(w)
+        self.lags = sorted(set(lag.tolist()))
+        self.empty = not len(n)
+        self.src = torch.tensor(lag * self.D + d, device=device)
+        self.dst = torch.tensor(n, device=device)
+        self.w = torch.tensor(w[lag, d, n], dtype=torch.float32, device=device)
+        self.nl = (max(self.lags) + 1) if self.lags else 1
+
+    def __call__(self, xs):
+        """xs: [B, L, D] (lag 0 first); returns [B, N]."""
+        y = torch.zeros(xs.shape[0], self.n, device=xs.device)
+        if self.empty:
+            return y
+        flat = xs[:, :self.nl].reshape(xs.shape[0], -1)
+        return y.index_add_(1, self.dst, flat[:, self.src] * self.w)
+
+
 def _mat(exprs, n_dims):
     w = np.zeros((n_dims, len(exprs)))
     for i, e in enumerate(exprs):
@@ -61,9 +86,10 @@ def _mat(exprs, n_dims):
 
 
 class Executor:
-    def __init__(self, c, device="cuda", batch: int = 1):
+    def __init__(self, c, device="cuda", batch: int = 1, sparse: bool = False):
         torch.backends.cuda.matmul.allow_tf32 = False  # fp32 products must stay exact
         self.c, self.dev, self.B = c, device, batch
+        Lin_ = SparseLin if sparse else Lin
         D = len(c.dims)
         self.D = D
         self.steps = []
@@ -76,7 +102,7 @@ class Executor:
                     wd[u, out] = float(cf)
                 wab = np.concatenate([_mat([a for _, a, _, _ in terms], D),
                                       _mat([b for _, _, b, _ in terms], D)], 1)
-                self.steps.append(("ffn", Lin(wab, device), len(terms), Lin(wd, device)))
+                self.steps.append(("ffn", Lin_(wab, device), len(terms), Lin_(wd, device)))
                 continue
             heads = [n for n in nodes if isinstance(n, Head)]
             H = len(heads)
@@ -116,11 +142,12 @@ class Executor:
             proj = np.concatenate([wq, wk, wv, lag0], 2)  # one matmul for the sublayer
             nq, nv, nd = H * HD, V * HD, len(decays)
             self.steps.append({
-                "proj": Lin(proj, device), "split": [nq, nq, nv, nd, V, nv],
+                "proj": Lin_(proj, device), "split": [nq, nq, nv, nd, V, nv],
                 "decays": torch.tensor(decays, device=device, dtype=torch.long),
                 "bconst": torch.tensor(bconst, device=device, dtype=torch.float32),
-                "o": Lin(wo, device), "kh": torch.tensor([h for h, _ in vh], device=device),
+                "o": Lin_(wo, device), "kh": torch.tensor([h for h, _ in vh], device=device),
                 "H": H, "V": V, "heads": heads,
+                "qhot": max(getattr(n, "qhot", 2) for n in heads),
                 "S": torch.zeros(batch, V, HD, HD, device=device)})
         self.feat_ids = sorted(c.token_fns)
         self.bi = torch.arange(batch, device=device)
@@ -179,7 +206,7 @@ class Executor:
             vi = torch.arange(V, device=x.device)[None, :]
             old = S[bi[:, None], vi, idx]
             S[bi[:, None], vi, idx] = torch.where(write[:, :, None], v, old)
-            qv, qi = torch.topk(q[:, kh], 2, dim=2)  # queries are at most 2-hot
+            qv, qi = torch.topk(q[:, kh], st["qhot"], dim=2)  # queries are at most k-hot
             rows = S[bi[:, None, None], vi[:, :, None], qi] * (qv > 0).float()[..., None]
             o = rows.sum(2)
             ref = (o[..., REF_COLS[0]:REF_COLS[-1] + 1] ** 2).sum(2)
@@ -191,11 +218,11 @@ class Executor:
         return x
 
 
-def check(c, toks, device="cpu") -> int:
+def check(c, toks, device="cpu", sparse=False) -> int:
     """Executor == ir.evaluate on every dim at every position (exact)."""
     from chipformer.q35 import ir
 
-    ex = Executor(c, device)
+    ex = Executor(c, device, sparse=sparse)
     ex.load_init()
     emb = ex.embed(toks)
     want = ir.evaluate(c, toks, check=False)
@@ -210,11 +237,11 @@ class FreeRun:
     """Generation on the GPU: each step decodes the circuit's output code (core.OUT_NAMES) into
     the next token and writes that token's embedding as the next input, inside one graph."""
 
-    def __init__(self, c, batch: int = 1, device="cuda", compile_=True):
+    def __init__(self, c, batch: int = 1, device="cuda", compile_=True, sparse=False):
         from chipformer.rv import core as C
 
         self.c, self.B, self.dev = c, batch, device
-        self.ex = Executor(c, device, batch)
+        self.ex = Executor(c, device, batch, sparse)
         if compile_:
             self.ex.step = torch.compile(self.ex.step, mode="max-autotune-no-cudagraphs",
                                          dynamic=False)
@@ -223,21 +250,29 @@ class FreeRun:
         self.pay_idx = lt([self._dim(e) for e in c.out_pay])
         self.fam_w = 2.0 ** torch.arange(len(c.out_fam), device=device)
         self.pay_w = 2.0 ** torch.arange(len(c.out_pay), device=device)
-        # token embeddings are linear in the payload bits within a family
+        # a big family's token embeddings are linear in the payload bits; the small families
+        # (whose features may be any function of the payload, e.g. QS / QD's digit index) come
+        # from a table
+        from chipformer.rv import spec as S
+
         nf, nb = len(C.OUT_NAMES), C.NPAY
         base, bits = np.zeros((nf, self.ex.D)), np.zeros((nf, nb, self.ex.D))
         ids = np.zeros(nf, dtype=np.int64)
+        small, row0, table = np.zeros(nf, dtype=bool), np.zeros(nf, dtype=np.int64), []
         for f, nm in enumerate(C.OUT_NAMES):
-            from chipformer.rv import spec as S
-
             t0 = S.tok(nm) if nm in S.CONTROLS else S.tok(nm, 0)
+            size = 1 if nm in S.CONTROLS else S.FAMILIES[nm][1]
             ids[f] = t0
             base[f] = self.ex.embed([t0])[0].cpu().numpy()
-            if nm not in S.CONTROLS:
-                for i in range(S.FAMILIES[nm][1].bit_length() - 1):
+            if size <= 4096:
+                small[f], row0[f] = True, len(table)
+                table += list(self.ex.embed(list(range(t0, t0 + size))).cpu().numpy())
+            else:
+                for i in range(size.bit_length() - 1):
                     bits[f, i] = self.ex.embed([t0 + (1 << i)])[0].cpu().numpy() - base[f]
-        t = lambda a, dt=torch.float32: torch.tensor(a, dtype=dt, device=device)
+        t = lambda a, dt=torch.float32: torch.tensor(np.asarray(a), dtype=dt, device=device)
         self.base, self.bits, self.ids = t(base), t(bits), t(ids, torch.long)
+        self.small, self.row0, self.table = t(small, torch.bool), t(row0, torch.long), t(table)
         self.x = torch.zeros(batch, self.ex.D, device=device)
         self.tok = torch.zeros(batch, dtype=torch.long, device=device)
         self.graph = None
@@ -259,8 +294,11 @@ class FreeRun:
         fam = (torch.round(out[:, self.fam_idx]) * self.fam_w).sum(1)
         pay = torch.round(out[:, self.pay_idx])
         fid = fam.long().clamp(0, len(self.ids) - 1)
-        self.tok.copy_(self.ids[fid] + (pay * self.pay_w).sum(1).long())
-        self.x.copy_(self.base[fid] + torch.einsum("bi,bid->bd", pay, self.bits[fid]))
+        p = (pay * self.pay_w).sum(1).long()
+        self.tok.copy_(self.ids[fid] + p)
+        row = (self.row0[fid] + p).clamp(0, len(self.table) - 1)
+        big = self.base[fid] + torch.einsum("bi,bid->bd", pay, self.bits[fid])
+        self.x.copy_(torch.where(self.small[fid][:, None], self.table[row], big))
 
     def capture(self):
         x0 = self.x.clone()
@@ -295,10 +333,10 @@ class FreeRun:
         return out.cpu().numpy()
 
 
-def timed(c, toks, steps=500, graph=True, compile_=False, batch=1) -> float:
+def timed(c, toks, steps=500, graph=True, compile_=False, batch=1, sparse=False) -> float:
     """Seconds per step of B rows (teacher-forced; the graph's replays are checked against the
     IR first)."""
-    ex = Executor(c, "cuda", batch)
+    ex = Executor(c, "cuda", batch, sparse)
     for b in range(batch):
         ex.load_init(b)
     if compile_:

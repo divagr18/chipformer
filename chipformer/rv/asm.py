@@ -145,7 +145,7 @@ def assemble(src: str) -> Program:
             if op == "label":
                 labels[args] = here()
                 continue
-            if op in (".text", ".data"):
+            if op in (".text", ".data", ".rodata"):
                 sec = op[1:]
                 continue
             if op in (".word", ".half", ".byte"):
@@ -173,6 +173,13 @@ def assemble(src: str) -> Program:
             if op in R_OPS:
                 f7, f3 = R_OPS[op]
                 emit(enc_r(f7, reg(a[2]), reg(a[1]), f3, reg(a[0]), 0x33))
+            elif op in ("bmac", "bmsb", "bld", "bget"):  # rd, rs1, rs2 (operands in rs2)
+                f3 = {"bmac": 0, "bmsb": 1, "bld": 2, "bget": 3}[op]
+                emit(enc_r(0, reg(a[2]), reg(a[1]), f3, reg(a[0]), 0x0B))
+            elif op == "bscan":  # rd, rs1
+                emit(enc_r(0, 0, reg(a[1]), 4, reg(a[0]), 0x0B))
+            elif op == "bprd":  # dD, k
+                emit(enc_i(val(a[1]), 0, 0, val(a[0]), 0x2B))
             elif op in I_OPS:
                 emit(enc_i(val(a[2]), reg(a[1]), I_OPS[op], reg(a[0]), 0x13))
             elif op in SH_OPS:

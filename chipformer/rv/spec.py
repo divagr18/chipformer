@@ -18,13 +18,19 @@ Token families (chip vocabulary ids from 0):
   HEX   not final; a hex digit of a fault record
   QS    not final; DIV/DIVU/REM/REMU: k0, the index of the first quotient digit computed (0..8)
   QD    not final; a quotient digit: payload k << 4 | q (digit k of 8, most significant first)
+  BD    not final; a digit-file row step (custom ops): payload digit | carry << 4
   NT, ST0, ST1, SS0, SS1, HALT   final controls (ST/SS: the RAM value head, address bit 6)
   GO    not final: the start of a run (after a state snapshot)
+  SC    not final: BSCAN found one more ASCII digit
 
 Records:
 
   rd-writing instruction (ALU, MUL, load, LUI, AUIPC, CSR read)  F0 | V F1 | V V F2 (by size)
   DIV / DIVU / REM / REMU with rd != x0                          QS QD.. then the value record
+  BMAC / BMSB / BLD (n digits)                                    BD x n, then F0(carry) | NT
+  BGET                                                            F0(digit) | NT
+  BSCAN (n digit chars)                                           SC x n, then F0(n) | NT
+  BPRD                                                            BYTE('0' + digit)
   the same with rd = x0, not-taken branch, FENCE                NT
   taken branch, JAL, JALR                                        J  (the link is in-circuit)
   SW                                                             ST0 / ST1
@@ -41,20 +47,24 @@ Memory (P2):
   DROM  0x0002_0000 + 128 KB  read-only data (.rodata), bytes; loads only
   ROM   0x0004_0000 + 256 KB  code only, pre-decoded (ref.rom_word), filled from a snapshot
 
+The digit file (custom-0 / custom-1 ops, see ref.py): 8 registers of 128 decimal digits (least
+significant first), outside the address space, saved in the snapshot like RAM.
+
 A DIV-class record: QS(k0), then QD(k << 4 | q_k) for k = k0..7, then the result's value record.
 q_k are the hex digits of |A| / |B| (most significant first); k0 skips digits that are known to
 be 0 from the operands' sizes (see ref.div_start), so small quotients take few tokens.
 """
 
 FAMILY_SIZES = [("V", 1 << 15), ("F0", 1 << 15), ("F1", 1 << 15), ("F2", 4), ("J", 1 << 16),
-                ("R", 1 << 16), ("BYTE", 256), ("FLT", 8), ("HEX", 16), ("QS", 16), ("QD", 128)]
+                ("R", 1 << 16), ("BYTE", 256), ("FLT", 8), ("HEX", 16), ("QS", 16), ("QD", 128),
+                ("BD", 256)]
 FAMILIES = {}
 _base = 0
 for _n, _s in FAMILY_SIZES:
     FAMILIES[_n] = (_base, _s)
     _base += _s
 CTRL = _base
-CONTROL_NAMES = ["NT", "ST0", "ST1", "SS0", "SS1", "HALT", "GO"]
+CONTROL_NAMES = ["NT", "ST0", "ST1", "SS0", "SS1", "HALT", "GO", "SC"]
 CONTROLS = {n: CTRL + i for i, n in enumerate(CONTROL_NAMES)}
 VOCAB = CTRL + len(CONTROL_NAMES)
 FINAL = {"F0", "F1", "F2", "J", "R", "BYTE", "NT", "ST0", "ST1", "SS0", "SS1", "HALT"}

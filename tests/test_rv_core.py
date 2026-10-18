@@ -17,7 +17,7 @@ DATA = Path(__file__).parent / "data" / "rv"
 ELFS = sorted(json.loads((DATA / "qemu.json").read_text()))
 SLOW = {"c-sieve", "c-sort", "c-crc32p", "c-gmpmul"}  # 12k-44k tokens: RV_SLOW=1 runs them
 # 0.13M-8M instructions: the executor runs these free-running (test_rv_fuzz.py), not the IR
-FREE_RUN = {"c-fib", "c-sudoku", "c-qsort", "c-sieve4"}
+FREE_RUN = {"c-fib", "c-sudoku", "c-qsort", "c-sieve4", "mpy-s1", "mpy-s5"}
 EXIT = "\nli a7, 93\necall"
 
 
@@ -43,7 +43,8 @@ def test_programs(circ, name):
 
 @pytest.mark.parametrize("name", ELFS)
 def test_compiled(circ, name):
-    """riscv-tests rv32ui / rv32um mul* and gcc -O2 C programs, teacher-forced over their run."""
+    """riscv-tests rv32ui / rv32um / rv32uzba and gcc -O2 C programs, teacher-forced over their
+    run."""
     if name in FREE_RUN:
         pytest.skip("checked free-running by the executor")
     if name in SLOW and not os.environ.get("RV_SLOW"):
@@ -122,7 +123,7 @@ def test_snapshot_mid_run(circ, skip):
 
 
 FAULT_PROGRAMS = {
-    "illegal": "_start: li a0, 7\nli a1, 2\ndiv a2, a0, a1",
+    "illegal": "_start: li a0, 7\n.word 0x0000000b",
     "illegal (csr write)": "_start: li a0, 1\ncsrw mscratch, a0",
     "ebreak": "_start: nop\nebreak",
     "misaligned load": "_start: li a0, 0x102\nlw a1, 0(a0)",
@@ -173,3 +174,109 @@ def test_mul_fuzz(circ, seed):
         op = rng.choice(["mul", "mulh", "mulhsu", "mulhu", "add", "xor"])
         lines.append(f"{op} {rng.choice(regs)}, {rng.choice(regs)}, {rng.choice(regs)}")
     run_check(circ, assemble("_start: " + "\n".join(lines) + EXIT), kernel=seed == 0)
+
+
+DIV_EDGE = [0, 1, -1, 2, -2, 7, -7, 15, 16, 255, 256, 1000, 2**31 - 1, -2**31, -2**31 + 1, 0xFFFF,
+            -0x10000, 10, 3]
+
+
+@pytest.mark.parametrize("seed", range(4))
+def test_div_fuzz(circ, seed):
+    """DIV / DIVU / REM / REMU on edge values and random operands of every size (digits skipped
+    or not, signs, division by 0, overflow), rd = x0 and rd == rs1 included."""
+    rng = random.Random(200 + seed)
+    regs = ["a0", "a1", "a2", "a3", "t0", "t1", "s1"]
+
+    def val():
+        return rng.choice([rng.choice(DIV_EDGE), rng.randint(-2**31, 2**31 - 1),
+                           rng.randint(-2**(rng.randint(1, 31)), 2**rng.randint(1, 31))])
+
+    lines = [f"li {r}, {val()}" for r in regs]
+    for i in range(36):
+        if i % 6 == 5:
+            lines += [f"li {r}, {val()}" for r in rng.sample(regs, 3)]
+        op = rng.choice(["div", "divu", "rem", "remu"])
+        d = "zero" if rng.random() < 0.1 else rng.choice(regs)
+        lines.append(f"{op} {d}, {rng.choice(regs)}, {rng.choice(regs)}")
+    run_check(circ, assemble("_start: " + "\n".join(lines) + EXIT), kernel=seed == 0)
+
+
+def test_zba_and_rodata(circ):
+    """sh1add / sh2add / sh3add, and loads of every width from the DROM (.rodata)."""
+    src = """_start: li a0, 0x1234567
+        li a1, -77
+        sh1add a2, a0, a1
+        sh2add a3, a1, a0
+        sh3add a4, a0, a0
+        la s0, tab
+        lw t0, 0(s0)
+        lw t1, 4(s0)
+        lb t2, 5(s0)
+        lbu t3, 7(s0)
+        lh t4, 6(s0)
+        lhu t5, 2(s0)
+        sh2add t6, a0, s0""" + EXIT + """
+        .rodata
+        tab: .word 0x89abcdef, 0x80ff7f01"""
+    prog = assemble(src)
+    run_check(circ, prog)
+    m = ref.Machine.from_program(prog)
+    m.run()
+    assert m.x[12] == (0x1234567 * 2 - 77) & 0xFFFFFFFF
+    assert (m.x[5], m.x[7], m.x[28], m.x[29], m.x[30]) == (0x89abcdef, 0x7f, 0x80, 0xFFFF80FF,
+                                                           0x89ab)
+
+
+def bn_ops(n=0, off=0, m=0, d=0, s=0, ovw=0):
+    """A digit-file row op's operand word (rs2)."""
+    return d | s << 3 | ovw << 6 | n << 7 | off << 13 | m << 20
+
+
+def test_digit_file(circ):
+    """BSCAN / BLD / BMAC (add, scaled, overwrite) / BMSB (shifted, with a borrow) / BPRD / BGET."""
+    src = f"""_start: la a0, txt
+        bscan a1, a0
+        add a2, a0, a1
+        slli t2, a1, 7
+        ori t0, t2, {bn_ops(d=1)}
+        bld zero, a2, t0
+        li a2, {bn_ops(n=6, m=1, d=2, s=1)}
+        bmac a3, zero, a2
+        bmac a3, zero, a2
+        li t0, {bn_ops(n=5, m=7, d=3, s=1, ovw=1)}
+        bmac a4, zero, t0
+        li t0, {bn_ops(n=5, off=2, m=3, d=2, s=1)}
+        bmsb a6, zero, t0
+        bprd 2, 7
+        bprd 2, 6
+        bprd 2, 5
+        bprd 2, 0
+        li t1, {bn_ops(off=3, d=3)}
+        bget a5, zero, t1
+        addi a0, a0, 6
+        bscan s1, a0""" + EXIT + """
+        .data
+        txt: .byte 0x31, 0x32, 0x33, 0x34, 0x39, 0x2b, 0x37, 0x41"""
+    prog = assemble(src)
+    run_check(circ, prog)
+    m = ref.Machine.from_program(prog)
+    m.run()
+    assert m.bn[1][:5] == [9, 4, 3, 2, 1] and m.out == b"0638"
+    assert (m.x[11], m.x[13], m.x[14], m.x[15], m.x[16], m.x[9]) == (5, 0, 0, 6, 1, 1)
+
+
+@pytest.mark.parametrize("expr", ["123456789*987654321", "-1000000007//37", "gcd(462,1071)",
+                                  "(7-19)%5", "3**13", "12345678901234567890-12345678901234567891"])
+def test_calc(circ, expr):
+    """The calc firmware (env/calc, the digit-file ops), teacher-forced in the IR."""
+    from chipformer.rv import calc
+
+    m = calc.machine(expr)
+    core.snapshot(circ, m)
+    toks = calc.machine(expr).run(10**6)
+    mat = ir.evaluate(circ, toks, check=True, kernel=len(toks) < 1500)
+    pred = core.predictions(circ, mat)
+    assert all(pred[i] == toks[i + 1] for i in range(len(toks) - 1))
+    mm = calc.machine(expr)
+    mm.run(10**6)
+    assert mm.out.decode() == calc.expected(expr)

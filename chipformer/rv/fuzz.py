@@ -1,10 +1,11 @@
-"""Random RV32IM programs, and free-running checks of the circuit executor against ref.py.
+"""Random RV32IM + Zba programs, and free-running checks of the circuit executor against ref.py.
 
     python -m chipformer.rv.fuzz --programs 128 --batch 32 [--elf c-fib c-qsort ...]
 
-A program is a loop over a random block: every ALU, shift, compare and MUL op on random
-registers, loads and stores (all widths) to a 1 KB buffer through masked addresses, forward
-branches, calls to a leaf function, putchar of a register's low byte, and LUI/AUIPC. The
+A program is a loop over a random block: every ALU, shift, compare, MUL, DIV and Zba op on random
+registers, loads and stores (all widths) to a 1 KB RAM buffer and loads from a 256-byte DROM
+table through masked addresses, forward branches, calls to a leaf function, putchar of a
+register's low byte, and LUI/AUIPC. The
 executor generates every program's trace by itself (fastexec.FreeRun: each predicted token is
 the next input), batch rows in parallel, and every row must equal the reference trace up to its
 HALT.
@@ -20,7 +21,7 @@ from chipformer.rv.asm import assemble
 
 REGS = ["a0", "a1", "a2", "a3", "a4", "a5", "t0", "t1", "t2", "t3", "t4", "s1", "s2", "s3", "s4"]
 OPS3 = ["add", "sub", "and", "or", "xor", "sll", "srl", "sra", "slt", "sltu", "mul", "mulh",
-        "mulhsu", "mulhu"]
+        "mulhsu", "mulhu", "div", "divu", "rem", "remu", "sh1add", "sh2add", "sh3add"]
 OPSI = ["addi", "andi", "ori", "xori", "slti", "sltiu"]
 OPSS = ["slli", "srli", "srai"]
 LOADS = [("lw", 0x3FC), ("lh", 0x3FE), ("lhu", 0x3FE), ("lb", 0x3FF), ("lbu", 0x3FF)]
@@ -28,11 +29,13 @@ STORES = [("sw", 0x3FC), ("sh", 0x3FE), ("sb", 0x3FF)]
 
 
 def gen_program(seed: int, block: int = 40, iters: int = 30) -> str:
-    """A random fault-free RV32IM program (s0: loop counter, s11: the buffer, t5: addresses)."""
+    """A random fault-free RV32IM + Zba program (s0: loop counter, s11: the RAM buffer, s10: the
+    DROM table, t5: addresses)."""
     rng = random.Random(seed)
     val = lambda: rng.choice([rng.randint(-2**31, 2**31 - 1), rng.randint(-40, 40),
                               rng.randint(0, 0x3FF)])
-    lines = ["_start: la s11, buf", f"li s0, {iters}"] + [f"li {r}, {val()}" for r in REGS]
+    lines = ["_start: la s11, buf", "la s10, rtab", f"li s0, {iters}"]
+    lines += [f"li {r}, {val()}" for r in REGS]
     lines.append("loop:")
     skip = 0
     for _ in range(block):
@@ -44,9 +47,12 @@ def gen_program(seed: int, block: int = 40, iters: int = 30) -> str:
             lines.append(f"{rng.choice(OPSI)} {d}, {a}, {rng.randint(-2048, 2047)}")
         elif k < 0.56:
             lines.append(f"{rng.choice(OPSS)} {d}, {a}, {rng.randint(0, 31)}")
-        elif k < 0.70:
+        elif k < 0.64:
             op, mask = rng.choice(LOADS)
             lines += [f"andi t5, {a}, {mask}", "add t5, t5, s11", f"{op} {d}, 0(t5)"]
+        elif k < 0.70:
+            op, mask = rng.choice(LOADS)
+            lines += [f"andi t5, {a}, {mask & 0xFF}", "add t5, t5, s10", f"{op} {d}, 0(t5)"]
         elif k < 0.82:
             op, mask = rng.choice(STORES)
             lines += [f"andi t5, {a}, {mask}", "add t5, t5, s11", f"{op} {b}, 0(t5)"]
@@ -64,7 +70,8 @@ def gen_program(seed: int, block: int = 40, iters: int = 30) -> str:
                          else f"auipc {d}, {rng.randint(0, 2**20 - 1)}")
     lines += ["addi s0, s0, -1", "bnez s0, loop", "li a0, 0", "li a7, 93", "ecall",
               "leaf: slli a6, a6, 3", "xori a6, a6, 0x5a5", "add a6, a6, s0", "ret",
-              ".data", "buf: .space 1024"]
+              ".data", "buf: .space 1024",
+              ".rodata", "rtab: .word " + ", ".join(str(rng.getrandbits(32)) for _ in range(64))]
     return "\n".join(lines)
 
 

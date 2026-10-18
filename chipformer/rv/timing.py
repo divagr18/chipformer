@@ -45,6 +45,8 @@ def main():
     ap.add_argument("--prog", default="c-crc32")
     ap.add_argument("--executor-only", action="store_true")
     ap.add_argument("--batches", default="1,8,32", help="executor batch sizes (P1.6)")
+    ap.add_argument("--sparse", default="0", help="executor weights: 0 dense blocks, 1 sparse, "
+                                                   "0,1 both")
     ap.add_argument("--hf-compile", action="store_true",
                     help="also time rv-tiny's HF modules: static cache + torch.compile")
     args = ap.parse_args()
@@ -61,7 +63,9 @@ def main():
         hf_compiled(c, prog, toks, steps_of(args, toks), tpi)
         hf_compiled(c, prog, toks, steps_of(args, toks), tpi, compact=True)
     if args.executor_only:
-        return run_executor(c, toks, steps_of(args, toks), tpi, dev, batches)
+        for sp in args.sparse.split(","):
+            run_executor(c, toks, steps_of(args, toks), tpi, dev, batches, sp == "1")
+        return None
     import chipformer.rv.hf as H
 
     orig = H.pick_layout
@@ -129,14 +133,15 @@ def steps_of(args, toks):
     return min(args.steps, len(toks) - 25)
 
 
-def run_executor(c, toks, steps, tpi, dev, batches=(1,)):
+def run_executor(c, toks, steps, tpi, dev, batches=(1,), sparse=False):
     from chipformer.rv import fastexec
 
-    n = fastexec.check(c, toks[:300], dev)
-    print(f"executor == IR on {n} positions ({dev})", flush=True)
+    kind = "sparse" if sparse else "dense blocks"
+    n = fastexec.check(c, toks[:300], dev, sparse=sparse)
+    print(f"executor ({kind}) == IR on {n} positions ({dev})", flush=True)
     for b in batches:
-        s = fastexec.timed(c, toks, steps, graph=True, compile_=True, batch=b)
-        print(f"executor batch {b:3d} (compiled + CUDA graph) {1e3 * s:7.3f} ms/step  "
+        s = fastexec.timed(c, toks, steps, graph=True, compile_=True, batch=b, sparse=sparse)
+        print(f"executor {kind} batch {b:3d} (compiled + CUDA graph) {1e3 * s:7.3f} ms/step  "
               f"{b / s:9.0f} tok/s  {b / s / tpi:9.0f} instr/s", flush=True)
 
 
