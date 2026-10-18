@@ -237,11 +237,17 @@ class FreeRun:
     """Generation on the GPU: each step decodes the circuit's output code (core.OUT_NAMES) into
     the next token and writes that token's embedding as the next input, inside one graph."""
 
-    def __init__(self, c, batch: int = 1, device="cuda", compile_=True, sparse=False):
+    def __init__(self, c, batch: int = 1, device="cuda", compile_=True, sparse=False, v2=False):
         from chipformer.rv import core as C
 
         self.c, self.B, self.dev = c, batch, device
-        self.ex = Executor(c, device, batch, sparse)
+        if v2:  # the Triton executor (tritonexec.py)
+            from chipformer.rv.tritonexec import Executor2
+
+            self.ex = Executor2(c, batch, device)
+            compile_ = False
+        else:
+            self.ex = Executor(c, device, batch, sparse)
         if compile_:
             self.ex.step = torch.compile(self.ex.step, mode="max-autotune-no-cudagraphs",
                                          dynamic=False)
@@ -302,7 +308,8 @@ class FreeRun:
 
     def capture(self):
         x0 = self.x.clone()
-        states = [st["S"].clone() for st in self.ex.steps if not isinstance(st, tuple)]
+        heads = [st for st in self.ex.steps if isinstance(st, dict) and "S" in st]
+        states = [st["S"].clone() for st in heads]
         s = torch.cuda.Stream()
         s.wait_stream(torch.cuda.current_stream())
         with torch.cuda.stream(s):
@@ -314,7 +321,7 @@ class FreeRun:
             self._step()
         # undo the warm-up steps
         self.x.copy_(x0)
-        for st, s0 in zip([st for st in self.ex.steps if not isinstance(st, tuple)], states):
+        for st, s0 in zip(heads, states):
             st["S"].copy_(s0)
         self.ex.reset()
         self.graph = g
@@ -385,5 +392,56 @@ def timed(c, toks, steps=500, graph=True, compile_=False, batch=1, sparse=False)
     for t in range(20, 20 + steps):
         xin.copy_(emb[t].expand(batch, -1))
         run()
+    torch.cuda.synchronize()
+    return (time.time() - t0) / steps
+
+
+def timed2(c, toks, steps=500, batch=1) -> float:
+    """Seconds per step of B rows with the Triton executor (tritonexec), under a CUDA graph;
+    replays are checked against the IR first."""
+    from chipformer.q35 import ir
+    from chipformer.rv.tritonexec import Executor2
+
+    ex = Executor2(c, batch, "cuda")
+    for b in range(batch):
+        ex.load_init(b)
+    emb = ex.embed(toks[:steps + 20])
+    heads = [st for st in ex.steps if st["kind"] == "head"]
+    states = [st["S"].clone() for st in heads]
+
+    def restore():
+        for st, s0 in zip(heads, states):
+            st["S"].copy_(s0)
+        ex.reset()
+
+    xin = torch.zeros(batch, ex.D, device="cuda")
+    s = torch.cuda.Stream()
+    s.wait_stream(torch.cuda.current_stream())
+    with torch.cuda.stream(s):
+        for _ in range(3):
+            xin.copy_(emb[0].expand(batch, -1))
+            ex.step(xin)
+    torch.cuda.current_stream().wait_stream(s)
+    restore()
+    g = torch.cuda.CUDAGraph()
+    with torch.cuda.graph(g):
+        ex.step(xin)
+    n = min(300, len(emb))
+    want = ir.evaluate(c, toks[:n], check=False)
+    restore()
+    for t in range(n):
+        xin.copy_(emb[t].expand(batch, -1))
+        g.replay()
+        got = xin.double().cpu().numpy()
+        assert (got == want[t][None]).all(), f"graph replay differs at {t}"
+    restore()
+    for t in range(20):
+        xin.copy_(emb[t].expand(batch, -1))
+        g.replay()
+    torch.cuda.synchronize()
+    t0 = time.time()
+    for t in range(20, 20 + steps):
+        xin.copy_(emb[t].expand(batch, -1))
+        g.replay()
     torch.cuda.synchronize()
     return (time.time() - t0) / steps

@@ -45,8 +45,8 @@ def main():
     ap.add_argument("--prog", default="c-crc32")
     ap.add_argument("--executor-only", action="store_true")
     ap.add_argument("--batches", default="1,8,32", help="executor batch sizes (P1.6)")
-    ap.add_argument("--sparse", default="0", help="executor weights: 0 dense blocks, 1 sparse, "
-                                                   "0,1 both")
+    ap.add_argument("--sparse", default="0", help="executors: 0 dense blocks, 1 sparse, "
+                                                   "2 the Triton executor v2 (e.g. 0,1,2)")
     ap.add_argument("--hf-compile", action="store_true",
                     help="also time rv-tiny's HF modules: static cache + torch.compile")
     args = ap.parse_args()
@@ -64,7 +64,10 @@ def main():
         hf_compiled(c, prog, toks, steps_of(args, toks), tpi, compact=True)
     if args.executor_only:
         for sp in args.sparse.split(","):
-            run_executor(c, toks, steps_of(args, toks), tpi, dev, batches, sp == "1")
+            if sp == "2":
+                run_executor2(c, toks, steps_of(args, toks), tpi, batches)
+            else:
+                run_executor(c, toks, steps_of(args, toks), tpi, dev, batches, sp == "1")
         return None
     import chipformer.rv.hf as H
 
@@ -142,6 +145,17 @@ def run_executor(c, toks, steps, tpi, dev, batches=(1,), sparse=False):
     for b in batches:
         s = fastexec.timed(c, toks, steps, graph=True, compile_=True, batch=b, sparse=sparse)
         print(f"executor {kind} batch {b:3d} (compiled + CUDA graph) {1e3 * s:7.3f} ms/step  "
+              f"{b / s:9.0f} tok/s  {b / s / tpi:9.0f} instr/s", flush=True)
+
+
+def run_executor2(c, toks, steps, tpi, batches=(1,)):
+    from chipformer.rv import fastexec, tritonexec
+
+    n = tritonexec.check(c, toks[:200])
+    print(f"executor v2 (triton) == IR on {n} positions", flush=True)
+    for b in batches:
+        s = fastexec.timed2(c, toks, steps, batch=b)
+        print(f"executor v2 (triton) batch {b:3d} (CUDA graph) {1e3 * s:7.3f} ms/step  "
               f"{b / s:9.0f} tok/s  {b / s / tpi:9.0f} instr/s", flush=True)
 
 

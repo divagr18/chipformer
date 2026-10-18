@@ -250,6 +250,28 @@ int main(void) {
     bn_ld(&one_ch + 1, BN_OPS(1, 0, 0, ONE, 0, 0));
     const char *s = calc_in;
     int operand = 1, nv = 0, no = 0;  // operand: an operand (or a prefix) comes next
+    // the fast path: "A op B" (two plain numbers, one operator)
+    int na = bn_scan(s);
+    if (na && na <= MAXD) {
+        const char *o = s + na;
+        int c = o[0], two = (c == '*' || c == '/') && o[1] == c;
+        int op = c == '*' && two ? '^' : c;
+        const char *t = o + 1 + two;
+        int nb = bn_scan(t);
+        if (nb && nb <= MAXD && !t[nb] &&
+            (op == '+' || op == '-' || op == '*' || op == '/' || op == '%' || op == '^')) {
+            bn_ld(o, BN_OPS(na, 0, 0, 0, 0, 0));
+            bn_ld(t + nb, BN_OPS(nb, 0, 0, 1, 0, 0));
+            used = 3;
+            dirty[0] = na;
+            dirty[1] = nb;
+            vals[0] = dig(NUM(0, 0, na), na - 1) ? NUM(0, 0, na) : trim(NUM(0, 0, na));
+            vals[1] = dig(NUM(1, 0, nb), nb - 1) ? NUM(1, 0, nb) : trim(NUM(1, 0, nb));
+            nv = apply(op, 2);
+            if (err) goto fail;
+            goto print;
+        }
+    }
     for (;;) {
         int c = *s;
         if (c == ' ') {
@@ -323,9 +345,11 @@ int main(void) {
             nv = apply(op, nv);
     }
     if (err || nv != 1 || operand) {
+    fail:
         for (const char *m = "error\n"; *m; m++) rv_putchar(*m);
         _exit(1);
     }
+print:;
     num v = vals[0];
     if (NEG(v)) rv_putchar('-');
     bn_print(REG(v), LEN(v));

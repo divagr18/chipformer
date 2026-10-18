@@ -75,11 +75,15 @@ def gen_program(seed: int, block: int = 40, iters: int = 30) -> str:
     return "\n".join(lines)
 
 
-def free_run(c, progs: list, batch: int, device="cuda", compile_=True) -> dict:
-    """Free-run every program (batch rows at a time); returns totals, raises on any mismatch."""
+def free_run(c, progs: list, batch: int, device="cuda", compile_=True, v2=False) -> dict:
+    """Free-run every program (batch rows at a time); returns totals, raises on any mismatch.
+    A program is an asm / ELF Program or a function returning a fresh ref.Machine."""
     from chipformer.rv import fastexec
 
-    fr = fastexec.FreeRun(c, batch, device, compile_)
+    def fresh(prog):
+        return prog() if callable(prog) else ref.Machine.from_program(prog)
+
+    fr = fastexec.FreeRun(c, batch, device, compile_, v2=v2)
     total_instr = total_tok = 0
     t0 = time.time()
     for i in range(0, len(progs), batch):
@@ -87,10 +91,9 @@ def free_run(c, progs: list, batch: int, device="cuda", compile_=True) -> dict:
         refs = []
         for row in range(batch):
             prog = chunk[row % len(chunk)]
-            m = ref.Machine.from_program(prog)
-            core.snapshot(c, m)
+            core.snapshot(c, fresh(prog))
             fr.load(row, S.tok("GO"))
-            refs.append(ref.Machine.from_program(prog).run(10**8))
+            refs.append(fresh(prog).run(10**8))
         n = max(len(r) for r in refs) - 1
         got = fr.run(n)
         for row, r in enumerate(refs[:len(chunk)]):
@@ -113,17 +116,18 @@ def main():
     ap.add_argument("--iters", type=int, default=30)
     ap.add_argument("--elf", nargs="*", default=[])
     ap.add_argument("--device", default="cuda")
+    ap.add_argument("--v2", action="store_true", help="the Triton executor (tritonexec)")
     args = ap.parse_args()
     c = core.build()
     progs = [assemble(gen_program(s, iters=args.iters)) for s in range(args.programs)]
     if progs:
-        res = free_run(c, progs, args.batch, args.device, args.device != "cpu")
+        res = free_run(c, progs, args.batch, args.device, args.device != "cpu", args.v2)
         print(f"fuzz: {res}", flush=True)
     if args.elf:
         from chipformer.rv.measure import DATA
 
         eprogs = [elf.program(DATA / f"{n}.elf") for n in args.elf]
-        res = free_run(c, eprogs, len(eprogs), args.device, args.device != "cpu")
+        res = free_run(c, eprogs, len(eprogs), args.device, args.device != "cpu", args.v2)
         print(f"elf {args.elf}: {res}", flush=True)
 
 

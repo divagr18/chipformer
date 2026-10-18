@@ -111,7 +111,20 @@ def main():
     ap.add_argument("--cases", type=int, default=0)
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--expr", default=None)
+    ap.add_argument("--free-run", action="store_true", help="the circuit's executor on the GPU")
+    ap.add_argument("--batch", type=int, default=32)
     args = ap.parse_args()
+    if args.free_run:
+        from functools import partial
+
+        from chipformer.rv import core, fuzz
+
+        c = core.build()
+        exprs = [e for _, e in cases(args.cases, args.seed)]
+        exprs.sort(key=lambda e: len(machine(e).run(10**7)))  # (a batch runs to its longest)
+        res = fuzz.free_run(c, [partial(machine, e) for e in exprs], args.batch)
+        print(f"calc free-running: {res}", flush=True)
+        return
     if args.expr:
         out, toks = run(args.expr)
         st = ref.trace_stats(toks)
