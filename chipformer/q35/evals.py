@@ -746,7 +746,7 @@ def inline_fires(text: str, pred) -> list[dict]:
         ex = EXPR_RE.search(before[-300:])  # v18: a whole expression (more than one operator)
         # The single-op path wins when its "A op B =" is the whole window: nothing of an
         # expression (a digit, ".", an operator, ")") right before it
-        lead = before[-200:][:x[0].start()].rstrip(" ") if x else ""
+        lead = before[-200:][:x[0].start()].rstrip(" ($") if x else ""  # (also "*(7 - 4)")
         single = x and not re.search(r"([\d.)+\-*/×÷−^]|\\times|\\cdot|\\div)$", lead)
         if ex and not single and (
                 re.search(r"[()^{}]|\d\.\d", ex[1]) or len(re.findall(
