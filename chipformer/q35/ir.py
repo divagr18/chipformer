@@ -19,6 +19,11 @@ chip tokens carry a large ballast (see spike.py), and the emitter folds 2^r into
 The constant ONE is that ballast. On text tokens every chip dim, ONE included, is 0, so every
 node outputs exactly 0 there.
 
+Tokens are ints: chip tokens, text classes, and (for the object store) a text class with a Qwen
+token id above it (``qid << 16 | cls``). Token features see ``t & 0xFFFF`` unless declared
+``full``, so only features that read Qwen's own token id (the store's id code) can tell two text
+tokens of one class apart.
+
 Exactness is checked numerically: ``evaluate`` runs a token sequence through the graph and
 asserts that every intermediate the hardware materializes is a bf16 value, that silu inputs are
 in its exact range, and that keys, queries and decays have the allowed shapes.
@@ -36,6 +41,7 @@ A_BIT = 2**7  # value of a set bit in a state row: (A_BIT / A_REF)^2 * 126 is ab
 REF_COLS = (0, 1)
 DECAY = {0.0: 1.0, 110.0: 0.5, 238.0: 0.0}  # a -> exp(g) with dt_bias = -110, A_log = 0
 HD = 128  # key/value head dim
+TOKEN_MASK = 0xFFFF  # the part of a token that ordinary features see (see above)
 
 
 @dataclass
@@ -61,6 +67,20 @@ class Chan:
 
 
 @dataclass
+class VHead:
+    """A further value head of a key head (Qwen3.5-4B has two per key head): the same queries
+    and keys, its own values, decay, write gate and output gates, so it holds a second table
+    with the same rows."""
+
+    v: dict[int, Chan]
+    a: Expr
+    z: dict[int, Expr]
+    out: list[tuple[int, int, float]]
+    beta: Expr | None = None  # write gate (0/1); None: always 1
+    into: bool = False  # outputs add onto existing dims
+
+
+@dataclass
 class Head:
     name: str
     q: dict[int, Chan]  # key-dim channel -> query
@@ -72,6 +92,12 @@ class Head:
     level: int
     n_cols: int = HD
     tiny: float = 0.0  # outputs below this may round (the counter's 2^-j for j >> JMAX)
+    beta: Expr | None = None  # write gate of the first value head (0/1); None: always 1
+    into: bool = False  # outputs add onto existing dims (several heads summed into one dim)
+    vx: list[VHead] = field(default_factory=list)  # further value heads of this key head
+
+    def vheads(self) -> list[VHead]:
+        return [VHead(self.v, self.a, self.z, self.out, self.beta, self.into), *self.vx]
 
 
 @dataclass
@@ -94,6 +120,10 @@ class Graph:
     def __post_init__(self) -> None:
         self.dims: list[Dim] = [Dim("one", "one", 0)]
         self.token_fns: dict[int, object] = {}
+        self.full_fns: set[int] = set()  # features that see the whole token (TOKEN_MASK)
+        # dims that can hold large values (> 2^8): their slot is never handed over by a
+        # subtraction in the MLP that writes the new value (1 - 2^26 is not exact in fp32)
+        self.big: set[int] = set()
         self.nodes: list[FFN | Head] = []
         self.one = Expr({ONE: 1})
         self.units: dict[int, int] = {}  # sublayer -> FFN units used
@@ -101,10 +131,16 @@ class Graph:
 
     # --- dims -----------------------------------------------------------------
 
-    def token_feature(self, name: str, fn) -> Expr:
+    def token_feature(self, name: str, fn, full: bool = False) -> Expr:
         d = self._dim(name, "token", 0)
         self.token_fns[d] = fn
+        if full:
+            self.full_fns.add(d)
         return Expr({d: 1})
+
+    def feature_value(self, d: int, t: int):
+        fn = self.token_fns[d]
+        return fn(t) if d in self.full_fns else fn(t & TOKEN_MASK)
 
     def _dim(self, name: str, kind: str, level: int) -> int:
         self.dims.append(Dim(name, kind, level))
@@ -137,20 +173,59 @@ class Graph:
         return Expr({d: 1})
 
     def head(self, name: str, q: dict, k: dict, v: dict, a: "Expr | Num", z: dict,
-             outs: list[tuple[int, float]], min_level: int = 0, tiny: float = 0.0) -> list[Expr]:
-        """Add a head; ``outs`` lists (value column, weight) pairs, one new dim each."""
-        q, k, v = ({i: c if isinstance(c, Chan) else Chan(as_expr(c)) for i, c in ch.items()}
-                   for ch in (q, k, v))
+             outs: list[tuple[int, float]], min_level: int = 0, tiny: float = 0.0,
+             beta=None, into: list | None = None, vx: list | None = None) -> list[Expr]:
+        """Add a head; ``outs`` lists (value column, weight) pairs, one new dim each (or, with
+        ``into``, onto these existing dims). ``vx``: further value heads, dicts with keys v, a,
+        z, outs and optionally beta / into, sharing this head's queries and keys; their output
+        dims follow the first value head's in the returned list."""
+        def chans(ch):
+            return {i: c if isinstance(c, Chan) else Chan(as_expr(c)) for i, c in ch.items()}
+
+        q, k, v = chans(q), chans(k), chans(v)
         a = as_expr(a)
         z = {i: as_expr(e) for i, e in z.items()}
+        beta = None if beta is None else as_expr(beta)
+        vx = [dict(x) for x in (vx or [])]
+        assert len(vx) < self.target.value_heads // self.target.key_heads or not vx, \
+            "more value heads than the key head has"
+        for x in vx:
+            x["v"], x["a"] = chans(x["v"]), as_expr(x["a"])
+            x["z"] = {i: as_expr(e) for i, e in x["z"].items()}
+            x["beta"] = None if x.get("beta") is None else as_expr(x["beta"])
         exprs = [c.expr for ch in (q, k, v) for c in ch.values()] + [a, *z.values()]
+        exprs += [] if beta is None else [beta]
+        for x in vx:
+            exprs += [c.expr for c in x["v"].values()] + [x["a"], *x["z"].values()]
+            exprs += [] if x["beta"] is None else [x["beta"]]
         lvl = max(self.level(*exprs), min_level)
         sub = self._place(lvl, True, 1, self.heads, self.target.key_heads)
-        dims = [self._dim(f"{name}[{col}]", "head", sub) for col, _ in outs]
+
+        def out_dims(tag, outs_, into_):
+            if into_ is None:
+                return [self._dim(f"{name}{tag}[{col}]", "head", sub) for col, _ in outs_]
+            assert len(into_) == len(outs_)
+            dims_ = []
+            for e in into_:
+                (d_,) = e.terms
+                self.dims[d_].level = max(self.dims[d_].level, sub)
+                dims_.append(d_)
+            return dims_
+
+        dims = out_dims("", outs, into)
+        extra, ret = [], [Expr({d: 1}) for d in dims]
+        for i, x in enumerate(vx):
+            if isinstance(x.get("into"), str) and x["into"] == "main":  # onto the first's dims
+                x["into"] = [Expr({d: 1}) for d in dims]
+            xd = out_dims(f".v{i + 1}", x["outs"], x.get("into"))
+            extra.append(VHead(x["v"], x["a"], x["z"],
+                               [(col, d, w) for (col, w), d in zip(x["outs"], xd)], x["beta"],
+                               x.get("into") is not None))
+            ret += [Expr({d: 1}) for d in xd]
         self.nodes.append(Head(name, q, k, v, a, z,
                                [(col, d, w) for (col, w), d in zip(outs, dims)], sub,
-                               self.target.cols, tiny))
-        return [Expr({d: 1}) for d in dims]
+                               self.target.cols, tiny, beta, into is not None, extra))
+        return ret
 
     def n_layers(self) -> int:
         top = max((n.level for n in self.nodes), default=0)
@@ -220,26 +295,40 @@ def ev(e: Expr, m: np.ndarray) -> np.ndarray:
     return m[:, idx] @ coef
 
 
-def conv(c: Chan, m: np.ndarray, check: bool) -> np.ndarray:
-    """silu(conv(projection)) as computed in bf16; must equal the exact value."""
+def conv(c: Chan, m: np.ndarray, check: bool, carry: dict | None = None,
+         key=None) -> np.ndarray:
+    """silu(conv(projection)) as computed in bf16; must equal the exact value. With ``carry``
+    the projection's last values of the previous chunk come first (see evaluate)."""
     x = ev(c.expr, m)
     # without lag taps a dead projection only reaches its own silu
     off = dead(c.taps[0] * bf16(x)) if not any(c.taps[1:]) else np.zeros(len(x), bool)
     if check:
         require(is_bf16(x) | off, "projection", x)
-    out = np.zeros_like(x)
+    n = len(x)
+    if carry is not None and any(c.taps[1:]):
+        prev = carry.get(key, np.zeros(0))
+        xx = np.concatenate([prev, x])
+        carry[key] = xx[-3:].copy()
+    else:
+        xx = x
+    p = len(xx) - n
+    out = np.zeros(len(xx))
     for lag, w in enumerate(c.taps):
         if w:
-            out[lag:] += w * x[: len(x) - lag]
+            out[lag:] += w * xx[: len(xx) - lag]
+    out = out[p:]
     if check:
         require((is_bf16(out) & silu_ok(out)) | off, "conv output (silu input)", out)
     return np.maximum(out, 0.0)
 
 
-def evaluate(g: Graph, tokens: list[int], check: bool = True) -> np.ndarray:
+def evaluate(g: Graph, tokens: list[int], check: bool = True,
+             carry: dict | None = None) -> np.ndarray:
     """Residual stream after every node: (n_tokens, n_dims), exact in float64.
 
     Text tokens (ids outside the chip vocabulary) can be passed as -1: all chip dims are 0.
+    ``carry`` (a dict, empty at the start of a stream) evaluates a long stream chunk by chunk:
+    head states and conv windows pass from one call to the next.
     """
     n = len(tokens)
     m = np.zeros((n, len(g.dims)))
@@ -247,17 +336,31 @@ def evaluate(g: Graph, tokens: list[int], check: bool = True) -> np.ndarray:
     chip = toks >= 0
     m[:, ONE] = chip
     uniq, inv = np.unique(toks, return_inverse=True)
-    for d, fn in g.token_fns.items():
-        col = np.array([float(fn(int(u))) if u >= 0 else 0.0 for u in uniq])[inv]
+    for d in g.token_fns:
+        col = np.array([float(g.feature_value(d, int(u))) if u >= 0 else 0.0 for u in uniq])[inv]
         if check:
             require(is_bf16(col), f"token feature {g.dims[d].name}", col)
         m[:, d] = col
-    for node in g.nodes:
+    for i, node in enumerate(g.nodes):
         try:
-            (eval_ffn if isinstance(node, FFN) else eval_head)(node, m, chip, check)
+            if isinstance(node, FFN):
+                eval_ffn(node, m, chip, check)
+            else:
+                eval_head(node, m, chip, check, carry, i)
         except ExactnessError as e:
             raise ExactnessError(f"{node.name}: {e}") from None
+    if check:
+        # every RMSNorm divides by the ballast alone: other residual values must vanish next to
+        # it (x^2 far below m * 2^80)
+        big = np.abs(m[:, 1:]).max(0) if m.shape[0] else np.zeros(0)
+        if len(big) and big.max() > RESIDUAL_MAX:
+            d = int(big.argmax()) + 1
+            raise ExactnessError(f"{g.dims[d].name}: residual value {big[d - 1]!r} would move "
+                                 f"the norms (> {RESIDUAL_MAX})")
     return m
+
+
+RESIDUAL_MAX = 2.0**28  # x^2 <= 2^56 is lost in fp32 next to the ballast's m * 2^80
 
 
 def eval_ffn(node: FFN, m: np.ndarray, chip: np.ndarray, check: bool) -> None:
@@ -279,60 +382,80 @@ def eval_ffn(node: FFN, m: np.ndarray, chip: np.ndarray, check: bool) -> None:
         if check:
             require(is_bf16(ideal), "residual add", ideal)
     m[:, node.out] = ideal
-def eval_head(node: Head, m: np.ndarray, chip: np.ndarray, check: bool) -> None:
+def eval_head(node: Head, m: np.ndarray, chip: np.ndarray, check: bool,
+              carry: dict | None = None, ni: int = 0) -> None:
     n = m.shape[0]
-    q = np.stack([conv(c, m, check) for c in node.q.values()], 1) if node.q else np.zeros((n, 0))
-    k = np.stack([conv(c, m, check) for c in node.k.values()], 1) if node.k else np.zeros((n, 0))
+    q = (np.stack([conv(c, m, check, carry, (ni, "q", s)) for s, c in node.q.items()], 1)
+         if node.q else np.zeros((n, 0)))
+    k = (np.stack([conv(c, m, check, carry, (ni, "k", s)) for s, c in node.k.items()], 1)
+         if node.k else np.zeros((n, 0)))
     qi, ki = list(node.q), list(node.k)
-    v = np.zeros((n, node.n_cols))
-    for col, c in node.v.items():
-        v[:, col] = conv(c, m, check)
-    a = ev(node.a, m)
-    z = {col: ev(e, m) for col, e in node.z.items()}
     if check:
-        require(is_bf16(a) & np.isin(a, list(DECAY)), "decay selector a", a)
-        for col, zz in z.items():
-            require((is_bf16(zz) & silu_ok(zz)) | dead(zz), f"gate z[{col}]", zz)
         nz = (k > 0).sum(1)
         require(nz <= 1, "key must be one-hot", nz)
         require(~((nz > 0) & ~chip), "key on a text token", nz)
         for t in np.nonzero((q > 0).sum(1) > 1)[0]:
             vals = q[t][q[t] > 0]
             require(vals == vals[0], "query must be multi-hot", vals)
-        written = v[nz > 0]
-        if len(written):
-            data = np.delete(written, REF_COLS, 1)
-            require(np.isin(data, [0.0, A_BIT]), "state row data column", data)
-            ref = written[:, list(REF_COLS)]
-            require((ref == 0) | (ref == A_REF), "state row ballast column", ref)
-    state: dict[int, np.ndarray] = {}
-    out = np.zeros((n, node.n_cols))
-    decay = np.vectorize(DECAY.get)(a)
-    for t in range(n):
-        if decay[t] == 0.0:
-            state.clear()
-        elif decay[t] == 0.5:
-            state = {s: row * 0.5 for s, row in state.items()}
-        if k.shape[1] and k[t].any():
-            state[ki[int(np.argmax(k[t]))]] = v[t].copy()
-        if q.shape[1] and q[t].any():
-            o = sum((state[s] for s, w in zip(qi, q[t]) if w > 0 and s in state),
-                    np.zeros(node.n_cols))
-            ref = (o[list(REF_COLS)] ** 2).sum()
-            if ref == 0:
-                if check:
-                    require(o == 0, "read without ballast", o)
-                continue
-            if check:
-                data = (np.delete(o, REF_COLS) ** 2).sum()
-                require(np.array([data <= ref * 2.0**-26]), "data not absorbed by ballast",
-                        np.array([data / ref]))
-            out[t] = o / np.sqrt(ref / node.n_cols)
-    for col, d, w in node.out:
-        zz = z.get(col, np.zeros(n))
-        val = out[:, col] * np.maximum(zz, 0.0)
+    has_key = k.any(1) if k.shape[1] else np.zeros(n, dtype=bool)
+    key_row = [ki[int(np.argmax(k[t]))] if has_key[t] else None for t in range(n)]
+    has_q = q.any(1) if q.shape[1] else np.zeros(n, dtype=bool)
+    for x_, vh in enumerate(node.vheads()):
+        v = np.zeros((n, node.n_cols))
+        for col, c in vh.v.items():
+            v[:, col] = conv(c, m, check, carry, (ni, "v", x_, col))
+        a = ev(vh.a, m)
+        z = {col: ev(e, m) for col, e in vh.z.items()}
+        beta = np.ones(n) if vh.beta is None else ev(vh.beta, m)
+        writes = has_key & (beta > 0)
         if check:
-            small = np.abs(out[:, col]) < node.tiny
-            require(is_bf16(out[:, col]) | small, f"normed column {col}", out[:, col])
-            require(is_bf16(val * w) | small, f"head output column {col}", val * w)
-        m[:, d] = val * w
+            require(is_bf16(a) & np.isin(a, list(DECAY)), "decay selector a", a)
+            require(np.isin(beta, [0.0, 1.0]), "write gate beta", beta)
+            for col, zz in z.items():
+                require((is_bf16(zz) & silu_ok(zz)) | dead(zz), f"gate z[{col}]", zz)
+            written = v[writes]
+            if len(written):
+                data = np.delete(written, REF_COLS, 1)
+                require(np.isin(data, [0.0, A_BIT]), "state row data column", data)
+                ref = written[:, list(REF_COLS)]
+                require((ref == 0) | (ref == A_REF), "state row ballast column", ref)
+        state: dict[int, np.ndarray] = {} if carry is None else carry.get((ni, "S", x_), {})
+        out = np.zeros((n, node.n_cols))
+        decay = np.vectorize(DECAY.get)(a)
+        # only tokens that decay, write or read change anything
+        events = np.nonzero((decay != 1.0) | writes | has_q)[0]
+        for t in events:
+            if decay[t] == 0.0:
+                state.clear()
+            elif decay[t] == 0.5:
+                state = {s: row * 0.5 for s, row in state.items()}
+            if writes[t]:
+                state[key_row[t]] = v[t].copy()
+            if has_q[t]:
+                o = sum((state[s] for s, w in zip(qi, q[t]) if w > 0 and s in state),
+                        np.zeros(node.n_cols))
+                ref = (o[list(REF_COLS)] ** 2).sum()
+                if ref == 0:
+                    if check:
+                        require(o == 0, "read without ballast", o)
+                    continue
+                if check:
+                    data = (np.delete(o, REF_COLS) ** 2).sum()
+                    require(np.array([data <= ref * 2.0**-26]), "data not absorbed by ballast",
+                            np.array([data / ref]))
+                out[t] = o / np.sqrt(ref / node.n_cols)
+        if carry is not None:
+            carry[ni, "S", x_] = state
+        for col, d, w in vh.out:
+            zz = z.get(col, np.zeros(n))
+            val = out[:, col] * np.maximum(zz, 0.0)
+            if check:
+                small = np.abs(out[:, col]) < node.tiny
+                require(is_bf16(out[:, col]) | small, f"normed column {col}", out[:, col])
+                require(is_bf16(val * w) | small, f"head output column {col}", val * w)
+            if vh.into:
+                m[:, d] += val * w
+                if check:
+                    require(is_bf16(m[:, d]), "head output sum", m[:, d])
+            else:
+                m[:, d] = val * w

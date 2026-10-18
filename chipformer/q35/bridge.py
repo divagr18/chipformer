@@ -333,6 +333,9 @@ class ExprScan:
         neutral = st or (is_text(t) and (t in (SPACE, BSL, *DOLLARS)
                                          or (t == COMMA and prev in HEX[:10])))
         brk = not neutral and t != EQ
+        # a "." that ends a number ("3. $11"): a space or "$" after it breaks the window too
+        if t in (SPACE, *DOLLARS) and prev == PERIOD and prev2 in HEX[:10]:
+            brk = True
         if (brk and not self.in_call) or (t == EQ and not self.in_call) or t == TC_OPEN:
             self.reset()
         if brk:
@@ -375,8 +378,8 @@ class BridgeMachine(Machine):
     def _emit(self, tokens: list[int], generated: bool) -> None:
         self.fired = self.efired = None
         for t in tokens:
-            self.fired = self.scan.feed(t)
-            self.efired = self.escan.feed(t, self.fired is not None)
+            self.fired = self.scan.feed(t & 0xFFFF)  # (a token may carry a Qwen id above)
+            self.efired = self.escan.feed(t & 0xFFFF, self.fired is not None)
         super()._emit(tokens, generated)
 
     def qwen(self, classes: list[int]) -> list[tuple]:

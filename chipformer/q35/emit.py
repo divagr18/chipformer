@@ -78,7 +78,10 @@ class Alloc:
 def reads(n) -> list[int]:
     if isinstance(n, FFN):
         return [d for _, a, b in n.terms for e in (a, b) for d in e.terms]
-    exprs = [c.expr for ch in (n.q, n.k, n.v) for c in ch.values()] + [n.a, *n.z.values()]
+    exprs = [c.expr for ch in (n.q, n.k) for c in ch.values()]
+    for vh in n.vheads():
+        exprs += [c.expr for c in vh.v.values()] + [vh.a, *vh.z.values()]
+        exprs += [] if vh.beta is None else [vh.beta]
     return [d for e in exprs for d in e.terms]
 
 
@@ -111,7 +114,9 @@ def allocate(g: Graph, clearable: set[int] | None, keep: set[int], unit_cap: int
                 if o in keep or (clearable is not None and o not in clearable):
                     continue
                 born = g.dims[o].level  # the old value must already be in the sublayer's input
-                if (by_ffn and last[o] <= level and born < level
+                # (a large old value is not subtracted in the MLP that writes the new one: the
+                # sum would round; a clear in the MLP before a head is alone in its slot, so exact)
+                if (by_ffn and o not in getattr(g, "big", ()) and last[o] <= level and born < level
                         and units.get(level, 0) < unit_cap):
                     units[level] = units.get(level, 0) + 1
                     a.subtract[d] = o
@@ -136,8 +141,10 @@ def allocate(g: Graph, clearable: set[int] | None, keep: set[int], unit_cap: int
         if isinstance(n, FFN):
             if not n.into:
                 defined.setdefault(n.level, []).append((n.out, True))
-        else:
-            defined.setdefault(n.level, []).extend((d, False) for _, d, _ in n.out)
+        else:  # heads: their own output dims (not the ones they add onto)
+            for vh in n.vheads():
+                if not vh.into:
+                    defined.setdefault(n.level, []).extend((d, False) for _, d, _ in vh.out)
     for level in sorted(defined):
         for d, by_ffn in defined[level]:
             take(d, level, by_ffn)
@@ -178,7 +185,7 @@ def row(e: Expr, lay: Layout, out: torch.Tensor, w: float = 1.0) -> None:
 
 def check_bf16(name: str, t: torch.Tensor) -> None:
     b = t.to(torch.bfloat16).to(t.dtype)
-    bad = (b != t).nonzero()
+    bad = ((b != t) | ~torch.isfinite(b)).nonzero()  # (a weight beyond bf16 rounds to inf)
     if len(bad):
         i = tuple(bad[0].tolist())
         raise ValueError(f"{name}: weight {t[i].item()!r} at {i} is not a bf16 value")
@@ -223,6 +230,7 @@ def emit_layers(g: Graph, lay: Layout, tc: dict, first: int, prefix: str,
         exit_clear = [d for d in live if d not in keep]
     over = alloc.over if alloc else {}
     assert chip is not None or not over, "an overlay needs the chip-token gate"
+    one = Expr({ONE: 1})
     for L in range(g.n_layers()):
         p = f"{prefix}layers.{first + L}."
         qkv = torch.zeros(2 * nk * HD + nv * HD, h, dtype=f32)
@@ -236,19 +244,28 @@ def emit_layers(g: Graph, lay: Layout, tc: dict, first: int, prefix: str,
         down = torch.zeros(h, inter, dtype=f32)
         heads = [n for n in g.nodes if isinstance(n, Head) and n.level == 2 * L + 1]
         for j, n in enumerate(heads):
-            vh = j * r  # this head's value head
-            for base, chans in ((j * HD, n.q), (nk * HD + j * HD, n.k),
-                                (2 * nk * HD + vh * HD, n.v)):
+            vhs = n.vheads()
+            assert len(vhs) <= r, (n.name, len(vhs), r)
+            for base, chans in ((j * HD, n.q), (nk * HD + j * HD, n.k)):
                 for i, ch in chans.items():
                     row(ch.expr, lay, qkv[base + i])
                     for lag, w in enumerate(ch.taps):
                         convw[base + i, 0, -1 - lag] = w
-            row(Expr({ONE: 128}), lay, bw[vh])  # beta = sigmoid(128) = 1
-            row(n.a, lay, aw[vh])
-            for col, e in n.z.items():
-                row(e, lay, zw[vh * HD + col])
-            for col, d, w in n.out:
-                ow[lay.dim(d), vh * HD + col] += w
+            for x, vhd in enumerate(vhs):
+                vh = j * r + x  # value head x of this key head
+                base = 2 * nk * HD + vh * HD
+                for i, ch in vhd.v.items():
+                    row(ch.expr, lay, qkv[base + i])
+                    for lag, w in enumerate(ch.taps):
+                        convw[base + i, 0, -1 - lag] = w
+                # beta = sigmoid(128) = 1, or a write gate: sigmoid(256 g - 128), 1 or exactly 0
+                beta = Expr({ONE: 128}) if vhd.beta is None else 256 * vhd.beta - 128 * one
+                row(beta, lay, bw[vh])
+                row(vhd.a, lay, aw[vh])
+                for col, e in vhd.z.items():
+                    row(e, lay, zw[vh * HD + col])
+                for col, d, w in vhd.out:
+                    ow[lay.dim(d), vh * HD + col] += w
         one = Expr({ONE: 1})
 
         def clear_gate(d):
@@ -303,7 +320,7 @@ def embedding_rows(g: Graph, lay: Layout, vocab: list[int], h: int) -> torch.Ten
     """Rows for the chip tokens ``vocab`` (chip token ids, in order)."""
     e = torch.zeros(len(vocab), h, dtype=torch.float32)
     e[:, lay.off : lay.off + lay.m] = lay.ballast
-    for d, fn in g.token_fns.items():
-        e[:, lay.dim(d)] = torch.tensor([float(fn(t)) for t in vocab])
+    for d in g.token_fns:
+        e[:, lay.dim(d)] = torch.tensor([float(g.feature_value(d, t)) for t in vocab])
     check_bf16("embedding", e)
     return e

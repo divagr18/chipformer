@@ -102,9 +102,15 @@ class Chip8Q35(Circ):
         return self.slot_head(name, keys, query, data, self.one, a)
 
 
-def build(target: Target | None = None) -> Chip8Q35:
+def build(target: Target | None = None, store=None) -> Chip8Q35:
+    """The circuit; with ``store`` (a store.Vocab, or True for the default tokenizer) it also
+    holds the object store (store.py, store_q35.py)."""
     c = Chip8Q35(target)
     one, rs = c.one, c.rs
+    if store is True:
+        from chipformer.q35.store import Vocab
+
+        store = Vocab()
 
     # ------------------------------------------------------------ registers (one head)
     regs = [("PC", spec.PC, 12), ("I", spec.I, 12), ("SP", spec.SP, 4), ("DT", spec.DT, 8),
@@ -162,6 +168,14 @@ def build(target: Target | None = None) -> Chip8Q35:
     fns = {op: T[cls] for op, cls in B.FUNCS.items()}
     fn_any = sum(fns.values(), Expr())
     (in_call,) = c.slot_head("in_call", {0: tco + tcc + rs}, {0: one}, {2: tco}, tco + tcc + rs)
+    st = None
+    s_gate = []  # literals that hold everything else off during a store answer
+    if store is not None:
+        from chipformer.q35 import store_q35
+
+        st = store_q35.capture(c, store, in_call, tco, tcc)
+        s_gate = [one - st.S]
+    c.store = st
     dollars = sum((T[d_] for d_ in B.DOLLARS), Expr())
     safe = (T[B.SPACE] + T[B.NL] + T[B.WS] + dollars + T[B.LPAREN] + T[B.SLPAREN]
             + c.mu)  # may precede a first number
@@ -178,10 +192,11 @@ def build(target: Target | None = None) -> Chip8Q35:
                  12: Chan(open2, (0, 0, 1, 0)), 13: Chan(T[B.SPACE], (0, 1, 0, 0)),
                  14: Chan(signs, (0, 1, 0, 0)), 15: Chan(T[B.SLPMINUS], (0, 1, 0, 0)),
                  16: Chan(sign_prev, (0, 1, 0, 0)), 17: Chan(sign_prev, (0, 0, 1, 0)),
-                 18: Chan(T[B.HEX[11]], (0, 1, 0, 0)), 19: Chan(T[B.BSL], (0, 0, 1, 0))}
+                 18: Chan(T[B.HEX[11]], (0, 1, 0, 0)), 19: Chan(T[B.BSL], (0, 0, 1, 0)),
+                 20: Chan(T[B.PERIOD], (0, 1, 0, 0))}
     (prev_dig, prev2_dig, prev_cm, prev_bs, prev_safe, prev_text, prev_eq, prev_o1, prev_o2,
      prev2_o1, prev2_o2, prev_sp, prev_sg, prev_slm, prev_spv, prev2_spv, prev_b,
-     prev2_bs) = c.slot_head("prev", {0: one}, {0: one}, prev_cols, one)
+     prev2_bs, prev_pt) = c.slot_head("prev", {0: one}, {0: one}, prev_cols, one)
     # the math a first number sits in: right after "$" / "$$", or after it and a space or sign
     in_o1 = c.node(c.t_and([prev_o1]) + c.t_and([prev_sp + prev_sg + prev_slm, prev2_o1]),
                    "open.$")
@@ -280,7 +295,7 @@ def build(target: Target | None = None) -> Chip8Q35:
                    c.node(c.t_ge(la_, 1, 0, 31), "la>0"), c.node(c.t_ge(lb_, 1, 0, 31), "lb>0"),
                    c.node(cat(c.t_ge(la_ + lb_, B.INLINE_MIN_DIGITS[op], 0, 62,
                                      lits=[op_oh[ops.index(op)]]) for op in ops), "inline.big"),
-                   sum(op_oh, Expr())], "inline.trig")
+                   sum(op_oh, Expr()), *s_gate], "inline.trig")
     # 1 from an inline trigger until the next text token: the mode of the CALL record
     (inline_mode,) = c.slot_head("inline.mode", {0: c.is_text}, {0: one}, {2: trig}, c.is_text)
 
@@ -291,7 +306,11 @@ def build(target: Target | None = None) -> Chip8Q35:
     sto = {cls: T[cls] for cls in B.TAPE_CODE if cls not in (B.TIMESW, B.FN_DIV, B.PERIOD)}
     sto.update({B.TIMESW: tw_op, B.FN_DIV: dv_op, B.PERIOD: period_dig})  # the conditional ones
     e_st = sum(sto.values(), Expr())  # stored
-    e_brk = one - e_st - T[B.SPACE] - T[B.BSL] - dollars - comma_join - T[B.EQ]
+    # a "." that ends a number ("3. $11", "carry 1. 1+6"): a space or "$" after it breaks the
+    # window (else 3.11 - 8); an operator does not ("408. \times 2" goes on from a print)
+    e_brk0 = one - e_st - T[B.SPACE] - T[B.BSL] - dollars - comma_join - T[B.EQ]
+    pt_brk = c.and_([prev_pt, prev2_dig, T[B.SPACE] + dollars], "expr.period_end")
+    e_brk = e_brk0 + pt_brk
     e_reset = c.node(c.t_and([e_brk, one - in_call]) + c.t_and([T[B.EQ], one - in_call])
                      + c.t_and([tco]), "expr.reset")
 
@@ -327,7 +346,7 @@ def build(target: Target | None = None) -> Chip8Q35:
                     + c.t_and([e_st, e_start, one - e_cnt[B.TAPE_MAX], one - e_special, e_ops[1],
                                e_dig[B.EXPR_MIN_DIGITS - 1]]), "expr.good")
     (e_ok,) = c.slot_head("expr.ok", {0: e_st + e_brk}, {0: one}, {2: e_good}, e_st + e_brk)
-    etrig = c.and_([T[B.EQ], one - in_call, e_ok, one - trig], "expr.trig")
+    etrig = c.and_([T[B.EQ], one - in_call, e_ok, one - trig, *s_gate], "expr.trig")
     # the tape: cell w = the code of stored token w (count w + 1), and the length
     tcode = [sum((e for cls, e in sto.items() if B.TAPE_CODE[cls] >> i & 1), Expr())
              for i in range(6)]
@@ -759,7 +778,7 @@ def build(target: Target | None = None) -> Chip8Q35:
     A = []  # (literals, kind, payload) with kind 0 = VAL, 1 = ADDR, 2 = STEP
 
     def case(lits, kind, payload):
-        A.append((lits, kind, payload))
+        A.append((lits + s_gate, kind, payload))
 
     # ---------------------------------------------------------------- CALL record
     # At </tool_call> (with a known routine) the circuit writes the arguments' digits to RAM,
@@ -767,7 +786,8 @@ def build(target: Target | None = None) -> Chip8Q35:
     op_valid = sum(op_oh, Expr())
     # a tool call starts its record at </tool_call>; an inline one predicts STEP at "=" and starts
     # at that STEP (so j can stay a plain token-feature counter)
-    call_val = c.node(c.t_and([tcc, op_valid]) + c.t_and([rs, inline_mode, prev_text]), "call.v")
+    call_val = c.node(c.t_and([tcc, op_valid, *s_gate]) + c.t_and([rs, inline_mode, prev_text]),
+                      "call.v")
     (calling,) = c.slot_head("calling", {0: tcc + rs + trig}, {0: one}, {2: call_val + trig},
                              tcc + rs + trig)
     neq = one - T[B.EQ]
@@ -819,7 +839,7 @@ def build(target: Target | None = None) -> Chip8Q35:
     # STEP at "=", then the tape cells, its length, MODE, PC = eval, STEP (bcd.eval_writes)
     tn = from_bits(tlen_bits)
     e_val = c.node(c.t_and([rs, e_mode, prev_text])
-                   + c.t_ge(tn, 1, 0, 63, lits=[tcc, calc_fn]), "expr.call.v")
+                   + c.t_ge(tn, 1, 0, 63, lits=[tcc, calc_fn, *s_gate]), "expr.call.v")
     (ecall,) = c.slot_head("expr.calling", {0: tcc + rs + etrig}, {0: one}, {2: e_val + etrig},
                            tcc + rs + etrig)
     in_t = c.node(c.t_lt(j - tn, 0, -B.TAPE_MAX - 1, JMAX + 1), "expr.call.in")
@@ -1189,10 +1209,13 @@ def build(target: Target | None = None) -> Chip8Q35:
     case(in_print + [digit, one - p10 - p11], 2, list(vread[:4]) + [1])
     case(in_print + [digit, p10], 2, TEXT_CODE + B.PERIOD - B.TEXT_BASE)
     case(in_print + [digit, p11], 2, TEXT_CODE + B.ELLIPSIS - B.TEXT_BASE)
+    s_owner, anyp, ybits = [], None, None
+    if st is not None:  # the store's answer (its cases are not gated by s_gate)
+        s_owner, anyp, ybits = store_q35.respond(c, st, A, cnt, jeq, tcc)
     # who predicts the next token: the circuit on chip tokens and inside a print, else Qwen
     owner = c.node(c.t_and([c.mu]) + c.t_and([c.is_text, k["fd"][0], cnt[0], upto,
-                                              one - calling - ecall])
-                   + c.t_and([c.is_text, calling + ecall]), "owner")
+                                              one - calling - ecall, *s_gate])
+                   + c.t_and([c.is_text, calling + ecall, *s_gate]) + s_owner, "owner")
 
     nxt = [c.node([t for lits, kind, _ in A if kind == 1 for t in c.t_and(lits)], "next.is_addr"),
            c.node([t for lits, kind, _ in A if kind == 2 for t in c.t_and(lits)], "next.is_ctrl")]
@@ -1204,18 +1227,27 @@ def build(target: Target | None = None) -> Chip8Q35:
     # The emitter clears every other chip dim here, so after the chip layers a token holds only
     # its Qwen part, mu, the output code (KAPPA * +-1 where the circuit owns the position, else
     # 0) and tau (0 on chip tokens, the text value on text tokens).
-    for i, e in enumerate(c.code):  # the input code goes first, so the exit adds onto 0
+    out_dims = c.code + (st.yc if st is not None else [])
+    for i, e in enumerate(out_dims):  # the input code goes first, so the exit adds onto 0
         c.ffn([(-1, one, e), (1, one, -1 * e)], f"code.clear{i}", into=e)
     top = max(n.level for n in c.nodes)
+    # an any-print (the store printing a token by its id) leaves the class code at 0 and puts
+    # KAPPA * +-1 in the id code dims; everything else uses the class code
+    not_any = [] if anyp is None else [one - anyp]
     for i, e in enumerate(c.code):
-        c.ffn(c.t_and([nxt[i], owner], 2 * KAPPA) + c.t_and([owner], -KAPPA),
+        c.ffn(c.t_and([nxt[i], owner, *not_any], 2 * KAPPA) + c.t_and([owner, *not_any], -KAPPA),
               f"exit.code{i}", into=e, min_level=top)
+    if st is not None:
+        for i, e in enumerate(st.yc):
+            c.ffn(c.t_and([ybits[i], anyp], 2 * KAPPA) + c.t_and([anyp], -KAPPA),
+                  f"exit.id{i}", into=e, min_level=top)
+    c.anyp, c.ybits = anyp, ybits
     # tau: 0 wherever the circuit predicts (chip tokens: -1 + 1; owned text: TAU_TEXT - TAU_TEXT),
     # TAU_TEXT where Qwen does, which keeps chip tokens out of Qwen's text
     c.ffn([(1, c.mu, one)] + c.t_and([owner, c.is_text], -TAU_TEXT), "exit.tau", into=c.tau,
           min_level=top)
-    c.keep = [next(iter(e.terms)) for e in c.code] + [next(iter(c.tau.terms)),
-                                                       next(iter(c.mu.terms))]
+    c.keep = [next(iter(e.terms)) for e in out_dims] + [next(iter(c.tau.terms)),
+                                                         next(iter(c.mu.terms))]
     c.out = {"regs": R, "x": x, "cnt": cnt, "in_tick": in_tick, "old": old, "b1": b1, "b2": b2,
              "ind": ind, "vx": vxb, "vy": vyb, "ctx": k, "vread": vread, "next": nxt}
     return c

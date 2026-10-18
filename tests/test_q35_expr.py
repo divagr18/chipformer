@@ -143,6 +143,9 @@ SCAN = [
     ([" ", "12", " +", " ", "3", " apples", " +", " ", "45", " ="], None),  # broken window
     ([" ", "1234", *TIMES, "5678", " ="], "fast"),  # one operator: the single-op path
     ([" ", "^", "12", " +", " ", "345", " ="], None),  # an operator can't start it
+    # a "." that ends a number breaks the window: no 3.11 - 8, and 12+345+6 alone
+    ([" ", "3", ".", " $", "11", " -", " ", "8", " ="], None),
+    ([" ", "1", ".", " ", "12", "+", "345", "+", "6", " ="], "12+345+6"),
 ]
 
 
@@ -178,7 +181,7 @@ def check(circuit, bm):
     return n
 
 
-@pytest.mark.parametrize("tokens,want", SCAN[:4] + SCAN[5:7])
+@pytest.mark.parametrize("tokens,want", SCAN[:4] + SCAN[5:7] + SCAN[-2:])
 def test_circuit_scan(circuit, tokens, want):
     bm, _ = scan(tokens)
     bm.text(2)

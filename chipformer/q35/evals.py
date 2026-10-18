@@ -194,14 +194,14 @@ def tool_names():
 def expr_value(s: str):
     """The exact value of an expression as Qwen writes it (LaTeX operators, ^{}, commas between
     digits, "$"), or None."""
-    s = re.sub(r"(?<=\d),(?=\d)", "", s)
+    s = re.sub(r"(?<=\d),(?=\d)", "", s.strip(" \t\n,"))  # (a sentence's comma before it)
     s = s.replace("\\times", "*").replace("\\cdot", "*").replace("\\div", "/").replace("×", "*")
     s = s.replace("÷", "/").replace("−", "-").replace("{", "(").replace("}", ")").replace("$", "")
     s = s.replace("**", "^").replace("^", "**")
     s = re.sub(r"([\d)])\s*\(", r"\1*(", s)
     if not re.fullmatch(r"[\d.\s+\-*/()]+", s):
         return None
-    s = re.sub(r"\d+(?:\.\d*)?", lambda m: f"Fraction('{m[0]}')", s)
+    s = re.sub(r"\d+(?:\.\d*)?", lambda m: f"Fraction('{m[0]}')", s).strip()
     try:
         return eval(s, {"Fraction": Fraction})  # noqa: S307 (digits and operators only)
     except (ZeroDivisionError, SyntaxError, TypeError, ValueError, OverflowError):
@@ -743,9 +743,12 @@ def inline_fires(text: str, pred) -> list[dict]:
         machine = shown
         f = {"expr": x[0][0].strip() if x else before[-40:], "printed": shown[:60]}
         t = computer_text(*x[1:]) if x else None
-        ex =EXPR_RE.search(before[-300:])  # v18: a whole expression (more than one operator)
-        # (the single-op path wins when its "A op B =" is the whole window, signs included)
-        if ex and (not x or len(x[0][0].strip()) + 2 < len(ex[0].strip())) and (
+        ex = EXPR_RE.search(before[-300:])  # v18: a whole expression (more than one operator)
+        # The single-op path wins when its "A op B =" is the whole window: nothing of an
+        # expression (a digit, ".", an operator, ")") right before it
+        lead = before[-200:][:x[0].start()].rstrip(" ") if x else ""
+        single = x and not re.search(r"([\d.)+\-*/×÷−^]|\\times|\\cdot|\\div)$", lead)
+        if ex and not single and (
                 re.search(r"[()^{}]|\d\.\d", ex[1]) or len(re.findall(
                     r"[+\-*/×÷−]|\\times|\\cdot|\\div", ex[1])) >= 2) and (
                 v := expr_value(ex[1])) is not None:
