@@ -338,11 +338,11 @@ def setup(cond: str, mpath: str, batch: int, max_len: int, fast: bool, compile_:
           view: int = 0):
     """evals.run's model setup: tokenizer, model, BIOS, Ctx, hook, ban, BatchDecoder."""
     import torch
-    from transformers import AutoModelForImageTextToText, AutoTokenizer
+    from transformers import AutoTokenizer
 
     kind, flags = E.parse_cond(cond)
     tok = AutoTokenizer.from_pretrained(mpath)
-    model = AutoModelForImageTextToText.from_pretrained(mpath, dtype=torch.bfloat16)
+    model = E.load_model(mpath)
     model = model.cuda().eval()
     chip, bios, bios_id = None, [], None
     meta_path = Path(mpath) / "chipformer.json"
@@ -746,12 +746,12 @@ def tfcheck(args) -> None:
     top-2 logit gap shows whether it is a bf16 near-tie (kernel rounding) or a real
     disagreement. Positions with a forced token (pytool) are skipped."""
     import torch
-    from transformers import AutoModelForImageTextToText, AutoTokenizer
+    from transformers import AutoTokenizer
 
     cond = args.cond
     mpath = args.model or default_model(cond)
     tok = AutoTokenizer.from_pretrained(mpath)
-    model = AutoModelForImageTextToText.from_pretrained(mpath, dtype=torch.bfloat16).cuda().eval()
+    model = E.load_model(mpath).cuda().eval()
     from chipformer.q35.fast import exact_matmuls
 
     exact_matmuls()

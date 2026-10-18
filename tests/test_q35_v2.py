@@ -55,6 +55,7 @@ def test_checkpoint_print_and_exit(circuit, dtype):
 
     from chipformer.q35 import tiny
     from chipformer.q35.emit import allocate
+    from chipformer.q35.ir import Head
     from chipformer.q35.tiny import pick_layout
 
     model = AutoModelForCausalLM.from_pretrained(TINY, dtype=getattr(torch, dtype)).eval()
@@ -76,8 +77,15 @@ def test_checkpoint_print_and_exit(circuit, dtype):
     lay.slots = alloc.slots
     res = caught[0][0].float()
     kept = {lay.dim(d) for d in circuit.keep}
-    others = [i for i in range(lay.hidden) if i not in kept]
+    # the counter's halving rows reach 2^-j: below the head's ``tiny`` (2^-90) the exit's
+    # clear cannot subtract them exactly (the normed value underflows), and the IR already
+    # lets such outputs round; nothing reads those chip dims after the exit
+    tiny_dims = {lay.dim(d): n.tiny for n in circuit.nodes if isinstance(n, Head) and n.tiny
+                 for vh in n.vheads() for _, d, _ in vh.out if d in alloc.slots}
+    others = [i for i in range(lay.hidden) if i not in kept and i not in tiny_dims]
     assert res[:, others].abs().max() == 0
+    for i, t in tiny_dims.items():
+        assert res[:, i].abs().max() < t
 
 
 @pytest.mark.parametrize("calls", [[("mul", "37", "43")], [("add", "48213", "9921"),

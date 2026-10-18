@@ -224,11 +224,19 @@ def activity(g: Graph, traces: list[list[int]]) -> Activity:
                 wrote |= bool((x > 0).any())
                 upd(act.key_max, (i, ch_i), float(ev(ch.expr, m)[txt].max(initial=-np.inf)))
             upd(act.keys, i, wrote, lambda x, y: x or y)
-            for col, d, _ in n.out:
-                upd(act.cols, (i, col), bool((m[txt, d] != 0).any()), lambda x, y: x or y)
-                if col in n.z:
-                    upd(act.z_max, (i, col), float(ev(n.z[col], m)[txt].max(initial=-np.inf)))
+            for x_, vh in enumerate(n.vheads()):
+                for col, d, _ in vh.out:
+                    # (a dim several heads add into is judged by its total)
+                    upd(act.cols, (i, x_, col), bool((m[txt, d] != 0).any()), lambda x, y: x or y)
+                    if col in vh.z:
+                        upd(act.z_max, (i, x_, col),
+                            float(ev(vh.z[col], m)[txt].max(initial=-np.inf)))
     return act
+
+
+def _vh_reads(vh) -> set[int]:
+    """What a value head's write gate and decay read: they act at text positions too."""
+    return _reads(vh.a) | (set() if vh.beta is None else _reads(vh.beta))
 
 
 def needed(g: Graph, act: Activity, keep: set[int]) -> set[int]:
@@ -238,21 +246,23 @@ def needed(g: Graph, act: Activity, keep: set[int]) -> set[int]:
     need = set(keep) | _reads(g.is_text) | _reads(g.mu)
     for i, n in enumerate(g.nodes):
         if isinstance(n, Head):
-            need |= _reads(n.a)
-            chans = list(n.q.values()) + list(n.k.values()) + list(n.v.values())
+            vhs = n.vheads()
+            vchans = [ch for vh in vhs for ch in vh.v.values()]
+            need |= set().union(*(_vh_reads(vh) for vh in vhs))
+            chans = list(n.q.values()) + list(n.k.values()) + vchans
             need |= {d for ch in chans if any(ch.taps[1:]) for d in _reads(ch.expr)}
             if act.keys[i]:
-                need |= {d for ch in list(n.k.values()) + list(n.v.values())
-                         for d in _reads(ch.expr)}
+                need |= {d for ch in list(n.k.values()) + vchans for d in _reads(ch.expr)}
     for n in sorted(g.nodes, key=lambda n: -n.level):  # reads come from lower levels
         if isinstance(n, FFN):
             if n.out in need:
                 need |= {d for _, a, b in n.terms for d in _reads(a) | _reads(b)}
             continue
-        for col, d, _ in n.out:
-            if d in need:
-                need |= {x for ch in n.q.values() for x in _reads(ch.expr)}
-                need |= _reads(n.z.get(col, Expr({})))
+        for vh in n.vheads():
+            for col, d, _ in vh.out:
+                if d in need:
+                    need |= {x for ch in n.q.values() for x in _reads(ch.expr)}
+                    need |= _reads(vh.z.get(col, Expr({})))
     return need
 
 
@@ -274,26 +284,30 @@ def plan(g: Graph, act: Activity, keep: set[int]) -> Plan:
             for j in range(len(n.terms)):
                 killable[i, j] = n.out not in need or not act.terms[i, j]
         else:
-            for col, d, _ in n.out:
-                killable[i, ("col", col)] = d not in need or not act.cols[i, col]
+            for x_, vh in enumerate(n.vheads()):
+                for col, d, _ in vh.out:
+                    killable[i, ("col", x_, col)] = d not in need or not act.cols[i, x_, col]
     for i, n in enumerate(g.nodes):
         if isinstance(n, FFN):
             for j, (_, a, b) in enumerate(n.terms):
                 if not killable[i, j]:
                     ok -= _reads(a) | _reads(b) | {n.out}
             continue
-        ok -= _reads(n.a)
-        for ch in list(n.q.values()) + list(n.k.values()) + list(n.v.values()):
+        vhs = n.vheads()
+        vchans = [ch for vh in vhs for ch in vh.v.values()]
+        for vh in vhs:
+            ok -= _vh_reads(vh)
+        for ch in list(n.q.values()) + list(n.k.values()) + vchans:
             if any(ch.taps[1:]):
                 ok -= _reads(ch.expr)
         if act.keys[i]:
-            ok -= {d for ch in list(n.k.values()) + list(n.v.values()) for d in _reads(ch.expr)}
-        cols = [(col, d) for col, d, _ in n.out]
-        if not all(killable[i, ("col", col)] for col, _ in cols):
+            ok -= {d for ch in list(n.k.values()) + vchans for d in _reads(ch.expr)}
+        cols = [(x_, col, d) for x_, vh in enumerate(vhs) for col, d, _ in vh.out]
+        if not all(killable[i, ("col", x_, col)] for x_, col, _ in cols):
             ok -= {d for ch in n.q.values() for d in _reads(ch.expr)}
-        for col, d in cols:
-            if not killable[i, ("col", col)]:
-                ok -= _reads(n.z.get(col, Expr({}))) | {d}
+        for x_, col, d in cols:
+            if not killable[i, ("col", x_, col)]:
+                ok -= _reads(vhs[x_].z.get(col, Expr({}))) | {d}
     p = Plan(ok)
     bounds = [np.inf]
 
@@ -318,12 +332,18 @@ def plan(g: Graph, act: Activity, keep: set[int]) -> Plan:
                     p.keys.add((i, ch_i))
                     bound(act.key_max[i, ch_i], noise(ch.expr), 104 / ch.taps[0])
         noisy = any(_reads(ch.expr) & ok for ch in n.q.values())
-        for col, d, _ in n.out:
-            if col in n.z and (noisy or d in ok or _reads(n.z[col]) & ok):
-                p.gates.add((i, col))
-                bound(act.z_max.get((i, col), 0), noise(n.z[col]), 104)
+        for x_, vh in enumerate(n.vheads()):
+            for col, d, _ in vh.out:
+                if col in vh.z and (noisy or d in ok or _reads(vh.z[col]) & ok):
+                    p.gates.add((i, x_, col))
+                    bound(act.z_max.get((i, x_, col), 0), noise(vh.z[col]), 104)
     p.q_bound = float(min(bounds))
     return p
+
+
+def _vz(n, x_: int) -> dict:
+    """The output gates of value head x_ of head n (the first value head's are n.z)."""
+    return n.z if x_ == 0 else n.vx[x_ - 1].z
 
 
 def apply(g: Graph, p: Plan) -> None:
@@ -337,9 +357,9 @@ def apply(g: Graph, p: Plan) -> None:
     for i, ch_i in p.keys:
         ch = g.nodes[i].k[ch_i]
         g.nodes[i].k[ch_i] = Chan(ch.expr - off, ch.taps)
-    for i, col in p.gates:
-        n = g.nodes[i]
-        n.z[col] = n.z[col] - off
+    for i, x_, col in p.gates:
+        z = _vz(g.nodes[i], x_)
+        z[col] = z[col] - off
     for d in p.dims & set(g.token_fns):
         g.token_fns[d] = (lambda f: lambda t: 0 if B.is_text(t) else f(t))(g.token_fns[d])
 
@@ -389,13 +409,21 @@ def evaluate_noisy(g: Graph, p: Plan, tokens: list[int], noise: dict[int, np.nda
             if (i, ch_i) in p.keys:
                 x = ch.taps[0] * ev(ch.expr, m)[txt]
                 ir.require(ir.dead(x), f"{node.name}: key channel not dead", x)
-        for col, d, _ in node.out:
-            if (i, col) in p.gates:
-                zz = ev(node.z[col], m)[txt]
-                ir.require(ir.dead(zz), f"{node.name}: output gate not dead", zz)
-        keep = {d: m[txt, d].copy() for _, d, _ in node.out if d in noise}
+        vhs = node.vheads()
+        for x_, vh in enumerate(vhs):
+            for col, d, _ in vh.out:
+                if (i, x_, col) in p.gates:
+                    zz = ev(vh.z[col], m)[txt]
+                    ir.require(ir.dead(zz), f"{node.name}: output gate not dead", zz)
+        outs = {d for vh in vhs for _, d, _ in vh.out}
+        # an overlaid dim several heads add into holds the noise at text positions: take it out
+        # before the head adds (its share there must be 0) and put it back after
+        keep = {d: m[txt, d].copy() for d in outs if d in noise}
+        for d in keep:
+            if any(vh.into for vh in vhs):
+                m[txt, d] = 0
         ir.eval_head(node, m, chip, False)
-        for _, d, _ in node.out:
+        for d in outs:
             if d in noise:
                 ir.require(m[txt, d] == 0, f"{node.name}: write into an overlay dim on text",
                            m[txt, d])

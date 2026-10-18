@@ -876,6 +876,17 @@ def default_model(cond: str) -> str:
     return str(snaps[-1])
 
 
+def load_model(mpath):
+    """The checkpoint in bf16: Qwen3.5 as shipped (with its vision tower), or a text-only export
+    (textonly.py, Qwen3_5ForCausalLM)."""
+    import torch
+    from transformers import AutoModelForCausalLM, AutoModelForImageTextToText
+
+    arch = json.loads((Path(mpath) / "config.json").read_text()).get("architectures", [""])[0]
+    cls = AutoModelForCausalLM if arch.endswith("ForCausalLM") else AutoModelForImageTextToText
+    return cls.from_pretrained(mpath, dtype=torch.bfloat16)
+
+
 def build_prompt(tok, question: str, cond: str, bios: list[int]) -> list[int]:
     kind, flags = parse_cond(cond)
     msgs = [{"role": "user", "content": question + SUFFIX}]
@@ -964,7 +975,7 @@ def selftest(bd, ctx, tok, bios) -> None:
 
 def run(args) -> None:
     import torch
-    from transformers import AutoModelForImageTextToText, AutoTokenizer
+    from transformers import AutoTokenizer
 
     cond = args.cond + (f"-{args.tag}" if args.tag else "")
     kind, flags = parse_cond(cond)
@@ -986,8 +997,7 @@ def run(args) -> None:
         return
     mpath = args.model or default_model(cond)
     tok = AutoTokenizer.from_pretrained(mpath)
-    model = AutoModelForImageTextToText.from_pretrained(mpath, dtype=torch.bfloat16)
-    model = model.cuda().eval()
+    model = load_model(mpath).cuda().eval()
     chip, bios, bios_id = None, [], None
     meta_path = Path(mpath) / "chipformer.json"
     if meta_path.exists():

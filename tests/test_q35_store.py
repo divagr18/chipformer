@@ -221,11 +221,12 @@ def test_circuit_with_arithmetic(circuit, vocab):
 
 
 def test_store_off_is_unchanged():
-    """Without the store the circuit is exactly the old one."""
+    """Without the store the circuit is the plain one (pinned: paired RAM, rescheduled, fused
+    exit, docs/q35-size.md)."""
     c = chip8_q35.build(TARGETS["4b"])
     # (q35-int: v16 signed / mod / gcd, v18 expressions, the tool-response tail)
-    assert c.stats() == {"layers": 16, "dims": 3862, "heads": 116, "ffn_units": 25162,
-                         "max_units": 6224, "max_heads": 16}
+    assert c.stats() == {"layers": 12, "dims": 3220, "heads": 84, "ffn_units": 28253,
+                         "max_units": 8640, "max_heads": 16}
     assert c.store is None
 
 
@@ -241,9 +242,9 @@ def test_big_dims_not_subtracted(circuit):
 
 
 def test_store_fits(vocab):
-    """16 chip layers on Qwen3.5-4B's and 0.8B's head shapes."""
+    """At most 16 chip layers on Qwen3.5-4B's and 0.8B's head shapes."""
     for t in TARGETS.values():
-        assert chip8_q35.build(t, store=vocab).n_layers() == 16
+        assert chip8_q35.build(t, store=vocab).n_layers() <= 16
 
 
 

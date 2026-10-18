@@ -21,7 +21,8 @@ from fractions import Fraction
 from chipformer import spec
 from chipformer.dsl.graph import Expr
 from chipformer.q35 import bridge as B
-from chipformer.q35.ir import Chan, Target
+from chipformer.q35.ir import A_BIT, A_REF, REF_COLS, Chan, Target
+from chipformer.q35.ir import K as ir_K
 from chipformer.q35.lib import bcd as bios
 from chipformer.q35.prims import Circ, cat, from_bits, onehot_bits
 
@@ -66,10 +67,10 @@ class Chip8Q35(Circ):
         self.is_boot = f("is_boot", lambda t: int(t == spec.BOOT))
         self.vb = [f(f"vb{i}", lambda t, i=i: (t - spec.VAL_BASE) >> i & 1 if isv(t) else 0)
                    for i in range(12)]
-        self.an = [[f(f"a{k}[{x}]",
-                      lambda t, k=k, x=x: int(isa(t) and (t - spec.ADDR_BASE) >> 4 * k & 15 == x))
-                    for x in range(16)] for k in range(3)]
-        self.a12 = f("a12", lambda t: int(isa(t) and (t - spec.ADDR_BASE) >> 12 & 1))
+        # an ADDR token's address as 13 bits: write keys read them at the next token through a
+        # conv tap, so they must be visible on text tokens (overlay.py); bits keep that to 13 dims
+        self.ab = [f(f"ab{i}", lambda t, i=i: int(isa(t) and (t - spec.ADDR_BASE) >> i & 1))
+                   for i in range(13)]
         self.is_cls_addr = f("is_cls_addr", lambda t: int(t == spec.addr_token(spec.CLS)))
         self.is_text = f("is_text", lambda t: int(B.is_text(t)))
         self.mu = f("mu", lambda t: int(not B.is_text(t)))  # chip token: Qwen's layers mute on it
@@ -83,16 +84,19 @@ class Chip8Q35(Circ):
         self.tau = f("tau", lambda t: TAU_TEXT if B.is_text(t) else -1)
         self.rs = self.is_step + self.is_boot  # record start
 
-    def addr_lits(self, a: int) -> list:
-        """0/1 literals that are all 1 exactly at an ADDR a token (one-hot, no constants)."""
-        lits = [self.an[k][a >> 4 * k & 15] for k in range(3)]
-        return lits + [self.a12] if a >> 12 else lits
+    def bit_lit(self, i: int, v: int):
+        """1 at an ADDR token whose address bit i is v; 0 at every other token (so a sum of
+        these, like one-hots, is 0 away from ADDR tokens)."""
+        return self.ab[i] if v else self.is_addr - self.ab[i]
+
+    def addr_lits(self, a: int, bits=range(13)) -> list:
+        """0/1 literals that are all 1 exactly at an ADDR a token (and all 0 at other tokens);
+        ``bits``: only these address bits."""
+        return [self.bit_lit(i, a >> i & 1) for i in bits]
 
     def write_key(self, a: int) -> Chan:
         """Key pre-activation (AND units) for a write to cell a, seen at its VAL token."""
         lits = self.addr_lits(a)
-        if not a >> 12:
-            lits = lits + [self.one - self.a12]
         return Chan(sum(lits, Expr()) - (len(lits) - 1), (0, 1, 0, 0))
 
     def bank(self, name: str, cells: dict[int, int], query: dict, nbits: int, a=0) -> list:
@@ -101,10 +105,47 @@ class Chip8Q35(Circ):
         data = {2 + i: self.vb[i] for i in range(nbits)}
         return self.slot_head(name, keys, query, data, self.one, a)
 
+    def ram_head(self, name: str, h: int, query: dict, gates: tuple, acc: list | None,
+                 hi11=None, half: int | None = None) -> list:
+        """Key head h of the 4 KB RAM (cells with low nibble h); its read bits are added into
+        ``acc`` (None: new dims), so all RAM heads share 8 dims: a query matches at most one
+        head, the others read exactly 0.
 
-def build(target: Target | None = None, store=None) -> Chip8Q35:
+        With two value heads per key head (Qwen3.5-4B, ``hi11`` given) row s holds cell
+        (s >> 4 << 8) | ((s & 15) << 4) | h of both halves of the RAM, one per value head: the
+        write gate picks the value head by bit 11 of the address (``hi11``: 1 when the ADDR token
+        before this VAL has it), and on a read the output gate gates[x] passes value head x
+        only. Without (``half`` given) the head holds one half and the query selects it."""
+        one, K_ = self.one, ir_K
+        bits = [b for b in range(13) if b != 11 or half is not None]  # both halves: not bit 11
+        cell = [(half or 0) << 11 | (s >> 4 << 8) | ((s & 15) << 4) | h for s in range(128)]
+        keys = {s: Chan(sum(self.addr_lits(cell[s], bits), Expr()) - (len(bits) - 1),
+                        (0, 1, 0, 0)) for s in range(128)}
+
+        def sel(c):
+            if isinstance(c, Chan):
+                return Chan(c.expr * (2 * K_) - one * K_, c.taps)
+            return Chan(c * (2 * K_) - one * K_)
+
+        v = {2 + i: Chan(self.vb[i] * A_BIT) for i in range(8)}
+        for col in REF_COLS:
+            v[col] = Chan(one * A_REF)
+        cols = [2 + i for i in range(8)]
+        outs = [(col, 2.0**7) for col in cols]
+        q = {s: sel(e) for s, e in query.items()}
+        k = {s: sel(e) for s, e in keys.items()}
+        z0 = {col: K_ * gates[0] for col in cols}
+        if hi11 is None:
+            return self.head(name, q, k, v, 0, z0, outs, into=acc)
+        vx = [{"v": v, "a": 0, "z": {col: K_ * gates[1] for col in cols}, "outs": outs,
+               "beta": hi11, "into": "main"}]
+        return self.head(name, q, k, v, 0, z0, outs, beta=one - hi11, into=acc, vx=vx)[:8]
+
+
+def build(target: Target | None = None, store=None, schedule: bool = True) -> Chip8Q35:
     """The circuit; with ``store`` (a store.Vocab, or True for the default tokenizer) it also
-    holds the object store (store.py, store_q35.py)."""
+    holds the object store (store.py, store_q35.py). ``schedule``: place the nodes again by
+    list scheduling once built (ir.Graph.reschedule), which saves layers."""
     c = Chip8Q35(target)
     one, rs = c.one, c.rs
     if store is True:
@@ -194,9 +235,13 @@ def build(target: Target | None = None, store=None) -> Chip8Q35:
                  16: Chan(sign_prev, (0, 1, 0, 0)), 17: Chan(sign_prev, (0, 0, 1, 0)),
                  18: Chan(T[B.HEX[11]], (0, 1, 0, 0)), 19: Chan(T[B.BSL], (0, 0, 1, 0)),
                  20: Chan(T[B.PERIOD], (0, 1, 0, 0))}
+    paired = c.target.value_heads >= 2 * c.target.key_heads  # RAM halves share key heads
+    if paired:  # bit 11 of the ADDR token before a VAL: which RAM half the VAL writes
+        prev_cols[21] = Chan(c.ab[11], (0, 1, 0, 0))
     (prev_dig, prev2_dig, prev_cm, prev_bs, prev_safe, prev_text, prev_eq, prev_o1, prev_o2,
      prev2_o1, prev2_o2, prev_sp, prev_sg, prev_slm, prev_spv, prev2_spv, prev_b,
-     prev2_bs, prev_pt) = c.slot_head("prev", {0: one}, {0: one}, prev_cols, one)
+     prev2_bs, prev_pt, *prev_hi11) = c.slot_head("prev", {0: one}, {0: one}, prev_cols, one)
+    hi11 = prev_hi11[0] if paired else None
     # the math a first number sits in: right after "$" / "$$", or after it and a space or sign
     in_o1 = c.node(c.t_and([prev_o1]) + c.t_and([prev_sp + prev_sg + prev_slm, prev2_o1]),
                    "open.$")
@@ -365,7 +410,7 @@ def build(target: Target | None = None, store=None) -> Chip8Q35:
     old = [Expr() for _ in range(8)]
     for h in range(2):
         cells = {spec.DISPLAY + (h << 7) + s: s for s in range(128)}
-        query = {s: sum(c.addr_lits(cell), Expr()) - 3 for cell, s in cells.items()}
+        query = {s: sum(c.addr_lits(cell), Expr()) - 12 for cell, s in cells.items()}
         disp_q[h] = query
         bits = c.bank(f"display{h}", cells, query, 8, 238 * c.is_cls_addr)
         old = [o + b for o, b in zip(old, bits)]
@@ -390,17 +435,21 @@ def build(target: Target | None = None, store=None) -> Chip8Q35:
     oh1_pc1 = carry_onehot(pcb[4:8], c4, "pc1.n1")
     oh2_pc1 = carry_onehot(pcb[8:12], c8, "pc1.n2")
     oh0_pc1 = [oh[0][(v - 1) % 16] for v in range(16)]
-    even, odd = [Expr() for _ in range(8)], [Expr() for _ in range(8)]
-    for half in range(2):
+    acc = {0: None, 1: None}  # the bytes at even and odd addresses (PC and PC + 1)
+    for half in range(1 if paired else 2):
         for h in range(16):
             n1, n2 = (oh1_pc1, oh2_pc1) if h == 0 else (oh[1], oh[2])
-            cells = {(half << 11) | (s >> 4 << 8) | ((s & 15) << 4) | h: s for s in range(128)}
-            query = {s: oh[0][h] + oh0_pc1[h] + n1[s & 15] + n2[(s >> 4) + 8 * half] - 2
-                     for s in range(128)}
-            bits = c.bank(f"ramA{half}.{h}", cells, query, 8)
-            acc = even if h % 2 == 0 else odd
-            for i in range(8):
-                acc[i] = acc[i] + bits[i]
+            hi = sum(n2[8:], Expr())  # the address's bit 11
+            if paired:
+                query = {s: oh[0][h] + oh0_pc1[h] + n1[s & 15] + n2[s >> 4] + n2[(s >> 4) + 8]
+                         - 2 for s in range(128)}
+                bits = c.ram_head(f"ramA.{h}", h, query, (one - hi, hi), acc[h % 2], hi11)
+            else:
+                query = {s: oh[0][h] + oh0_pc1[h] + n1[s & 15] + n2[(s >> 4) + 8 * half] - 2
+                         for s in range(128)}
+                bits = c.ram_head(f"ramA{half}.{h}", h, query, (one,), acc[h % 2], half=half)
+            acc[h % 2] = acc[h % 2] or bits
+    even, odd = acc[0], acc[1]
     pc0 = pcb[0]
     b1 = [c.node(c.t_and([pc0, odd[i]]) + c.t_and([one - pc0, even[i]]), f"op_hi.b{i}")
           for i in range(8)]
@@ -691,13 +740,16 @@ def build(target: Target | None = None, store=None) -> Chip8Q35:
         "t": vxb[:6], "pc": list(pcb), "ds": R["DS"], "bld": [ind["BLD"]],
         "y0": [yb[0]], "bsta": [ind["BSTA"]],
     }
-    # the macros' digit chain is the deepest path: its entries get a head of their own, so no
-    # later entry holds them up
-    fast = ("la", "lb", "vx", "badd", "bsub", "brsub", "bmul", "bzero", "first", "bdiv", "badb",
-            "t", "bsta", "bld", "y0")
-    groups = [[(name, i, e) for name in fast for i, e in enumerate(ctx_vals[name])],
-              [(name, i, e) for name, vals in ctx_vals.items() if name not in fast
-               for i, e in enumerate(vals)]]
+    # A ctx head waits for its slowest entry. The macros' digit chain and the vector reads'
+    # address (and the sprite path after it) are the deepest paths: their entries get heads of
+    # their own, so no later entry holds them up
+    fast = (("la", "lb", "vx", "badd", "bsub", "brsub", "bmul", "bzero", "first", "bdiv", "badb",
+             "t", "bsta", "y0"),
+            ("fx65", "dxyn", "fd", "bld", "I", "Ihi", "dx_byte", "dx_off", "dy", "clip"))
+    groups = [[(name, i, e) for name in names for i, e in enumerate(ctx_vals[name])]
+              for names in fast]
+    groups.append([(name, i, e) for name, vals in ctx_vals.items()
+                   if not any(name in names for names in fast) for i, e in enumerate(vals)])
     k = {name: [None] * len(vals) for name, vals in ctx_vals.items()}
     per_head = 126
     chunks = [g[hd:hd + per_head] for g in groups for hd in range(0, len(g), per_head)]
@@ -722,20 +774,31 @@ def build(target: Target | None = None, store=None) -> Chip8Q35:
     row_i = sum((cnt[2 * r - 1] for r in range(1, JMAX // 2 + 1)), Expr())  # j // 2
     side = sum((jeq(v) for v in range(1, JMAX + 1, 2)), Expr())  # j % 2
     kI_lo = from_bits(k["I"][:8])
-    i_j = bits12(c.add12(kI_lo, k["Ihi"], j, JMAX + 1, "I+j"))
+    i_j = c.add12_bits(kI_lo, k["Ihi"], j, JMAX + 1, "I+j")
     # vread address: I + j (FX65), I + j // 2 (DXYN) or I + j - 3 (the digits of a print)
     d = c.node([(1, k["fx65"][0] + k["bld"][0], j), (1, k["dxyn"][0], row_i),
                 (1, k["fd"][0], j - 3 * one + 2 * mode)], "vec_off")
-    qa = c.add12(kI_lo, k["Ihi"], d, JMAX + 1, "vread_addr")
-    vread = [Expr() for _ in range(8)]
-    ram_read = k["fx65"][0] + k["dxyn"][0] + k["fd"][0] + k["bld"][0]
-    for half in range(2):
+    # the read address as 12 bits (it is needed on text tokens too: a print reads its digits
+    # there), and each RAM row's query an AND of them
+    qb = c.add12_bits(kI_lo, k["Ihi"], d, JMAX + 1, "vread_addr")
+    vread = None
+    ram_read = k["fx65"][0] + k["dxyn"][0] + k["fd"][0] + k["bld"][0]  # (bld: v18)
+
+    def vquery(cell, bits):
+        lits = [ram_read] + [qb[i] if cell >> i & 1 else one - qb[i] for i in bits]
+        return sum(lits, Expr()) - (len(lits) - 1)
+
+    for half in range(1 if paired else 2):
         for h in range(16):
-            cells = {(half << 11) | (s >> 4 << 8) | ((s & 15) << 4) | h: s for s in range(128)}
-            query = {s: qa[0][h] + qa[1][s & 15] + qa[2][(s >> 4) + 8 * half] + ram_read - 3
-                     for s in range(128)}
-            bits = c.bank(f"ramB{half}.{h}", cells, query, 8)
-            vread = [a_ + b_ for a_, b_ in zip(vread, bits)]
+            if paired:
+                query = {s: vquery((s >> 4 << 8) | ((s & 15) << 4) | h,
+                                   [i for i in range(12) if i != 11]) for s in range(128)}
+                bits = c.ram_head(f"ramB.{h}", h, query, (one - qb[11], qb[11]), vread, hi11)
+            else:
+                query = {s: vquery(half << 11 | (s >> 4 << 8) | ((s & 15) << 4) | h, range(12))
+                         for s in range(128)}
+                bits = c.ram_head(f"ramB{half}.{h}", h, query, (one,), vread, half=half)
+            vread = vread or bits
     vj = c.bank("V[j]", vcells, {r: jeq(r) + k["fx55"][0] - 1 for r in range(16)}, 8)
     vread = [a_ + b_ for a_, b_ in zip(vread, vj)]
 
@@ -744,18 +807,23 @@ def build(target: Target | None = None, store=None) -> Chip8Q35:
     dxb = from_bits(k["dx_byte"])
     row = dy + row_i
     col_ = dxb + side
-    row_w = [c.node(c.t_eq(row, r, 0, 31 + 20) + c.t_eq(row, r + 32, 0, 51), f"row_w=={r}")
-             for r in range(32)]
-    col_w = [c.node(c.t_eq(col_, v, 0, 8) + c.t_eq(col_, v + 8, 0, 8), f"col_w=={v}")
-             for v in range(8)]
+    # the target's row and column as bits (each bit node sums the units of the values that have
+    # it: 8 dims instead of 40 one-hots)
+    row_bits = [c.node([t for r in range(32) if r >> i & 1
+                        for t in c.t_eq(row, r, 0, 31 + 20) + c.t_eq(row, r + 32, 0, 51)],
+                       f"row_w.b{i}") for i in range(5)]
+    col_bits = [c.node([t for v in range(8) if v >> i & 1
+                        for t in c.t_eq(col_, v, 0, 8) + c.t_eq(col_, v + 8, 0, 8)],
+                       f"col_w.b{i}") for i in range(3)]
     col8 = list(k["dx_byte"]) + [side]  # col == 8 exactly when dx_byte == 7 and side == 1
     on_screen = c.node(c.t_lt(row, 32, 0, 51) + c.t_lt(row, 32, 0, 51, -1, lits=col8),
                        "on_screen")
     drawn = c.node(c.t_const(1) + c.t_and([k["clip"][0]], -1)
                    + c.t_and([k["clip"][0], on_screen]), "drawn")
-    idx_bits = onehot_bits(col_w, 3) + onehot_bits(row_w, 5)
-    target = c.select_bits([([drawn], idx_bits + [1, 0, 0, 0, 1]),
-                            ([one - drawn], spec.NULL)], 13, "target")
+    idx_bits = col_bits + row_bits
+    # (0 on text tokens, so its dims can live in Qwen's: overlay.py)
+    target = c.select_bits([([drawn, c.mu], idx_bits + [1, 0, 0, 0, 1]),
+                            ([one - drawn, c.mu], spec.NULL)], 13, "target")
     off_bits = k["dx_off"]
     part = []
     for p in range(8):
@@ -1217,9 +1285,30 @@ def build(target: Target | None = None, store=None) -> Chip8Q35:
                                               one - calling - ecall, *s_gate])
                    + c.t_and([c.is_text, calling + ecall, *s_gate]) + s_owner, "owner")
 
-    nxt = [c.node([t for lits, kind, _ in A if kind == 1 for t in c.t_and(lits)], "next.is_addr"),
-           c.node([t for lits, kind, _ in A if kind == 2 for t in c.t_and(lits)], "next.is_ctrl")]
-    nxt += c.select_bits([(lits, p) for lits, _, p in A], 13, "next")
+    # the next token's code bits: is_addr, is_ctrl, then 13 payload bits; each bit is the sum
+    # over the (exclusive) cases that set it
+    def bit_cases(i):
+        out = []
+        for lits, kind, p in A:
+            if i < 2:
+                if kind == i + 1:
+                    out.append(list(lits))
+                continue
+            b = p >> (i - 2) & 1 if isinstance(p, int) else (p[i - 2] if i - 2 < len(p) else 0)
+            if isinstance(b, int):
+                if b:
+                    out.append(list(lits))
+            else:
+                out.append([*lits, b])
+        return out
+
+    fuse = st is None  # the exit computes the output code from the cases themselves
+    if fuse:
+        nxt = None
+    else:
+        nxt = [c.node([t for ls in bit_cases(i) for t in c.t_and(ls)],
+                      ["next.is_addr", "next.is_ctrl"][i] if i < 2 else f"next.b{i - 2}")
+               for i in range(NCODE)]
     c.next_bits = nxt
     c.owner = owner
     c.cases = A  # (literals, kind, payload), for debugging
@@ -1235,8 +1324,16 @@ def build(target: Target | None = None, store=None) -> Chip8Q35:
     # KAPPA * +-1 in the id code dims; everything else uses the class code
     not_any = [] if anyp is None else [one - anyp]
     for i, e in enumerate(c.code):
-        c.ffn(c.t_and([nxt[i], owner, *not_any], 2 * KAPPA) + c.t_and([owner, *not_any], -KAPPA),
-              f"exit.code{i}", into=e, min_level=top)
+        if fuse:  # KAPPA * (2 bit - 1) where the circuit owns the position, straight from the
+            # cases (one sublayer, so no separate select before the exit)
+            terms = [t for ls in bit_cases(i) for t in c.t_and([*ls, owner], 2 * KAPPA)]
+        else:
+            terms = c.t_and([nxt[i], owner, *not_any], 2 * KAPPA)
+        c.ffn(terms + c.t_and([owner, *not_any], -KAPPA), f"exit.code{i}", into=e,
+              min_level=top)
+    if fuse:  # the bits for checking (q35/check.py), read off the exit code where owned
+        half = Fraction(1, 2)
+        c.next_bits = [e * (half / Fraction(KAPPA)) + owner * half for e in c.code]
     if st is not None:
         for i, e in enumerate(st.yc):
             c.ffn(c.t_and([ybits[i], anyp], 2 * KAPPA) + c.t_and([anyp], -KAPPA),
@@ -1250,4 +1347,6 @@ def build(target: Target | None = None, store=None) -> Chip8Q35:
                                                          next(iter(c.mu.terms))]
     c.out = {"regs": R, "x": x, "cnt": cnt, "in_tick": in_tick, "old": old, "b1": b1, "b2": b2,
              "ind": ind, "vx": vxb, "vy": vyb, "ctx": k, "vread": vread, "next": nxt}
+    if schedule:
+        c.reschedule()
     return c
