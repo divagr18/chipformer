@@ -41,7 +41,7 @@ NUDGE_NONE = "Do every arithmetic step exactly."
 def calc_response(expr: str) -> str:
     """The firmware's tool response for an expression (computed by the host)."""
     e = expr.replace("\n", "")
-    v = calc.expected(e) if re.fullmatch(r"[0-9+\-*/%^(), gcd]*", e) and e.strip() else "error\n"
+    v = calc.expected(e) if re.fullmatch(r"[0-9.+\-*/%^(), gcd]*", e) and e.strip() else "error\n"
     return f"\n<tool_response>\n{v}</tool_response>\n<think>\n\n</think>\n\n"
 
 
