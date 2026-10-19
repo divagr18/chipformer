@@ -106,6 +106,60 @@ end.
 | `text_ids` | The text classes the circuit reads and prints, by Qwen token id |
 | `bios` | The BIOS the weights expect: sha1, size, segments, entry points |
 
-## Measured (q35-inline, A10G)
+## Measured (q35-inline, A10G 24 GB, 2026-10-19)
 
-Filled in by the release check (see below).
+**The checkpoint.** `q35-inline:~/weights/dist/q4-int`.
+- Size: 14.65 GB in 7 shards.
+- Contents: config, tokenizer, `chat_template.jinja`, `generation_config.json`, `chipformer.json`,
+  LICENSE, preprocessor configs.
+- Text-only variant: `~/weights/dist/q4-int-text`, 13.98 GB.
+- Built from `q35-int` (see the commit below) with `python -m chipformer.q35.merge <Qwen3.5-4B>
+  --out q4-int` (overlay on), then `python -m chipformer.q35.textonly`.
+
+**Shape.**
+- Hidden 3200, ballast 50.
+- 12 chip layers + 32 Qwen layers.
+- Circuit: 3222 dims, 84 heads, 28,259 MLP units.
+- 516 slots of its own, 1129 overlaid on Qwen's dims.
+- BIOS sha1 `5e885286e8` (3072 B at 0x200, plus 174 B at 0x0E0).
+
+**Selftest: 17 tool calls, 0 wrong.** Calls cover add, sub, mul and signed mul, div (decimal,
+fraction, signed), mod, gcd and calc, including a negative calc.
+
+**Results** (fp + tc, BatchDecoder `--fast`, greedy):
+
+| Run | Correct | Computer results exact |
+|---|---|---|
+| Tool mode (`merged_nb_ne_fp_tc`), synthetic arith n=20 | 20/20 | 33/33 tool calls, 7/7 inline fires |
+| Inline (`merged_inline_nudge_fp_tc`), arith n=20 | 15/20 (4 stopped at the cache length) | 72/72 fires |
+| Tool mode, DM mul_big n=10 | 7/10 (4 cache stops) | 6/6 calls, 22/22 fires |
+| Inline + `nudge3`, DM mul_div_multiple_longer n=10 | 3/10 (7 cache stops at 16k) | see the IR replay |
+| Whole expressions (`nudge4`), DM mul_div_multiple_longer n=10 | 4/10 (2 cache stops at 24k) | 45/45 scored fires |
+
+**IR replay** (the circuit's IR == the reference BIOS, on every computer-owned position of the
+DM records above): 30 records, 177,816 positions, 0 mismatches, 0 stray chip tokens.
+
+**Notes:**
+- The DM division sets are short: these runs are 10 problems each.
+- Most losses there are cache-length stops. A non-terminating division now runs gcd to print
+  `p/q`, which costs 1-9k trace tokens (median 3.6k) instead of about 600.
+  - With tc, Qwen doesn't see those tokens, but the static cache still holds them.
+  - Use `--max-len 32768` or more on these sets, on a GPU with room: an A10G ran out of memory
+    at 32k with the `--fast` CUDA graphs, and `--chip-per-full 0` turns those off.
+- On a few multi-operation windows (markdown lists, `1.` list numbers), the scorer's
+  attribution of an inline fire to an expression is heuristic. The IR replay is the exactness
+  check.
+- Not run for this release: text KL vs base, GSM8K and MMLU.
+
+**Tests** (CPU, one file at a time):
+- The q35 suite passes: ir, ir_vheads, mute, numerics, macros 19, expr 47, v2, chip8, inline 113.
+- `test_q35_overlay` passes 5/5 (noisy-IR leak checks). The merged-checkpoint overlay test was
+  run on the box and passes.
+- `test_q35_store`: 10/11. One store-only failure, `test_circuit_with_arithmetic`: with
+  `--store`, the store's tool response lacks the tool-response thinking tail (owner bits at its
+  end). The store is optional and not in this checkpoint.
+
+**Not in this release:**
+- v17 (decimal operands for the single-op path). Its BIOS (≈550 B) doesn't fit the 4 KB next to
+  v18's evaluator. Decimals work through the expression evaluator instead.
+- The maths library (pow, sqrt, logs, …).
