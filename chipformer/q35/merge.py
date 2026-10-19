@@ -23,6 +23,7 @@ OUT_ROWS = re.compile(r"(out_proj|o_proj|down_proj)\.weight$|visual\.merger\.lin
 WIDE_NORMS = re.compile(r"(input_layernorm|post_attention_layernorm)\.weight$|language_model\.norm\.weight$")
 
 IM_START = 248045  # <|im_start|> in Qwen3.5's tokenizer
+ENDOFTEXT = 248044  # <|endoftext|>
 
 
 def load(path):
@@ -189,6 +190,19 @@ def store_row_features(c, lay, v0: int) -> dict[int, torch.Tensor]:
     return out
 
 
+def bios_meta() -> dict:
+    """The BIOS the weights expect (its entries are compiled in): the boot record is
+    trace.boot_tokens(Chip8(bcd.ROM, bcd.QUIRKS).cells), offset by chip_token_offset."""
+    import hashlib
+
+    from chipformer.q35.lib import bcd
+
+    image = bytes(bcd.ROM) + b"".join(d for _, d in bcd.ROM.segments)
+    return {"sha1": hashlib.sha1(image).hexdigest()[:10], "rom_bytes": len(bcd.ROM),
+            "segments": [[a, len(d)] for a, d in bcd.ROM.segments], "ops": bcd.OPS,
+            "quirks": list(bcd.QUIRKS)}
+
+
 def build_merged(src, dst, hidden: int | None = None, m: int | None = None,
                  mute_qwen: bool = True, overlay: bool = True, store: bool = False):
     """Write Qwen3.5 + the CHIP-8 circuit as one checkpoint ("v2" layout); returns (circuit,
@@ -340,14 +354,16 @@ def build_merged(src, dst, hidden: int | None = None, m: int | None = None,
     # After the circuit prints a tool response inside the assistant turn, Qwen sometimes opens a
     # new turn (<|im_start|>user ...) instead of going on. Qwen never writes <|im_start|> in its
     # own output, so the merged model bans it; the circuit never predicts it either.
-    gen["bad_words_ids"] = [[IM_START]]
+    # (and <|endoftext|>: after a printed tool response Qwen sometimes ends with it instead of
+    # answering; it ends its turns with <|im_end|>, which stays the EOS)
+    gen["bad_words_ids"] = [[IM_START], [ENDOFTEXT]]
     gen_path.write_text(json.dumps(gen, indent=2))
     meta = {"layout": "v2", "chip_token_offset": v0, "chip_vocab": spec.VOCAB_SIZE,
             "chip_layers": n_chip, "qwen_layers_from": n_chip, "hidden": hidden,
             "chip_dims_offset": d0, "ballast_dims": m, "circuit": c.stats(),
             "slots": alloc.n_slots, "overlay_slots": len(alloc.final_over),
             "overlay": plan.summary() if plan else None, "muted": mute_qwen,
-            "text_ids": {str(k): v for k, v in text_ids.items()}}
+            "text_ids": {str(k): v for k, v in text_ids.items()}, "bios": bios_meta()}
     if store:
         from chipformer.q35 import store_q35
 

@@ -120,7 +120,8 @@ def test_eval_random():
             assert v == got, (text, v, body)
     assert n > 250 and errors < n // 4, (n, errors)
     lengths.sort()
-    assert lengths[len(lengths) // 2] < 8000, lengths[len(lengths) // 2]
+    # (a quotient that does not end runs gcd for its reduced fraction)
+    assert lengths[len(lengths) // 2] < 12000, lengths[len(lengths) // 2]
 
 
 def scan(tokens):

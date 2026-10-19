@@ -207,7 +207,7 @@ def expr_value(s: str):
     s = re.sub(r"\d+(?:\.\d*)?", lambda m: f"Fraction('{m[0]}')", s).strip()
     try:
         return eval(s, {"Fraction": Fraction})  # noqa: S307 (digits and operators only)
-    except (ZeroDivisionError, SyntaxError, TypeError, ValueError, OverflowError):
+    except (ZeroDivisionError, SyntaxError, TypeError, ValueError, OverflowError, AttributeError):
         return None
 
 
@@ -754,7 +754,8 @@ def inline_fires(text: str, pred) -> list[dict]:
         if ex and not single and (
                 re.search(r"[()^{}]|\d\.\d", ex[1]) or len(re.findall(
                     r"[+\-*/×÷−]|\\times|\\cdot|\\div", ex[1])) >= 2) and (
-                v := expr_value(ex[1])) is not None:
+                v := expr_value(re.sub(r"^\s*\n\s*[-−](?=\s)", "", ex[1]))) is not None:
+            # (a list's "- " is one token with the newline: no sign)
             t = value_text(v)
             exact = shown.startswith(t)
             machine = t if exact else shown
@@ -1054,7 +1055,8 @@ def run(args) -> None:
 
     torch._inductor.config.shape_padding = False  # its padded weight copies don't fit 24 GB
 
-    max_len = args.max_len or (max(map(len, prompts)) + budget + (3072 if chip else 1024 if think else 512))
+    # (chip room: a fraction or a whole expression runs 1-15k trace tokens)
+    max_len = args.max_len or (max(map(len, prompts)) + budget + (8192 if chip else 1024 if think else 512))
     max_len = -(-max_len // 1024) * 1024
     if args.fast and chip:  # exact: chip layers read only their nonzero blocks, and steps on
         from chipformer.q35 import fast  # chip-token inputs skip Qwen's (no-op) layers
