@@ -207,15 +207,48 @@ __attribute__((noinline)) static num power(num a, num e) {
 
 
 // --- the expression: an operator-precedence (shunting-yard) loop, no recursion ---------------
-// ops: + - (1), * / % (2), unary minus 'n' (3), ^ (4, right associative); '(' and 'g' (gcd's
+// ops: + - (1), * / // % (2: 'd', 'f'), unary minus 'n' (3), ^ (4, right associative); '(' and 'g' (gcd's
 // open bracket) mark groups
 
 static num vals[16];
 static char ops[16];
 void _exit(int code) __attribute__((noreturn));
 
-static int prec(int op) {
-    return op == '^' ? 4 : op == 'n' ? 3 : op == '*' || op == '/' || op == '%' ? 2 : 1;
+static int prec(int op) {  // 'f': // (floor), 'd': / (exact)
+    return op == '^' ? 4 : op == 'n' ? 3 : op == '*' || op == 'f' || op == 'd' || op == '%' ? 2 : 1;
+}
+
+// a / b exact: an integer, or (only as the expression's final value) a reduced fraction whose
+// denominator is vden[i]
+static num vden[16];
+static int hasden[16];
+
+static num copy_of(num a) {
+    num c = alloc(LEN(a));
+    bn_mac(BN_OPS(LEN(a), 0, 1, REG(c), REG(a), 1));
+    wrote(c, LEN(a));
+    return NUM(REG(c), NEG(a), LEN(a));
+}
+
+__attribute__((noinline)) static num exact_div(num a, num b, int i) {  // consumes both
+    int neg = NEG(a) ^ NEG(b);
+    if (is_zero(b)) {
+        err = 1;
+        return a;
+    }
+    num g = gcd(copy_of(a), copy_of(b));
+    qr x = divmod(a & ~0x100u, g);
+    release(x.r);
+    qr y = divmod(b & ~0x100u, g);
+    release(y.r);
+    release(g);
+    if (LEN(y.q) == 1 && dig(y.q, 0) == 1) {
+        release(y.q);
+    } else {
+        vden[i] = y.q;
+        hasden[i] = 1;
+    }
+    return is_zero(x.q) ? x.q : x.q | (uint32_t)neg << 8;
 }
 
 // decimals: a value is the integer vals[i] scaled by 10^-vsc[i] (+ - * keep it exact; the other
@@ -246,8 +279,11 @@ static int apply(int op, int nv) {  // returns the new value count
         return nv;
     }
     int sb = vsc[nv - 1], sa = vsc[nv - 2];
+    if (hasden[nv - 1] || hasden[nv - 2]) err = 1;  // a fraction is only ever the final value
     num b = vals[--nv], a = vals[nv - 1], r;
-    if (op == '+' || op == '-') {
+    if (err) {
+        r = a;
+    } else if (op == '+' || op == '-') {
         if (sa < sb) a = shift(a, sb - sa), sa = sb;
         if (sb < sa) b = shift(b, sa - sb);
         r = add(a, op == '-' && !is_zero(b) ? b ^ 0x100u : b);
@@ -263,9 +299,13 @@ static int apply(int op, int nv) {  // returns the new value count
         r = power(a, b);
     } else if (op == 'g') {
         r = gcd(a, b);
+    } else if (op == 'd') {
+        hasden[nv - 1] = 0;
+        r = exact_div(a, b, nv - 1);
     } else {
         r = divide(a, b, op == '%');
     }
+    if (op != 'd') hasden[nv - 1] = 0;
     vals[nv - 1] = r;
     vsc[nv - 1] = sa;
     return nv;
@@ -282,11 +322,12 @@ static int calc_eval(void) {  // prints the value (or "error") and a newline; 0 
     if (na && na <= MAXD) {
         const char *o = s + na;
         int c = o[0], two = (c == '*' || c == '/') && o[1] == c;
-        int op = c == '*' && two ? '^' : c;
+        int op = c == '*' && two ? '^' : c == '/' ? (two ? 'f' : 'd') : c;
         const char *t = o + 1 + two;
         int nb = bn_scan(t);
         if (nb && nb <= MAXD && !t[nb] &&
-            (op == '+' || op == '-' || op == '*' || op == '/' || op == '%' || op == '^')) {
+            (op == '+' || op == '-' || op == '*' || op == 'f' || op == 'd' || op == '%' ||
+             op == '^')) {
             bn_ld(o, BN_OPS(na, 0, 0, 0, 0, 0));
             bn_ld(t + nb, BN_OPS(nb, 0, 0, 1, 0, 0));
             used = 3;
@@ -295,6 +336,7 @@ static int calc_eval(void) {  // prints the value (or "error") and a newline; 0 
             vals[0] = dig(NUM(0, 0, na), na - 1) ? NUM(0, 0, na) : trim(NUM(0, 0, na));
             vals[1] = dig(NUM(1, 0, nb), nb - 1) ? NUM(1, 0, nb) : trim(NUM(1, 0, nb));
             vsc[0] = vsc[1] = 0;
+            hasden[0] = hasden[1] = 0;
             nv = apply(op, 2);
             if (err) goto fail;
             goto print;
@@ -331,6 +373,7 @@ static int calc_eval(void) {  // prints the value (or "error") and a newline; 0 
                 bn_ld(end, BN_OPS(n, 0, 0, REG(a), 0, 0));
                 wrote(a, n);
                 vsc[nv] = frac;
+                hasden[nv] = 0;
                 vals[nv++] = dig(a, n - 1) ? a : trim(a);
                 operand = 0;
             } else if (c == '(') {
@@ -366,8 +409,9 @@ static int calc_eval(void) {  // prints the value (or "error") and a newline; 0 
         if (c == '*' && s[1] == '*') {
             op = '^';
             len = 2;
-        } else if (c == '/' && s[1] == '/') {
-            len = 2;
+        } else if (c == '/') {
+            op = s[1] == '/' ? 'f' : 'd';
+            len = s[1] == '/' ? 2 : 1;
         } else if (c != '+' && c != '-' && c != '*' && c != '/' && c != '%' && c != '^') {
             err = 1;
             continue;
@@ -406,6 +450,10 @@ print:;
             if (i == sc - 1) rv_putchar('.');
             rv_putchar('0' + (i < n ? dig(v, i) : 0));
         }
+    }
+    if (hasden[0]) {  // a reduced fraction: num/den
+        rv_putchar('/');
+        bn_print(REG(vden[0]), LEN(vden[0]));
     }
     rv_putchar('\n');
     return 0;

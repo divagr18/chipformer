@@ -113,6 +113,16 @@ def test_decimal_call(T, circuit):
     check(circuit, ses, m0)
 
 
+def test_fraction_call(T, circuit):
+    """Exact division: a reduced fraction (// stays floor)."""
+    m0 = fresh_machine()
+    ses = BR.Session(T, fresh_machine())
+    ses.qwen(call(T, "-84/18"))
+    ses.qwen(call(T, "-84//18"))
+    assert [T.decode_bytes(r).decode().split("\n")[2] for r in ses.runs] == ["-14/3", "-5"]
+    check(circuit, ses, m0)
+
+
 def test_decimal_reference():
     import random
 

@@ -28,10 +28,13 @@ from chipformer.rv import spec as S
 
 CALC_TOOL = {"type": "function", "function": {
     "name": "calc",
-    "description": "Evaluate an integer arithmetic expression exactly (+, -, *, parentheses; "
-                   "numbers of any size). Returns the exact value.",
+    "description": "Evaluate an arithmetic expression exactly, with numbers of up to 62 digits: "
+                   "+ - * and parentheses on integers or decimals; on integers also / (exact: "
+                   "an integer or a reduced fraction p/q), // (floor division), % , ** and "
+                   "gcd(a,b). Returns the exact value.",
     "parameters": {"type": "object", "properties": {
-        "expression": {"type": "string", "description": "e.g. 123456789*987654321-42"}},
+        "expression": {"type": "string",
+                       "description": "e.g. 123456789*987654321-42 or 1.25*-3.5 or 84/18"}},
         "required": ["expression"]}}}
 
 

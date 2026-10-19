@@ -67,23 +67,65 @@ def expected_decimal(expr: str) -> str:
     return "error\n" if len(s.replace("-", "").replace(".", "").lstrip("0")) > MAXD else f"{s}\n"
 
 
+class _Err(Exception):
+    pass
+
+
+def _value(node):
+    """An integer expression's value as a Fraction: / is exact, but a non-integer value may only
+    be the final result (or negated); // and % floor, ** needs an exponent 0..999."""
+    import ast
+    from fractions import Fraction
+
+    def ints(*vs):
+        if any(v.denominator != 1 for v in vs):
+            raise _Err
+        return [int(v) for v in vs]
+
+    if isinstance(node, ast.Constant) and type(node.value) is int:
+        return Fraction(node.value)
+    if isinstance(node, ast.UnaryOp) and isinstance(node.op, (ast.USub, ast.UAdd)):
+        v = _value(node.operand)
+        return -v if isinstance(node.op, ast.USub) else v
+    if isinstance(node, ast.Call) and getattr(node.func, "id", None) == "gcd" and \
+            len(node.args) == 2 and not node.keywords:
+        return Fraction(gcd(*ints(*map(_value, node.args))))
+    if not isinstance(node, ast.BinOp):
+        raise _Err
+    a, b = ints(_value(node.left), _value(node.right))
+    op = type(node.op)
+    if op in (ast.Div, ast.FloorDiv, ast.Mod) and b == 0:
+        raise _Err
+    if op is ast.Pow and not 0 <= b <= 999:
+        raise _Err
+    f = {ast.Add: lambda: a + b, ast.Sub: lambda: a - b, ast.Mult: lambda: a * b,
+         ast.Div: lambda: Fraction(a, b), ast.FloorDiv: lambda: a // b, ast.Mod: lambda: a % b,
+         ast.Pow: lambda: a**b}.get(op)
+    if f is None:
+        raise _Err
+    return Fraction(f())
+
+
 def expected(expr: str) -> str:
-    """Python's value (// and % floor, ** / ^ powers, gcd) or "error", as the firmware prints it."""
+    """Python's value (/ exact: an integer or a reduced fraction p/q; // and % floor, ** / ^
+    powers, gcd) or "error", as the firmware prints it."""
+    import ast
+
     if "." in expr:
         return expected_decimal(expr)
-    src = expr.replace("^", "**").replace("//", "/").replace("/", "//")
     try:
-        v = eval(src, {"__builtins__": {}}, {"gcd": gcd})  # noqa: S307 (generated input)
-    except (ZeroDivisionError, SyntaxError):
+        v = _value(ast.parse(expr.replace("^", "**"), mode="eval").body)
+    except (_Err, SyntaxError):
         return "error\n"
-    return "error\n" if len(str(abs(v))) > MAXD else f"{v}\n"
+    s = str(v)  # Fraction: "p" or "p/q"
+    return "error\n" if any(len(x) > MAXD for x in s.lstrip("-").split("/")) else f"{s}\n"
 
 
 def _n(rng, d):
     return str(rng.randint(10 ** (d - 1) if d > 1 else 0, 10**d - 1))
 
 
-OPS = ["add", "sub", "mul", "div", "mod", "gcd", "pow", "expr"]
+OPS = ["add", "sub", "mul", "div", "mod", "gcd", "pow", "expr", "frac"]
 
 
 def case(rng: random.Random, op: str) -> str:
@@ -109,6 +151,12 @@ def case(rng: random.Random, op: str) -> str:
         base = _n(rng, rng.randint(1, 4))
         e = rng.randint(0, max(0, MAXD // len(base) - 1))
         return f"{sa}{base}**{e}" if not sa else f"({sa}{base})**{e}"
+    if op == "frac":  # exact division: often a reduced fraction, sometimes an integer
+        g = int(_n(rng, rng.randint(1, 8)))
+        x, y = int(_n(rng, rng.randint(1, 20))) * g, int(_n(rng, rng.randint(1, 12))) * g
+        if rng.random() < 0.3:
+            x = y * int(_n(rng, rng.randint(1, 8)))
+        return rng.choice([f"{sa}{x}/{y}", f"({x}+{y})/{sb}{y}", f"{x}*{g}/({y}-{g})"])
     # a random expression of 2-4 operands
     k = rng.randint(2, 4)
     nums = [_n(rng, rng.randint(1, 8)) for _ in range(k)]
