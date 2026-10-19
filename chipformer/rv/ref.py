@@ -424,6 +424,16 @@ class Machine:
     def ram_index(self, ea: int) -> int | None:
         return (ea - S.RAM_BASE) >> 2 if 0 <= ea - S.RAM_BASE < 4 * S.RAM_WORDS else None
 
+    text: list[bytes] | None = None  # the P3 text buffer rows (TEXT_ROW bytes each), if any
+
+    def text_word(self, ea: int) -> int | None:
+        """The word of the text buffer at ea (0 for unwritten rows), None outside it."""
+        o = ea - S.TEXT_ADDR
+        if self.text is None or not 0 <= o < S.TEXT_ROW * S.TEXT_ROWS:
+            return None
+        row = self.text[o // S.TEXT_ROW]
+        return int.from_bytes(row[o % S.TEXT_ROW & ~3:][:4].ljust(4, bytes(1)), "little")
+
     def drom_word(self, ea: int) -> int | None:
         """The DROM word holding byte ea, or None outside the DROM."""
         o = ea - S.DROM_BASE
@@ -483,6 +493,8 @@ class Machine:
             i = self.ram_index(ea)
             word = self.ram[i] if i is not None else self.drom_word(ea)
             if word is None:
+                word = self.text_word(ea)
+            if word is None:
                 return fault("load out of range")
             wv = word >> 8 * (ea & 3) & ((1 << 8 * n) - 1)
             return commit_rd(sx(wv, 8 * n) if op in ("LB", "LH") else wv)
@@ -506,10 +518,11 @@ class Machine:
                     S.tok(f"SS{w4}")]
         if op == "ECALL":
             a, b = x[17], x[10]  # the call (a7) and its argument (a0)
-            if a == 1:  # putchar(a0)
-                self.out.append(b & 0xFF)
+            if a == 1:  # putchar(a0): a byte, or (256..) a special token of the P3 bridge
+                if b & 0x1FF < 256:
+                    self.out.append(b & 0xFF)
                 self.n += 1
-                return [S.tok("BYTE", b & 0xFF)]
+                return [S.tok("BYTE", b & 0x1FF)]
             if a == 93:  # exit(a0)
                 self.halted, self.exit_code = True, b
                 self.n += 1

@@ -246,7 +246,9 @@ static int apply(int op, int nv) {  // returns the new value count
     return nv;
 }
 
-int main(void) {
+static int calc_eval(void) {  // prints the value (or "error") and a newline; 0 on success
+    used = 0;
+    err = 0;
     bn_ld(&one_ch + 1, BN_OPS(1, 0, 0, ONE, 0, 0));
     const char *s = calc_in;
     int operand = 1, nv = 0, no = 0;  // operand: an operand (or a prefix) comes next
@@ -347,12 +349,70 @@ int main(void) {
     if (err || nv != 1 || operand) {
     fail:
         for (const char *m = "error\n"; *m; m++) rv_putchar(*m);
-        _exit(1);
+        return 1;
     }
 print:;
     num v = vals[0];
     if (NEG(v)) rv_putchar('-');
     bn_print(REG(v), LEN(v));
     rv_putchar('\n');
-    _exit(0);
+    return 0;
 }
+
+#ifdef BRIDGE
+// The P3 bridge: each run (GO, after </tool_call>) reads the tool call's text from the text
+// buffer (the call's i-th token at 0x8000 + 16 i), takes its first parameter's value (what
+// follows the second '>' up to the next '<', newlines dropped) into calc_in, prints the tool
+// response and parks (exit ecall) until the next call:
+//   \n<tool_response>\nVALUE\n</tool_response>\n<think>\n\n</think>\n   (+ the HALT echo \n)
+#define TEXT ((const volatile unsigned char *)0x8000)
+#define ROWS 80
+enum { TOOL_RESPONSE = 256, TOOL_RESPONSE_END, THINK, THINK_END };
+
+static void put(int c) { rv_ecall2(1, c, 0, 0); }
+
+static int gather(void) {
+    int n = 0, gt = 0;
+    for (int i = 1; i <= ROWS; i++) {
+        const volatile unsigned char *r = TEXT + 16 * i;
+        int c = r[0];
+        if (!c) break;
+        for (int k = 0; k < 16 && c; c = ++k < 16 ? r[k] : 0) {
+            if (gt < 2) {
+                gt += c == '>';
+            } else if (c == '<') {
+                calc_in[n] = 0;
+                return n;
+            } else if (c != '\n' && n < (int)sizeof calc_in - 1) {
+                calc_in[n++] = (char)c;
+            }
+        }
+    }
+    calc_in[n] = 0;
+    return gt < 2 ? -1 : n;
+}
+
+int main(void) {
+    for (;;) {
+        rv_ecall2(93, 0, 0, 0);  // park: HALT; the next GO resumes here
+        int n = gather();
+        put('\n');
+        put(TOOL_RESPONSE);
+        put('\n');
+        if (n < 0) {
+            for (const char *m = "error\n"; *m; m++) put(*m);
+        } else {
+            calc_eval();
+        }
+        put(TOOL_RESPONSE_END);
+        put('\n');
+        put(THINK);
+        put('\n');
+        put('\n');
+        put(THINK_END);
+        put('\n');
+    }
+}
+#else
+int main(void) { return calc_eval(); }
+#endif

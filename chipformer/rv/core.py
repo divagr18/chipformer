@@ -45,7 +45,9 @@ from chipformer.rv import ref as RF
 from chipformer.rv import spec as S
 
 T4B = Target(key_heads=16, value_heads=32, intermediate=9216)  # Qwen3.5-4B's layers
-OUT_NAMES = list(S.FAMILIES) + S.CONTROL_NAMES  # output family ids
+# output family ids: the chip families and controls, then Q (P3: a printable Qwen token, the echo
+# of a putchar; its payload indexes the bridge's printable tokens)
+OUT_NAMES = list(S.FAMILIES) + S.CONTROL_NAMES + ["Q"]
 FAM_ID = {n: i for i, n in enumerate(OUT_NAMES)}
 NFAM = (len(OUT_NAMES) - 1).bit_length()  # family id bits in the output code
 NPAY = 16  # payload bits in the output code
@@ -53,15 +55,24 @@ OUT_W = 2.0**7  # head output weight of a one-hot read (as thead)
 JMAX = 66  # longest record: a digit-file row op (63 digits, then its value)
 CODE_AMP = 128  # a token's code in its (tied) embedding row: CODE_AMP * (2 * bit - 1)
 KAPPA = 2.0**-20  # the predicted code after the exit: KAPPA * (2 * bit - 1)
-PAY_W = {"V": 15, "F0": 15, "F1": 15, "F2": 2, "J": 16, "R": 16, "BYTE": 8, "FLT": 3, "HEX": 4,
+TAU_TEXT = 2.0**-40  # (P3) tau on text tokens; -1 on chip tokens (see q35.merge)
+PAY_W = {"V": 15, "F0": 15, "F1": 15, "F2": 2, "J": 16, "R": 16, "BYTE": 9, "FLT": 3, "HEX": 4,
          "QS": 4, "QD": 7, "BD": 8}
 
 
-def token_code(t: int) -> list[int]:
-    """The output-code bits of a token: family id (NFAM) then payload (16)."""
-    fam, p = S.family(t)
+def code_bits(fam: str, p: int) -> list[int]:
     fid = FAM_ID[fam]
     return [fid >> i & 1 for i in range(NFAM)] + [p >> i & 1 for i in range(NPAY)]
+
+
+def token_code(t: int) -> list[int]:
+    """The output-code bits of a chip token: family id (NFAM) then payload (16)."""
+    return code_bits(*S.family(t))
+
+
+def famof(t: int) -> tuple:
+    """(family, payload) of a chip token; (None, 0) for a text token (P3)."""
+    return S.family(t) if t < S.VOCAB else (None, 0)
 
 
 def lits_of(bits, v):
@@ -96,35 +107,62 @@ def col_offsets(bounds: list[tuple[int, int]], top: int = 255) -> list[int]:
 
 
 class RvCore(Circ):
-    def __init__(self, target: Target | None = None) -> None:
+    def __init__(self, target: Target | None = None, text=None) -> None:
+        """``text`` (P3, bridge.Text): the Qwen vocabulary the bridge reads and prints; None
+        builds the standalone machine."""
         super().__init__(target or T4B)
         f = self.token_feature
+        self.text = text
 
         def fam_is(nm):
-            return lambda t: int(S.family(t)[0] == nm)
+            return lambda t: int(famof(t)[0] == nm)
 
         def pay_bit(nm, i):
-            return lambda t: (S.family(t)[1] >> i & 1) if S.family(t)[0] == nm else 0
+            return lambda t: (famof(t)[1] >> i & 1) if famof(t)[0] == nm else 0
 
         names = list(S.FAMILIES) + S.CONTROL_NAMES
+        paid = ("V", "F0", "F1", "F2", "J", "R", "QD", "BD") + (("BYTE",) if text else ())
         self.fam = {n: f(f"is{n}", fam_is(n), full=True) for n in names}
         self.pay = {n: [f(f"{n}.b{i}", pay_bit(n, i), full=True) for i in range(w)]
-                    for n, w in PAY_W.items() if n in ("V", "F0", "F1", "F2", "J", "R", "QD", "BD")}
+                    for n, w in PAY_W.items() if n in paid}
 
         def next_digit(k):
             """The token says the next token is quotient digit k: QS(k) or QD(k - 1, q)."""
             def fn(t):
-                nm, p = S.family(t)
+                nm, p = famof(t)
                 return int(nm == "QS" and p == k or nm == "QD" and p >> 4 == k - 1)
             return fn
 
         self.kk = [f(f"digit=={k}", next_digit(k), full=True) for k in range(8)]
         self.final = sum((self.fam[n] for n in S.FINAL), Expr())
         self.tables = {}  # name -> head node (for snapshots)
+
+        def code_of(t):
+            """A token's own output code, or None (a text token the circuit never prints)."""
+            if t < S.VOCAB:
+                return token_code(t)
+            p = text.printable_index(t - S.TEXT_TOKEN) if text else None
+            return None if p is None else code_bits("Q", p)
+
         # the token's own code (read by the tied output head; cleared before the exit writes the
         # predicted one)
-        self.code = [f(f"code{i}", lambda t, i=i: CODE_AMP * (2 * token_code(t)[i] - 1), full=True)
+        self.code = [f(f"code{i}", lambda t, i=i: 0 if (cb := code_of(t)) is None
+                       else CODE_AMP * (2 * cb[i] - 1), full=True)
                      for i in range(NFAM + NPAY)]
+        if text:
+            tt = S.TEXT_TOKEN
+            self.is_text = f("is_text", lambda t: int(t >= tt), full=True)
+            self.mu = f("mu", lambda t: int(t < S.VOCAB), full=True)  # Qwen mutes on chip tokens
+            self.tau = f("tau", lambda t: TAU_TEXT if t >= tt else -1, full=True)
+            self.isTCO = f("isTCO", lambda t: int(t == tt + text.TCO), full=True)
+            self.isTCC = f("isTCC", lambda t: int(t == tt + text.TCC), full=True)
+
+            def tbyte(k, i):
+                return lambda t: (text.row_bytes(t - tt)[k] >> i & 1) if t >= tt else 0
+
+            # a text token's UTF-8 bytes (the first TEXT_ROW), bit by bit
+            self.tb = [[f(f"tb{k}.b{i}", tbyte(k, i), full=True) for i in range(8)]
+                       for k in range(S.TEXT_ROW)]
 
     floor = 0  # no node goes below this level (see at_least)
 
@@ -258,8 +296,12 @@ def add_nibbles(c, a_bits, b_bits, n_nib, lits, name):
     return r
 
 
-def build(target: Target | None = None) -> RvCore:
-    c = RvCore(target)
+def build(target: Target | None = None, text=None) -> RvCore:
+    """The circuit; with ``text`` (P3) also the bridge to Qwen's text: a tool call's text goes
+    into a buffer the program reads (TEXT_ADDR), ``</tool_call>`` starts a run (GO), putchar
+    output is echoed as Qwen tokens, and the circuit owns the positions of a run."""
+    c = RvCore(target, text)
+    no_text = c.is_text if text else 0  # text tokens do not count as tokens of a record
     one, fam, pay, kk = c.one, c.fam, c.pay, c.kk
     isV, isJR = fam["V"], fam["J"] + fam["R"]
     isSS = fam["SS0"] + fam["SS1"]
@@ -273,9 +315,9 @@ def build(target: Target | None = None) -> RvCore:
     c.tables["pc"] = c.nodes[-1]
     xn = c.counter("count", isJR, c.final - isJR)
     rec_start = c.final + fam["GO"]
-    xj = c.counter("j", rec_start, one - rec_start)
+    xj = c.counter("j", rec_start, one - rec_start - no_text)
     v_reset = rec_start + isQ
-    xv = c.counter("vcnt", v_reset, one - v_reset)
+    xv = c.counter("vcnt", v_reset, one - v_reset - no_text)
     cnt = c.thermo(xn, isJR, S.N_MAX, "n")
     jt = c.thermo(xj, rec_start, JMAX, "j")
     vt = c.thermo(xv, v_reset, 3, "v")
@@ -287,6 +329,21 @@ def build(target: Target | None = None) -> RvCore:
 
     j0, j1, j2, j3 = (jeq(v) for v in range(4))
     v0, v1, v2 = one - vt[0], vt[0] - vt[1], vt[1] - vt[2]
+
+    if text:  # ------------------------------------------------ P3 bridge state
+        isGO, isHALT = fam["GO"], fam["HALT"]
+        # running: from GO to HALT; armed: inside a tool call (its text is captured)
+        ((running,),) = thead(c, "run", {0: one}, {0: one},
+                              [{"data": {2: isGO}, "ref": one, "beta": isGO + isHALT}])
+        c.tables["run"] = c.nodes[-1]
+        ((armed,),) = thead(c, "arm", {0: one}, {0: one},
+                            [{"data": {2: c.isTCO}, "ref": one, "beta": c.isTCO + c.isTCC}])
+        c.tables["arm"] = c.nodes[-1]
+        capw = c.and_([c.is_text, armed, one - c.isTCO], "cap.w")  # a captured text token
+        xcap = c.counter("cap", c.isTCO, capw)  # its index (1, 2, ..) since <tool_call>
+        capt = c.thermo(xcap, c.isTCO, S.CAP_MAX, "cap")
+        caprow = {i: capt[i - 1] - (capt[i] if i < S.CAP_MAX else 0)
+                  for i in range(1, S.CAP_MAX + 1)}
 
     # ---------------------------------------------------------------- L2: PC word, link, nd
     def add_small(abits, extra, nb, name):
@@ -823,10 +880,35 @@ def build(target: Target | None = None) -> RvCore:
         c.table(f"drom{h}", q, {}, vhs, levels="byte")
     dbits = [b for k in range(4) for b in c.int_bits(256 * ddims[k], 255, f"drom.b{k}", 8)]
 
+    # ---------------------------------------------------------------- P3: the text buffer
+    # row i = the i-th captured token's bytes (2 value heads of 8 bytes), read as memory at
+    # TEXT_ADDR + 16 i: row EA[10:4], value head EA[3], word EA[2]
+    if text:
+        tmem = c.zeros(32, "tmem")
+        tsel = [EA[15]] + [1 - EA[b] for b in range(11, 15)]
+        q = {i: andpre(lits_of(EA[4:11], i) + tsel) for i in caprow}
+        keys = {i: Chan(e) for i, e in caprow.items()}
+        vhs = []
+        for x in range(2):
+            v, z, outs, into = {}, {}, [], []
+            for k in range(8):
+                for i in range(8):
+                    col = 2 + 8 * k + i
+                    v[col] = chan(c.tb[8 * x + k][i], A_BIT)
+                    z[col] = K * andpre(lits_of([EA[3]], x) + lits_of([EA[2]], k // 4))
+                    outs.append((col, OUT_W))
+                    into.append(tmem[8 * (k % 4) + i])
+            for rc in REF_COLS:
+                v[rc] = chan(one, A_REF)
+            vhs.append({"v": v, "z": z, "outs": outs, "into": into, "beta": capw,
+                        "a": 238 * c.isTCO})  # cleared at <tool_call>
+        c.table("tbuf", q, keys, vhs)
+
     # ---------------------------------------------------------------- loads, merge, compares
     lane = EA[0:2]
     in_ram = c.and_([1 - b for b in EA[15:32]], "in_ram")
     in_drom = c.and_([1 - b for b in EA[18:32]] + [EA[17]], "in_drom")
+    in_text = (c.and_(tsel + [1 - b for b in EA[16:32]], "in_text") if text else None)
     ld = []
     for i in range(32):
         terms = c.t_and([uops["LW"], mem[i], in_ram] + lits_of(lane, 0))
@@ -896,7 +978,8 @@ def build(target: Target | None = None) -> RvCore:
     mis_st = c.node(c.t_and([s_halfs, EA[0]]) + c.t_and([s_words, EA[0]])
                     + c.t_and([s_words, 1 - EA[0], EA[1]]), "fault.misst")
     oor_ld = c.node(c.t_and([loads, 1 - mis_ld]) + c.t_and([loads, 1 - mis_ld, in_ram], -1)
-                    + c.t_and([loads, 1 - mis_ld, in_drom], -1), "fault.oorld")
+                    + c.t_and([loads, 1 - mis_ld, in_drom], -1)
+                    + (c.t_and([loads, 1 - mis_ld, in_text], -1) if text else []), "fault.oorld")
     oor_st = c.node(c.t_and([is_store, 1 - mis_st])
                     + c.t_and([is_store, 1 - mis_st, in_ram], -1), "fault.oorst")
     jalr = uops["JALR"]
@@ -931,6 +1014,17 @@ def build(target: Target | None = None) -> RvCore:
             half = dbits[8 * k:8 * k + 16]
             srcs.append(([uops["LHU"], in_drom] + lk, half + [zero] * 16))
             srcs.append(([uops["LH"], in_drom] + lk, half + [half[15]] * 16))
+    if text:  # text-buffer loads: the same word / byte / half selection
+        srcs.append(([uops["LW"], in_text], tmem))
+        for k in range(4):
+            lk = lits_of(lane, k)
+            byte = tmem[8 * k:8 * k + 8]
+            srcs.append(([uops["LBU"], in_text] + lk, byte + [zero] * 24))
+            srcs.append(([uops["LB"], in_text] + lk, byte + [byte[7]] * 24))
+            if k % 2 == 0:
+                half = tmem[8 * k:8 * k + 16]
+                srcs.append(([uops["LHU"], in_text] + lk, half + [zero] * 16))
+                srcs.append(([uops["LH"], in_text] + lk, half + [half[15]] * 16))
     n_plain = len(srcs)
     srcs += [([any_of("DIV", "DIVU")], qs), ([remc], mul_lo)]
     val, k0t, k1t = [], [], []
@@ -964,9 +1058,12 @@ def build(target: Target | None = None) -> RvCore:
     ok = one - any_fault
     nr = [j0, one - at_max, ok]  # the first token of a record (no refresh, no fault)
     cases = []  # (literals, family, payload bits or int)
+    # P3: at a BYTE / HALT the next token is the echo (a Qwen token), at </tool_call> it is GO;
+    # every other case is off there
+    nb = [one - fam["BYTE"] - fam["HALT"] - c.isTCC] if text else []
 
     def case(lits, fam_name, payload=0):
-        cases.append((lits, fam_name, payload))
+        cases.append((lits + nb, fam_name, payload))
 
     case([j0, at_max], "R", w)
     case(nr + [valc, rdw_any, k0], "F0", val[0:15])
@@ -997,7 +1094,7 @@ def build(target: Target | None = None) -> RvCore:
     case([j2, ok, sbsh], "V", merged[30:32])
     case([j3, ok, sbsh, 1 - EA[6]], "SS0")
     case([j3, ok, sbsh, EA[6]], "SS1")
-    case(nr + [ecall, a7_is[1]], "BYTE", B[0:8])
+    case(nr + [ecall, a7_is[1]], "BYTE", B[0:9])  # a byte, or (256..) a P3 special token
     case(nr + [ecall, a7_is[93]], "HALT")
     case(nr + [uops["FENCE"]], "NT")
     # digit-file ops: BD per digit (j < n), then rd = the last carry (or NT)
@@ -1019,11 +1116,29 @@ def build(target: Target | None = None) -> RvCore:
     for k in range(8):
         case([jeq(1 + k), any_fault], "HEX", pc_bits[4 * (7 - k):4 * (8 - k)])
     case([jeq(9), any_fault], "HALT")
+    owner = None
+    if text:
+        cases.append(([fam["BYTE"]], "Q", c.pay["BYTE"]))
+        nl = text.printable_index(text.NL)  # a run ends in a newline
+        cases.append(([fam["HALT"]], "Q", [one if nl >> i & 1 else Expr() for i in range(9)]))
+        cases.append(([c.isTCC], "GO", 0))
+        # who predicts the next token: the circuit from </tool_call> through a run's last echo
+        owner = c.node(c.t_and([running]) + c.t_and([fam["HALT"]])
+                       + c.t_and([c.isTCC, one - running]), "owner")
+    c.owner = owner
+    own = [owner] if text else []
     fam_cases = [(l_, FAM_ID[fn]) for l_, fn, _ in cases]
     pay_cases = [(l_, pl) for l_, _, pl in cases if not isinstance(pl, int)]
-    fam_bits = c.select_bits(fam_cases, NFAM, "exit.fam")
-    pay_bits = c.select_bits(pay_cases, NPAY, "exit.pay")
-    c.out_fam, c.out_pay = fam_bits, pay_bits
+    if text:
+        # merged: no separate select dims (they would outlive the exit and reach Qwen's norms);
+        # predictions read the exit's code dims
+        c.out_fam = c.out_pay = None
+        exit_min = max(n.level for n in c.nodes)
+    else:
+        fam_bits = c.select_bits(fam_cases, NFAM, "exit.fam")
+        pay_bits = c.select_bits(pay_cases, NPAY, "exit.pay")
+        c.out_fam, c.out_pay = fam_bits, pay_bits
+        exit_min = max(c.level(b) for b in fam_bits) - 1
     # the exit: the input code is cleared, and the same cases write KAPPA * (2 * bit - 1) into
     # the code dims in the output stage itself (no extra layer); a stock output head tied to the
     # embedding then scores every token by how many code bits agree
@@ -1031,15 +1146,21 @@ def build(target: Target | None = None) -> RvCore:
         c.ffn([(-1, one, e), (1, one, -1 * e)], "code.clear", into=e)
     for i, e in enumerate(c.code):
         cs, bit = (fam_cases, i) if i < NFAM else (pay_cases, i - NFAM)
-        terms = c.t_const(-KAPPA)
+        terms = c.t_and(own, -KAPPA) if text else c.t_const(-KAPPA)
         for lits, val_ in cs:
             if isinstance(val_, int):
                 if val_ >> bit & 1:
-                    terms += c.t_and(lits, 2 * KAPPA)
+                    terms += c.t_and(lits + own, 2 * KAPPA)
             elif bit < len(val_) and val_[bit].terms:
-                terms += c.t_and([*lits, val_[bit]], 2 * KAPPA)
-        c.ffn(terms, f"exit.code{i}", into=e, min_level=max(c.level(b) for b in fam_bits) - 1)
+                terms += c.t_and([*lits, val_[bit]] + own, 2 * KAPPA)
+        c.ffn(terms, f"exit.code{i}", into=e, min_level=exit_min)
     c.keep = [next(iter(e.terms)) for e in c.code]
+    if text:
+        # tau: 0 wherever the circuit predicts (chip tokens: -1 + 1; owned text: TAU - TAU), the
+        # text value where Qwen does, which keeps chip tokens out of Qwen's text (q35.merge)
+        c.ffn([(1, c.mu, one)] + c.t_and([owner, c.is_text], -TAU_TEXT), "exit.tau",
+              into=c.tau, min_level=exit_min)
+        c.keep += [next(iter(c.tau.terms)), next(iter(c.mu.terms))]
     c.probe = {"w": w, "anchor": anchor, "cnt": cnt, "jt": jt, "vt": vt, "A": A, "B": B, "C": C,
                "imm": imm, "r": r, "val": val, "mem": mem, "ld": ld, "k0": k0, "k1": k1,
                "taken": taken, "logic": logic, "shift": shift, "merged": merged,
@@ -1149,11 +1270,15 @@ def snapshot(c: RvCore, m: "RF.Machine") -> None:
         c.tables[f"ram{h}"].init = [r0, r1]
 
 
-def decode_code(fid: int, p: int) -> int:
-    """The token of an output code (family id, payload), -1 if it names none."""
+def decode_code(fid: int, p: int, text=None) -> int:
+    """The token of an output code (family id, payload), -1 if it names none; a Q code is the
+    text token of ``text``'s printable token p."""
     if not 0 <= fid < len(OUT_NAMES):
         return -1
     nm = OUT_NAMES[fid]
+    if nm == "Q":
+        q = text.printable[p] if text and p < len(text.printable) else None
+        return -1 if q is None else S.TEXT_TOKEN + q
     if nm in S.CONTROLS:
         return S.tok(nm)
     return S.tok(nm, p) if p < S.FAMILIES[nm][1] else -1
@@ -1165,10 +1290,15 @@ def predictions(c: RvCore, mat: np.ndarray) -> list[int]:
         return [np.rint(sum(mat[:, d] * float(w_) for d, w_ in e.terms.items()))
                 if e.terms else np.zeros(mat.shape[0]) for e in es]
 
-    fb, pb = bits(c.out_fam), bits(c.out_pay)
+    if c.out_fam is None:  # merged: the exit's code dims (KAPPA * (2 bit - 1) where it owns)
+        cb = [(sum(mat[:, d] * float(w_) for d, w_ in e.terms.items()) > 0).astype(int)
+              for e in c.code]
+        fb, pb = cb[:NFAM], cb[NFAM:]
+    else:
+        fb, pb = bits(c.out_fam), bits(c.out_pay)
     out = []
     for t in range(mat.shape[0]):
         fid = int(sum(int(fb[i][t]) << i for i in range(NFAM)))
         p = int(sum(int(pb[i][t]) << i for i in range(NPAY)))
-        out.append(decode_code(fid, p))
+        out.append(decode_code(fid, p, c.text))
     return out

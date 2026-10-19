@@ -13,7 +13,7 @@ Token families (chip vocabulary ids from 0):
   F2    final; after two V: value bits 30..31
   J     final; jump: anchor = payload (a 16-bit ROM word index), n = 0
   R     final; anchor refresh: anchor = payload, n = 0, nothing executes
-  BYTE  final; putchar (ecall a7 = 1): the byte a0 & 255
+  BYTE  final; putchar (ecall a7 = 1): a0 & 511 (0..255 a byte; 256.. a special token, P3)
   FLT   not final; a fault: payload = cause (FAULTS), then 8 HEX digits of the PC, then HALT
   HEX   not final; a hex digit of a fault record
   QS    not final; DIV/DIVU/REM/REMU: k0, the index of the first quotient digit computed (0..8)
@@ -56,7 +56,7 @@ be 0 from the operands' sizes (see ref.div_start), so small quotients take few t
 """
 
 FAMILY_SIZES = [("V", 1 << 15), ("F0", 1 << 15), ("F1", 1 << 15), ("F2", 4), ("J", 1 << 16),
-                ("R", 1 << 16), ("BYTE", 256), ("FLT", 8), ("HEX", 16), ("QS", 16), ("QD", 128),
+                ("R", 1 << 16), ("BYTE", 512), ("FLT", 8), ("HEX", 16), ("QS", 16), ("QD", 128),
                 ("BD", 256)]
 FAMILIES = {}
 _base = 0
@@ -80,6 +80,17 @@ DATA_BASE = 0x100  # .data starts here (address 0 stays a null pointer)
 SP_INIT = RAM_BASE + 4 * RAM_WORDS
 N_MAX = 63  # the R refresh comes before the instruction when n == N_MAX
 MISA = 0x40001100  # RV32, I and M
+# (P3) the text buffer, loads only: row i (1..CAP_MAX) holds the i-th token of the latest tool
+# call's text, its UTF-8 bytes NUL-padded to TEXT_ROW, at TEXT_ADDR + TEXT_ROW * i
+TEXT_ADDR, TEXT_ROW, TEXT_ROWS = 0x8000, 16, 128
+# the capture counter's thermometer weights are 8 * 2^m: m < 88 keeps them below bf16's max
+# after the emitter's 2^36 fold
+CAP_MAX = 80
+TEXT_TOKEN = 1 << 24  # (P3) a Qwen text token in the circuit's token stream: TEXT_TOKEN | qwen_id
+
+
+def is_text(t: int) -> bool:
+    return t >= TEXT_TOKEN
 
 
 def family(t: int) -> tuple[str, int]:
