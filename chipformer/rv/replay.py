@@ -47,12 +47,12 @@ def replay_ids(c, T, v0, prompt, gen, firmware) -> dict:
     m2 = ref.Machine.from_program(elf.program(firmware))
     BR.park(m2)
     core.snapshot(c, m2)
-    carry, mats = {}, []
+    carry, preds, owns = {}, [], []  # per chunk: a long stream's whole matrix is GBs
     for a in range(0, len(stream), 2048):
-        mats.append(ir.evaluate(c, stream[a:a + 2048], carry=carry))
-    mat = np.concatenate(mats)
-    pred = core.predictions(c, mat)
-    own = np.rint(ir.ev(c.owner, mat)).astype(int)
+        mat = ir.evaluate(c, stream[a:a + 2048], carry=carry)
+        preds.append(core.predictions(c, mat))
+        owns.append(np.rint(ir.ev(c.owner, mat)).astype(int))
+    pred, own = np.concatenate(preds), np.concatenate(owns)
     bad_own = int(sum(own[x] != int(ses.own[x]) for x in range(len(stream))))
     bad = int(sum(1 for x in range(len(stream) - 1)
                   if ses.own[x] and x not in skip and pred[x] != stream[x + 1]))
