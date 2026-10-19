@@ -177,9 +177,16 @@ the plan's 2·10⁻⁴ target.
 | Tool mode (`merged_nb_ne_fp_tc`), synthetic arith n=20 | 20/20 | 33/33 tool calls, 7/7 inline fires |
 | Inline (`merged_inline_nudge_fp_tc`), arith n=20 | 15/20 (5 stopped at the cache length) | 79/79 fires |
 
-These match q4-int's release numbers (20/20 and 33/33; 15/20 inline).
+| Tool mode, DM mul_big n=10 (`--max-len 16384`, batch 2) | 6/10 (3 budget or cache stops; 1 Qwen slip by ×10) | see the IR replay |
 
-DM_REPLAY
+The synthetic-arith rows match q4-int's release numbers (20/20 and 33/33; 15/20 inline). DM
+mul_big is 6/10 here vs 7/10 there, on the same kind of losses.
+
+**IR replay** (the circuit's IR == the reference BIOS on every computer-owned position of the DM
+records above): 10 records, 40,357 positions, **0 mismatches**, 0 stray chip tokens.
+
+The L4 runs these at batch 2-4. Batch 8, or batch 4 with a 16k cache, runs out of memory without
+the `flash-linear-attention` kernels.
 
 **Demo** (`evaluate demo`: one session on one cache, the BIOS boot record, then four held-out
 scenarios as consecutive conversations; replies as decoded, with special tokens kept):
