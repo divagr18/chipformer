@@ -169,7 +169,50 @@ def main() -> None:
 
         st = rb.run(jobs(), args.budget, args.max_chip, finished)
         print(json.dumps({"batch_stats": st}), flush=True)
-    for p in todo if not (args.cond == "rv1" and args.batch > 1) else []:
+    if args.cond != "rv1" and args.batch > 1:  # base Qwen: q35's BatchDecoder
+        from chipformer.q35.batch import BatchDecoder
+
+        prompts = []
+        for p in todo:
+            ids = tok.apply_chat_template(msgs_of(p), tools=[CALC_TOOL] if tool else None,
+                                          add_generation_prompt=True, enable_thinking=False,
+                                          tokenize=True)
+            prompts.append(ids if isinstance(ids, list) else ids["input_ids"])
+        tcc = tok.convert_tokens_to_ids("</tool_call>")
+        state = [{"forced": [], "own": 0, "gen": [], "calls": 0} for _ in todo]
+
+        def hook(i, t):
+            """pytool: after </tool_call> the next tokens are the host's response (forced);
+            the row stops after ``budget`` of Qwen's own tokens, as run_base does."""
+            s = state[i]
+            if s["forced"]:
+                t = s["forced"].pop(0)
+                s["gen"].append(t)
+                return t, False
+            s["own"] += 1
+            s["gen"].append(t)
+            if tool and t == tcc:
+                txt = tok.decode(s["gen"], skip_special_tokens=False)
+                mm = re.findall(r"<parameter=[^>]*>(.*?)</parameter>",
+                                txt.split("<tool_call>")[-1], re.S)
+                s["forced"] = tok(calc_response(mm[0] if mm else ""),
+                                  add_special_tokens=False).input_ids
+                s["calls"] += 1
+            return t, s["own"] >= args.budget and not s["forced"]
+
+        t0 = time.time()
+        max_len = -(-(max(map(len, prompts)) + 2 * args.budget) // 1024) * 1024
+        bd = BatchDecoder(model, batch=args.batch, max_len=max_len)
+
+        def fin(i, toks):
+            s = state[i]
+            text = tok.decode(toks, skip_special_tokens=False)
+            emit(todo[i], text, dict(calls=s["calls"], n_qwen=s["own"], n_chip=0,
+                                     batch=args.batch), time.time() - t0)
+
+        if prompts:
+            bd.run(prompts, 2 * args.budget, on_done=fin, hook=hook)
+    for p in todo if args.batch == 1 else []:
         t0 = time.time()
         if args.cond == "rv1":
             ids, m, lock = rv1_job(p)
