@@ -39,7 +39,9 @@ def embedding_matrix(c, lay, n_vocab: int) -> torch.Tensor:
         deltas = np.stack([vec(base + (1 << i)) - v0 for i in range(nb)]) if nb else None
         p = np.arange(size)
         rows = np.tile(v0, (size, 1))
-        if nb:
+        if size <= 4096:  # small families: any features (e.g. QS / QD's digit index)
+            rows = np.stack([vec(base + i) for i in range(size)])
+        elif nb:
             bits = (p[:, None] >> np.arange(nb)[None, :]) & 1
             rows = rows + bits @ deltas
         e[base:base + size][:, cols] = rows
