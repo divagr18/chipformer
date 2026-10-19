@@ -44,8 +44,33 @@ def _mod(a, b):
     return a % b
 
 
+def expected_decimal(expr: str) -> str:
+    """A decimal expression: + - * exact (other operators need integers), printed without
+    trailing zeros after the point."""
+    import decimal
+    import re
+
+    if re.search(r"[/%^]|gcd", expr) or "**" in expr:
+        return "error\n"
+    src = re.sub(r"\d+\.\d+|\d+", lambda m: f"D('{m[0]}')", expr)
+    with decimal.localcontext() as ctx:
+        ctx.prec = 400
+        try:
+            v = eval(src, {"__builtins__": {}}, {"D": decimal.Decimal})  # noqa: S307
+        except SyntaxError:
+            return "error\n"
+        s = format(v, "f")
+    if "." in s:
+        s = s.rstrip("0").rstrip(".")
+    if s in ("-0", ""):
+        s = "0"
+    return "error\n" if len(s.replace("-", "").replace(".", "").lstrip("0")) > MAXD else f"{s}\n"
+
+
 def expected(expr: str) -> str:
     """Python's value (// and % floor, ** / ^ powers, gcd) or "error", as the firmware prints it."""
+    if "." in expr:
+        return expected_decimal(expr)
     src = expr.replace("^", "**").replace("//", "/").replace("/", "//")
     try:
         v = eval(src, {"__builtins__": {}}, {"gcd": gcd})  # noqa: S307 (generated input)

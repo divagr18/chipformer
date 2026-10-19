@@ -218,6 +218,23 @@ static int prec(int op) {
     return op == '^' ? 4 : op == 'n' ? 3 : op == '*' || op == '/' || op == '%' ? 2 : 1;
 }
 
+// decimals: a value is the integer vals[i] scaled by 10^-vsc[i] (+ - * keep it exact; the other
+// operators need integers)
+static int vsc[16];
+
+static num shift(num a, int k) {  // a * 10^k in a new register; consumes a
+    int n = LEN(a) + k;
+    if (n > MAXD) {
+        err = 1;
+        return a;
+    }
+    num c = alloc(n);
+    bn_mac(BN_OPS(LEN(a), k, 1, REG(c), REG(a), 1));
+    wrote(c, n);
+    release(a);
+    return NUM(REG(c), NEG(a), n);
+}
+
 static int apply(int op, int nv) {  // returns the new value count
     if (op == 'n') {
         num v = vals[nv - 1];
@@ -228,13 +245,20 @@ static int apply(int op, int nv) {  // returns the new value count
         err = 1;
         return nv;
     }
+    int sb = vsc[nv - 1], sa = vsc[nv - 2];
     num b = vals[--nv], a = vals[nv - 1], r;
     if (op == '+' || op == '-') {
+        if (sa < sb) a = shift(a, sb - sa), sa = sb;
+        if (sb < sa) b = shift(b, sa - sb);
         r = add(a, op == '-' && !is_zero(b) ? b ^ 0x100u : b);
     } else if (op == '*') {
         r = mul(a, b);
         release(a);
         release(b);
+        sa += sb;
+    } else if (sa || sb) {
+        err = 1;
+        r = a;
     } else if (op == '^') {
         r = power(a, b);
     } else if (op == 'g') {
@@ -243,6 +267,7 @@ static int apply(int op, int nv) {  // returns the new value count
         r = divide(a, b, op == '%');
     }
     vals[nv - 1] = r;
+    vsc[nv - 1] = sa;
     return nv;
 }
 
@@ -269,6 +294,7 @@ static int calc_eval(void) {  // prints the value (or "error") and a newline; 0 
             dirty[1] = nb;
             vals[0] = dig(NUM(0, 0, na), na - 1) ? NUM(0, 0, na) : trim(NUM(0, 0, na));
             vals[1] = dig(NUM(1, 0, nb), nb - 1) ? NUM(1, 0, nb) : trim(NUM(1, 0, nb));
+            vsc[0] = vsc[1] = 0;
             nv = apply(op, 2);
             if (err) goto fail;
             goto print;
@@ -285,11 +311,26 @@ static int calc_eval(void) {  // prints the value (or "error") and a newline; 0 
         if (operand) {
             if ((unsigned)(c - '0') < 10) {
                 int n = bn_scan(s);  // (63: a longer run, over MAXD)
-                s += n;
+                const char *end = s + n;
+                int frac = 0;
+                if (*end == '.' && (unsigned)(end[1] - '0') < 10) {  // a decimal: digits . digits
+                    static char dbuf[MAXD + 2];
+                    frac = bn_scan(end + 1);
+                    if (n + frac > MAXD) err = 1;
+                    if (err) break;
+                    for (int i = 0; i < n; i++) dbuf[i] = s[i];
+                    for (int i = 0; i < frac; i++) dbuf[n + i] = end[1 + i];
+                    s = end + 1 + frac;
+                    n += frac;
+                    end = dbuf + n;
+                } else {
+                    s = end;
+                }
                 num a = alloc(n);
                 if (n > MAXD) err = 1;
-                bn_ld(s, BN_OPS(n, 0, 0, REG(a), 0, 0));
+                bn_ld(end, BN_OPS(n, 0, 0, REG(a), 0, 0));
                 wrote(a, n);
+                vsc[nv] = frac;
                 vals[nv++] = dig(a, n - 1) ? a : trim(a);
                 operand = 0;
             } else if (c == '(') {
@@ -353,8 +394,19 @@ static int calc_eval(void) {  // prints the value (or "error") and a newline; 0 
     }
 print:;
     num v = vals[0];
+    int sc = vsc[0], n = LEN(v);
     if (NEG(v)) rv_putchar('-');
-    bn_print(REG(v), LEN(v));
+    if (!sc) {
+        bn_print(REG(v), n);
+    } else {  // digits with the point, no trailing zeros after it (0.5, 12, -0.004)
+        int z = 0;
+        while (z < sc && !dig(v, z)) z++;
+        if (n <= sc) rv_putchar('0');
+        for (int i = n > sc ? n - 1 : sc - 1; i >= z; i--) {
+            if (i == sc - 1) rv_putchar('.');
+            rv_putchar('0' + (i < n ? dig(v, i) : 0));
+        }
+    }
     rv_putchar('\n');
     return 0;
 }

@@ -104,6 +104,34 @@ def test_two_calls_and_overflow(T, circuit):
     check(circuit, ses, m0)
 
 
+def test_decimal_call(T, circuit):
+    """Decimal operands (+ - * exact, the point placed, trailing zeros dropped)."""
+    m0 = fresh_machine()
+    ses = BR.Session(T, fresh_machine())
+    ses.qwen(call(T, "(1.2 - 3) * 4.5 - 0.75"))
+    assert T.decode_bytes(ses.runs[-1]).decode().split("\n")[2] == "-8.85"
+    check(circuit, ses, m0)
+
+
+def test_decimal_reference():
+    import random
+
+    from chipformer.rv import calc
+
+    rng = random.Random(3)
+
+    def num():
+        a = str(rng.randint(0, 10 ** rng.randint(1, 7)))
+        if rng.random() < 0.7:
+            a += "." + str(rng.randint(0, 10 ** rng.randint(1, 5))).rjust(rng.randint(1, 5), "0")
+        return ("-" if rng.random() < 0.3 else "") + a
+
+    exprs = ["0.1*0.2", "1.5-1.5", "100.0", "7.5/2"] + \
+        [f"({num()}{rng.choice('+-*')}{num()}){rng.choice('+-*')}{num()}" for _ in range(40)]
+    for e in exprs:
+        assert calc.run(e)[0] == calc.expected(e), e
+
+
 def test_reference_buffer(T):
     ses, m = session(T)
     ses.qwen(call(T, "5"))
