@@ -38,6 +38,64 @@ CALC_TOOL = {"type": "function", "function": {
         "required": ["expression"]}}}
 
 
+class ExecRow:
+    """One conversation's circuit on the Triton executor (batch 1) with its own CUDA graph."""
+
+    def __init__(self, chat: "RvChat") -> None:
+        from chipformer.rv.tritonexec import Executor2
+
+        self.chat = chat
+        self.ex = Executor2(chat.c, 1, chat.dev)
+        self.heads = [st for st in self.ex.steps if st["kind"] == "head"]
+        self.xbuf = torch.zeros(1, self.ex.D, device=chat.dev)
+        self.kbuf = torch.zeros(len(chat.keep_cols), device=chat.dev)
+        self.graph = None
+
+    def _body(self):
+        self.ex.step(self.xbuf)
+        self.kbuf.copy_(self.xbuf[0, self.chat.keep_ir])
+
+    @torch.no_grad()
+    def _capture(self):
+        """Warm-up runs change the state, so it is saved and put back around them."""
+        saved = [(st["S"].clone(), st["hist"].clone()) for st in self.heads]
+        s = torch.cuda.Stream()
+        s.wait_stream(torch.cuda.current_stream())
+        with torch.cuda.stream(s):
+            for _ in range(3):
+                self._body()
+        torch.cuda.current_stream().wait_stream(s)
+        self.graph = torch.cuda.CUDAGraph()
+        with torch.cuda.graph(self.graph):
+            self._body()
+        for st, (S_, h) in zip(self.heads, saved):
+            st["S"].copy_(S_)
+            st["hist"].copy_(h)
+
+    @torch.no_grad()
+    def start(self, ids: list[int]) -> None:
+        """As the HF path does it: the prompt through the circuit from zero states, then every
+        head's state set to its init (the snapshot now in the circuit; hf.inject), the lag
+        windows kept."""
+        if self.graph is None:
+            self._capture()
+        for st in self.heads:
+            st["S"].zero_()
+            st["hist"].zero_()
+        emb = self.chat._exec_emb(ids)
+        for t in range(len(ids)):
+            self.xbuf.copy_(emb[t:t + 1])
+            self.graph.replay()
+        self.ex.load_init()
+
+    @torch.no_grad()
+    def step(self, ids: int) -> torch.Tensor:
+        """One token through the circuit; returns the kept values (fp32, the code first)."""
+        self.xbuf.copy_(self.chat._exec_emb([ids]))
+        self.graph.replay()
+        return self.kbuf
+
+
 class RvChat:
     def __init__(self, path, device: str | None = None, fast: bool = True,
                  executor: bool = False) -> None:
@@ -79,76 +137,29 @@ class RvChat:
         zeros (the exit clears every other chip dim and the ballast), so a text token's hc is
         built from the embedding row and the executor's kept values; chip tokens need only the
         code."""
-        from chipformer.rv.tritonexec import Executor2
-
-        self.ex = Executor2(self.c, 1, self.dev)
-        self.heads = [st for st in self.ex.steps if st["kind"] == "head"]
         self.keep_ir = torch.tensor(self.c.keep, device=self.dev)
         cols = self.meta["code_dims"] + [self.meta["tau_dim"], self.meta["mu_dim"]]
         assert len(cols) == len(self.c.keep)
         self.keep_cols = torch.tensor(cols, device=self.dev)
         self.d0 = self.meta["chip_dims_offset"]
-        self.xbuf = torch.zeros(1, self.ex.D, device=self.dev)
-        self.kbuf = torch.zeros(len(cols), device=self.dev)
         self.emb_cache: dict[int, torch.Tensor] = {}
-        self.egraph = None
+        self.erow = ExecRow(self)
 
     def _exec_emb(self, ids: list[int]) -> torch.Tensor:
-        """Executor input rows for model ids (cached per id)."""
+        """Executor input rows for model ids (cached per id; shared by every ExecRow)."""
         new = sorted({i for i in ids if i not in self.emb_cache})
         if new:
-            rows = self.ex.embed([i - self.v0 if i >= self.v0 else BR.text_token(i) for i in new])
+            rows = self.erow.ex.embed([i - self.v0 if i >= self.v0 else BR.text_token(i)
+                                       for i in new])
             for i, r in zip(new, rows):
                 self.emb_cache[i] = r
         return torch.stack([self.emb_cache[i] for i in ids])
 
-    def _exec_body(self):
-        self.ex.step(self.xbuf)
-        self.kbuf.copy_(self.xbuf[0, self.keep_ir])
-
-    def _exec_save(self):
-        return [(st["S"].clone(), st["hist"].clone()) for st in self.heads]
-
-    def _exec_restore(self, saved):
-        for st, (s, h) in zip(self.heads, saved):
-            st["S"].copy_(s)
-            st["hist"].copy_(h)
-
-    @torch.no_grad()
-    def _exec_capture(self):
-        saved = self._exec_save()
-        s = torch.cuda.Stream()
-        s.wait_stream(torch.cuda.current_stream())
-        with torch.cuda.stream(s):
-            for _ in range(3):
-                self._exec_body()
-        torch.cuda.current_stream().wait_stream(s)
-        self.egraph = torch.cuda.CUDAGraph()
-        with torch.cuda.graph(self.egraph):
-            self._exec_body()
-        self._exec_restore(saved)
-
-    @torch.no_grad()
     def _exec_start(self, ids: list[int]) -> None:
-        """As the HF path does it: the prompt through the circuit from zero states, then every
-        head's state set to its init (the snapshot; hf.inject), the lag windows kept."""
-        if self.egraph is None:
-            self._exec_capture()
-        for st in self.heads:
-            st["S"].zero_()
-            st["hist"].zero_()
-        emb = self._exec_emb(ids)
-        for t in range(len(ids)):
-            self.xbuf.copy_(emb[t:t + 1])
-            self.egraph.replay()
-        self.ex.load_init()
+        self.erow.start(ids)
 
-    @torch.no_grad()
     def _exec_step(self, ids: int) -> torch.Tensor:
-        """One token through the circuit; returns the kept values (fp32, the code first)."""
-        self.xbuf.copy_(self._exec_emb([ids]))
-        self.egraph.replay()
-        return self.kbuf
+        return self.erow.step(ids)
 
     def _exec_hc(self, ids: int, keep: torch.Tensor) -> torch.Tensor:
         """A text token's residual after the chip layers."""
