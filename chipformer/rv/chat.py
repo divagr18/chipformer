@@ -39,7 +39,8 @@ CALC_TOOL = {"type": "function", "function": {
 
 
 class RvChat:
-    def __init__(self, path, device: str | None = None, fast: bool = True) -> None:
+    def __init__(self, path, device: str | None = None, fast: bool = True,
+                 executor: bool = False) -> None:
         from transformers import AutoTokenizer, Qwen3_5ForCausalLM
 
         from chipformer.q35.fast import exact_matmuls
@@ -61,8 +62,115 @@ class RvChat:
         self.code_dims = torch.tensor(self.meta["code_dims"], device=self.dev)
         self.eos = {248046, 248044}
         self.fast = fast and self.dev == "cuda"
-        if self.fast:
+        # executor "verify": both chip paths, the HF view's hc checked against the executor's
+        self.executor = executor if self.dev == "cuda" else False
+        self.verify = self.executor == "verify"
+        if self.executor:
+            self._build_exec()
+        if self.fast and (not self.executor or self.verify):
             self._build_fast()
+        self.fast = self.fast and (not self.executor or self.verify)
+
+    # --- the executor path -----------------------------------------------------------------
+    def _build_exec(self) -> None:
+        """The chip layers as the circuit itself (tritonexec.Executor2: the IR's arithmetic in
+        fp32, one CUDA graph per token) instead of their HF modules. After the chip layers the
+        merged residual holds Qwen's embedding dims, the kept dims (output code, tau, mu) and
+        zeros (the exit clears every other chip dim and the ballast), so a text token's hc is
+        built from the embedding row and the executor's kept values; chip tokens need only the
+        code."""
+        from chipformer.rv.tritonexec import Executor2
+
+        self.ex = Executor2(self.c, 1, self.dev)
+        self.heads = [st for st in self.ex.steps if st["kind"] == "head"]
+        self.keep_ir = torch.tensor(self.c.keep, device=self.dev)
+        cols = self.meta["code_dims"] + [self.meta["tau_dim"], self.meta["mu_dim"]]
+        assert len(cols) == len(self.c.keep)
+        self.keep_cols = torch.tensor(cols, device=self.dev)
+        self.d0 = self.meta["chip_dims_offset"]
+        self.xbuf = torch.zeros(1, self.ex.D, device=self.dev)
+        self.kbuf = torch.zeros(len(cols), device=self.dev)
+        self.emb_cache: dict[int, torch.Tensor] = {}
+        self.egraph = None
+
+    def _exec_emb(self, ids: list[int]) -> torch.Tensor:
+        """Executor input rows for model ids (cached per id)."""
+        new = sorted({i for i in ids if i not in self.emb_cache})
+        if new:
+            rows = self.ex.embed([i - self.v0 if i >= self.v0 else BR.text_token(i) for i in new])
+            for i, r in zip(new, rows):
+                self.emb_cache[i] = r
+        return torch.stack([self.emb_cache[i] for i in ids])
+
+    def _exec_body(self):
+        self.ex.step(self.xbuf)
+        self.kbuf.copy_(self.xbuf[0, self.keep_ir])
+
+    def _exec_save(self):
+        return [(st["S"].clone(), st["hist"].clone()) for st in self.heads]
+
+    def _exec_restore(self, saved):
+        for st, (s, h) in zip(self.heads, saved):
+            st["S"].copy_(s)
+            st["hist"].copy_(h)
+
+    @torch.no_grad()
+    def _exec_capture(self):
+        saved = self._exec_save()
+        s = torch.cuda.Stream()
+        s.wait_stream(torch.cuda.current_stream())
+        with torch.cuda.stream(s):
+            for _ in range(3):
+                self._exec_body()
+        torch.cuda.current_stream().wait_stream(s)
+        self.egraph = torch.cuda.CUDAGraph()
+        with torch.cuda.graph(self.egraph):
+            self._exec_body()
+        self._exec_restore(saved)
+
+    @torch.no_grad()
+    def _exec_start(self, ids: list[int]) -> None:
+        """As the HF path does it: the prompt through the circuit from zero states, then every
+        head's state set to its init (the snapshot; hf.inject), the lag windows kept."""
+        if self.egraph is None:
+            self._exec_capture()
+        for st in self.heads:
+            st["S"].zero_()
+            st["hist"].zero_()
+        emb = self._exec_emb(ids)
+        for t in range(len(ids)):
+            self.xbuf.copy_(emb[t:t + 1])
+            self.egraph.replay()
+        self.ex.load_init()
+
+    @torch.no_grad()
+    def _exec_step(self, ids: int) -> torch.Tensor:
+        """One token through the circuit; returns the kept values (fp32, the code first)."""
+        self.xbuf.copy_(self._exec_emb([ids]))
+        self.egraph.replay()
+        return self.kbuf
+
+    def _exec_hc(self, ids: int, keep: torch.Tensor) -> torch.Tensor:
+        """A text token's residual after the chip layers."""
+        hc = torch.zeros(self.lm.embed_tokens.weight.shape[1], dtype=torch.bfloat16,
+                         device=self.dev)
+        hc[: self.d0] = self.lm.embed_tokens.weight[ids, : self.d0]
+        hc[self.keep_cols] = keep.to(torch.bfloat16)
+        return hc
+
+    def code_token(self, code) -> int | None:
+        """circuit_token from the output code values."""
+        code = code.float()
+        if not bool((code != 0).any()):
+            return None
+        bits = (code > 0).long().tolist()
+        nf = core.NFAM
+        fid = sum(b << i for i, b in enumerate(bits[:nf]))
+        p = sum(b << i for i, b in enumerate(bits[nf:]))
+        t = core.decode_code(fid, p, self.T)
+        if t < 0:
+            raise RuntimeError(f"the circuit predicts no token (family {fid}, payload {p})")
+        return t - S.TEXT_TOKEN if S.is_text(t) else self.v0 + t
 
     # --- the fast chip path ----------------------------------------------------------------
     def _build_fast(self) -> None:
@@ -190,17 +298,7 @@ class RvChat:
 
     def circuit_token(self, hc) -> int | None:
         """The model id the circuit predicts at a position, None where Qwen predicts."""
-        code = hc[self.code_dims].float()
-        if not bool((code != 0).any()):
-            return None
-        bits = (code > 0).long().tolist()
-        nf = core.NFAM
-        fid = sum(b << i for i, b in enumerate(bits[:nf]))
-        p = sum(b << i for i, b in enumerate(bits[nf:]))
-        t = core.decode_code(fid, p, self.T)
-        if t < 0:
-            raise RuntimeError(f"the circuit predicts no token (family {fid}, payload {p})")
-        return t - S.TEXT_TOKEN if S.is_text(t) else self.v0 + t
+        return self.code_token(hc[self.code_dims])
 
     # --- a conversation --------------------------------------------------------------------
     def prompt_ids(self, messages, tools=(CALC_TOOL,)) -> list[int]:
@@ -222,6 +320,8 @@ class RvChat:
         out = self.model(input_ids=x, use_cache=True)
         cache = out.past_key_values  # (fast: Qwen's layers only)
         core.snapshot(self.c, machine)
+        if self.executor:
+            self._exec_start(ids)
         if self.fast:
             ccache = self._chip_cache()
             h = self.cm.embed_tokens(x)  # the prompt through the chip layers only
@@ -232,12 +332,12 @@ class RvChat:
             if self.graph is None:
                 self._capture()
             g = len(ids)  # the chip view's cache position (every token)
-        else:
+        elif not self.executor:
             hf.inject(self.c, cache)
+        n_verify_bad = 0
         logits = out.logits[0, -1]
         pos = len(ids)  # the next text token's RoPE position
         gen, n_text, n_chip_tok = [], 0, 0
-        stream_hc = []
         # the prompt's last position: Qwen predicts (nothing captured yet)
         nxt = int(torch.argmax(logits[: self.v0]))
         t0 = time.time()
@@ -273,25 +373,34 @@ class RvChat:
                 print(f"  {len(gen)} tokens ({n_text} text, {n_chip_tok} chip) "
                       f"{time.time() - t0:.0f}s: {' '.join(tail)}", flush=True)
             ts = time.time()
-            if nxt >= self.v0:  # a chip token
+            chip_in = nxt >= self.v0
+            hc = keep = None
+            if self.executor:
+                keep = self._exec_step(nxt)
+                if not chip_in:
+                    hc = self._exec_hc(nxt, keep)
+            if self.fast and (self.verify or not self.executor):
+                hf_hc = self._chip_step(nxt, g, ccache)
+                g += 1
+                if self.verify:
+                    same = (bool((hf_hc[self.keep_cols] == keep.to(torch.bfloat16)).all())
+                            if chip_in else bool((hf_hc == hc).all()))
+                    if not same:
+                        n_verify_bad += 1
+                hc = hf_hc
+            elif not self.executor:
+                hc, logits = self._layers(nxt, cache, None if chip_in else pos)
+            if chip_in:  # a chip token
                 n_chip_tok += 1
-                if self.fast:
-                    hc = self._chip_step(nxt, g, ccache)
-                    g += 1
-                else:
-                    hc, _ = self._layers(nxt, cache, None)
-                nxt = self.circuit_token(hc)
+                nxt = (self.code_token(keep[: len(self.code_dims)]) if hc is None
+                       else self.circuit_token(hc))
                 t_chip += time.time() - ts
                 if nxt is None:
                     raise RuntimeError("the circuit gave up a chip position")
             else:
                 n_text += 1
-                if self.fast:
-                    hc = self._chip_step(nxt, g, ccache)
-                    g += 1
+                if self.fast or self.executor:
                     logits = self._qwen_step(hc, cache, pos)
-                else:
-                    hc, logits = self._layers(nxt, cache, pos)
                 pos += 1
                 ct = self.circuit_token(hc)
                 q = int(torch.argmax(logits))
@@ -299,11 +408,10 @@ class RvChat:
                     mismatch += 1
                 nxt = ct if ct is not None else int(torch.argmax(logits[: self.v0]))
                 t_text += time.time() - ts
-            if check_head:
-                stream_hc.append(hc[self.code_dims].float().cpu().numpy())
         dt = time.time() - t0
         return {"tokens": gen, "text_tokens": n_text, "chip_tokens": n_chip_tok,
                 "seconds": dt, "head_mismatch": mismatch, "lock_error": lock_error,
+                "verify_mismatch": n_verify_bad if self.verify else None,
                 "chip_seconds": round(t_chip, 2), "text_seconds": round(t_text, 2)}
 
     def to_stream(self, ids: list[int]) -> list[int]:

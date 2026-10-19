@@ -85,6 +85,8 @@ def main() -> None:
     ap.add_argument("--firmware", default="tests/data/rv/calc-bridge.elf")
     ap.add_argument("--budget", type=int, default=4096, help="Qwen tokens per problem")
     ap.add_argument("--max-chip", type=int, default=200000)
+    ap.add_argument("--chip-path", default="executor", choices=("executor", "hf"),
+                    help="rv1's chip layers: the circuit's Triton executor, or their HF modules")
     args = ap.parse_args()
     n = args.n or (40 if args.data == "arith" else None)
     probs = problems(args.data, n, args.seed)
@@ -93,7 +95,7 @@ def main() -> None:
     done = {json.loads(x)["id"] for x in out.read_text().splitlines()} if out.exists() else set()
     tool = args.cond != "base_nudge"
     if args.cond == "rv1":
-        chat = RvChat(args.model)
+        chat = RvChat(args.model, executor=args.chip_path == "executor")
         tok = chat.tok
     else:
         from transformers import AutoModelForImageTextToText, AutoTokenizer
@@ -125,6 +127,8 @@ def main() -> None:
                        n_qwen=r["text_tokens"] - sum(len(e) for e in lock.runs),
                        n_chip=r["chip_tokens"], lock_error=r["lock_error"],
                        head_mismatch=r["head_mismatch"], gen_seconds=round(r["seconds"], 1),
+                       chip_path=args.chip_path, chip_seconds=r["chip_seconds"],
+                       text_seconds=r["text_seconds"],
                        results=[o.split("\n")[2] if o.count("\n") > 2 else o for o in outs])
         else:
             ids = tok.apply_chat_template(msgs, tools=[CALC_TOOL] if tool else None,
