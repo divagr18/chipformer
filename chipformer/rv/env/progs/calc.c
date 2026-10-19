@@ -17,15 +17,27 @@ static void park(void) { rv_ecall2(93, 0, 0, 0); }
 
 static char text[ROWS * 16 + 1];
 
+// The call's text is "\n<function=NAME>\n<parameter=NAME>\nVALUE\n</parameter>..."; keep only
+// what follows the second '>' (the first parameter's value), up to the next '<'.
 static int gather(void) {
-    int n = 0;
+    int n = 0, gt = 0;
     for (int i = 1; i <= ROWS; i++) {
         const volatile unsigned char *r = TEXT + 16 * i;
-        if (!r[0]) break;
-        for (int k = 0; k < 16 && r[k]; k++) text[n++] = (char)r[k];
+        int c = r[0];
+        if (!c) break;
+        for (int k = 0; k < 16 && c; c = ++k < 16 ? r[k] : 0) {
+            if (gt < 2) {
+                gt += c == '>';
+            } else if (c == '<') {
+                text[n] = 0;
+                return n;
+            } else {
+                text[n++] = (char)c;
+            }
+        }
     }
     text[n] = 0;
-    return n;
+    return gt < 2 ? -1 : n;
 }
 
 typedef struct {
@@ -189,30 +201,19 @@ static big *expr(void) {
     }
 }
 
-static const char *find(const char *h, const char *n) {
-    for (; *h; h++) {
-        int i = 0;
-        while (n[i] && h[i] == n[i]) i++;
-        if (!n[i]) return h;
-    }
-    return 0;
-}
-
 static void puts_(const char *p) {
     while (*p) put((unsigned char)*p++);
 }
 
 static void handle(void) {
-    gather();
     err = 0;
     top = 0;
     big *v = 0;
-    const char *p = find(text, "<parameter=");
-    if (p && (p = find(p, ">"))) {
-        s = p + 1;
+    if (gather() >= 0) {
+        s = text;
         v = expr();
         skip();
-        if (*s != '<' && *s != 0) err = 1;
+        if (*s != 0) err = 1;
     } else {
         err = 1;
     }

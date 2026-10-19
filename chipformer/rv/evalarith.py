@@ -130,6 +130,7 @@ def main() -> None:
             gen = r["tokens"]
             text = chat.text_of(gen)
             outs = [chat.T.decode_bytes(e).decode("utf-8", "replace") for e in lock.runs]
+            rec.update(prompt_ids=ids, gen_ids=gen)
             rec.update(calls=text.count("<tool_response>"), n_text=r["text_tokens"],
                        n_chip=r["chip_tokens"], lock_error=r["lock_error"],
                        head_mismatch=r["head_mismatch"], gen_seconds=round(r["seconds"], 1),
