@@ -374,7 +374,11 @@ class RvChat:
                     break
                 else:
                     k = len(lock.toks)
-                    lock.qwen([nxt])
+                    try:
+                        lock.qwen([nxt])
+                    except RuntimeError as e:  # the reference run did not halt
+                        lock_error = {"at": len(gen) - 1, "got": str(e), "want": "a halt"}
+                        break
                     expect = list(lock.toks[k + 1:])
             if nxt in self.eos:
                 break

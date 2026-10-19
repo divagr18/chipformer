@@ -5,9 +5,11 @@
 //   expr = term {(+|-) term}      term = factor {(*|/|//|%) factor}
 //   factor = (-|+) factor | power  power = atom [(**|^) factor]
 //   atom = digits | ( expr ) | gcd ( expr , expr )
-// / and // are floor division, % the matching modulo (the divisor's sign), ** / ^ a power with
-// a small non-negative exponent. Output: the value in decimal and "\n", or "error\n" (division by
-// zero, a value over MAXD digits, a syntax error).
+// / is exact (rationals: + - * / on reduced fractions p/q), // floor division, % the matching
+// modulo (the divisor's sign), ** / ^ a power with a small non-negative exponent; // % ** gcd
+// need integers. Decimal operands (+ - * only) print with a point. Output: the value ("p/q" for
+// a fraction) and "\n", or "error\n" (division by zero, a value or product over MAXD digits, a
+// syntax error).
 //
 // A value is one word: register | negative << 8 | length << 16; a register's digits at and above
 // the value's length are 0. Register 7 holds the constant 1 (quotient digits, +1).
@@ -46,7 +48,7 @@ static num alloc(int len) {
             dirty[r] = 0;
             return NUM(r, 0, len);
         }
-    err = 1;
+    err = 2;  // out of registers: "too complex"
     return NUM(0, 0, len);
 }
 
@@ -140,9 +142,9 @@ __attribute__((noinline)) static qr divmod(num a, num b) {  // |a| = q |b| + r: 
         if (qd > 9) qd = 9;
         if (qd) {
             uint32_t o = BN_OFF(t);
-            if (bn_msb(msb | o | BN_M(qd)))  // negative: add b back
-                do qd--;
-                while (!bn_mac(mac | o));
+            if (bn_msb(msb | o | BN_M(qd)))  // negative: add b back (at most twice; bounded
+                do qd--;                      // anyway, should a register be corrupt)
+                while (!bn_mac(mac | o) && qd > 0);
             if (qd) bn_mac(setq | o | BN_M(qd));
         }
     }
@@ -218,8 +220,9 @@ static int prec(int op) {  // 'f': // (floor), 'd': / (exact)
     return op == '^' ? 4 : op == 'n' ? 3 : op == '*' || op == 'f' || op == 'd' || op == '%' ? 2 : 1;
 }
 
-// a / b exact: an integer, or (only as the expression's final value) a reduced fraction whose
-// denominator is vden[i]
+// Rationals: / is exact, so a value may be a fraction vals[i] / vden[i] (hasden[i]; the
+// denominator positive and > 1, the fraction reduced). + - * / take fractions; // % ** gcd and
+// decimal operands need integers.
 static num vden[16];
 static int hasden[16];
 
@@ -230,25 +233,89 @@ static num copy_of(num a) {
     return NUM(REG(c), NEG(a), LEN(a));
 }
 
-__attribute__((noinline)) static num exact_div(num a, num b, int i) {  // consumes both
-    int neg = NEG(a) ^ NEG(b);
-    if (is_zero(b)) {
-        err = 1;
-        return a;
+__attribute__((noinline)) static void reduce(int i) {  // vals[i] / vden[i] in lowest terms
+    num n = vals[i], d = vden[i];
+    hasden[i] = 0;
+    if (err) return;
+    if (is_zero(n)) {
+        release(d);
+        return;
     }
-    num g = gcd(copy_of(a), copy_of(b));
-    qr x = divmod(a & ~0x100u, g);
+    int neg = NEG(n);
+    num g = gcd(copy_of(n), copy_of(d));
+    qr x = divmod(n & ~0x100u, g);
     release(x.r);
-    qr y = divmod(b & ~0x100u, g);
+    qr y = divmod(d, g);
     release(y.r);
     release(g);
+    vals[i] = x.q | (uint32_t)neg << 8;
     if (LEN(y.q) == 1 && dig(y.q, 0) == 1) {
         release(y.q);
     } else {
         vden[i] = y.q;
         hasden[i] = 1;
     }
-    return is_zero(x.q) ? x.q : x.q | (uint32_t)neg << 8;
+}
+
+// (a / da) op (b / db) for op in + - * / (da, db absent where fa, fb are 0): the result's
+// numerator and denominator into slot i, then reduced. Each operand register is released as
+// soon as its last product is made (7 registers: a/b + c/d peaks at 5).
+__attribute__((noinline)) static void frac_op(int op, int i, num a, num da, int fa, num b, num db,
+                                              int fb) {
+    num n, d;
+    if (op == '*') {
+        n = mul(a, b);
+        release(a);
+        release(b);
+        if (fa && fb) {
+            d = mul(da, db);
+            release(da);
+            release(db);
+        } else {
+            d = fa ? da : db;
+        }
+    } else if (op == 'd') {  // (a db) / (da b)
+        if (is_zero(b)) err = 1;
+        if (fb) {
+            n = mul(a, db);
+            release(a);
+            release(db);
+        } else {
+            n = a;
+        }
+        if (fa) {
+            d = mul(da, b);
+            release(da);
+            release(b);
+        } else {
+            d = b;
+        }
+        if (NEG(d)) {
+            d &= ~0x100u;
+            if (!is_zero(n)) n ^= 0x100u;
+        }
+    } else {  // + -: (a db +- b da) / (da db)
+        num t1 = a, t2 = b;
+        if (fb) {
+            t1 = mul(a, db);
+            release(a);
+        }
+        if (fa) {
+            t2 = mul(b, da);
+            release(b);
+        }
+        if (fa && fb) {
+            d = mul(da, db);
+            release(da);
+            release(db);
+        } else {
+            d = fa ? da : db;
+        }
+        n = add(t1, op == '-' && !is_zero(t2) ? t2 ^ 0x100u : t2);
+    }
+    vals[i] = n;
+    vden[i] = d;
+    reduce(i);
 }
 
 // decimals: a value is the integer vals[i] scaled by 10^-vsc[i] (+ - * keep it exact; the other
@@ -279,10 +346,17 @@ static int apply(int op, int nv) {  // returns the new value count
         return nv;
     }
     int sb = vsc[nv - 1], sa = vsc[nv - 2];
-    if (hasden[nv - 1] || hasden[nv - 2]) err = 1;  // a fraction is only ever the final value
+    int fb = hasden[nv - 1], fa = hasden[nv - 2];
     num b = vals[--nv], a = vals[nv - 1], r;
+    int rational = op == 'd' || ((fa || fb) && (op == '+' || op == '-' || op == '*'));
+    if ((fa || fb) && !rational) err = 1;  // // % ** gcd need integers
+    if (rational && (sa || sb)) err = 1;   // fractions and decimals do not mix
     if (err) {
         r = a;
+    } else if (rational) {
+        frac_op(op, nv - 1, a, vden[nv - 1], fa, b, vden[nv], fb);
+        vsc[nv - 1] = 0;
+        return nv;
     } else if (op == '+' || op == '-') {
         if (sa < sb) a = shift(a, sb - sa), sa = sb;
         if (sb < sa) b = shift(b, sa - sb);
@@ -299,13 +373,10 @@ static int apply(int op, int nv) {  // returns the new value count
         r = power(a, b);
     } else if (op == 'g') {
         r = gcd(a, b);
-    } else if (op == 'd') {
-        hasden[nv - 1] = 0;
-        r = exact_div(a, b, nv - 1);
     } else {
         r = divide(a, b, op == '%');
     }
-    if (op != 'd') hasden[nv - 1] = 0;
+    hasden[nv - 1] = 0;
     vals[nv - 1] = r;
     vsc[nv - 1] = sa;
     return nv;
@@ -433,7 +504,8 @@ static int calc_eval(void) {  // prints the value (or "error") and a newline; 0 
     }
     if (err || nv != 1 || operand) {
     fail:
-        for (const char *m = "error\n"; *m; m++) rv_putchar(*m);
+        for (const char *m = err == 2 ? "error (too complex: split it)\n" : "error\n"; *m; m++)
+            rv_putchar(*m);
         return 1;
     }
 print:;
@@ -472,8 +544,8 @@ enum { TOOL_RESPONSE = 256, TOOL_RESPONSE_END, THINK, THINK_END };
 static void put(int c) { rv_ecall2(1, c, 0, 0); }
 
 static int gather(void) {
-    int n = 0, gt = 0;
-    for (int i = 1; i <= ROWS; i++) {
+    int n = 0, gt = 0, i;
+    for (i = 1; i <= ROWS; i++) {
         const volatile unsigned char *r = TEXT + 16 * i;
         int c = r[0];
         if (!c) break;
@@ -489,7 +561,8 @@ static int gather(void) {
         }
     }
     calc_in[n] = 0;
-    return gt < 2 ? -1 : n;
+    if (gt < 2) return -1;
+    return i > ROWS ? -2 : n;  // -2: no closing '<' within the capture window (truncated)
 }
 
 int main(void) {
@@ -500,7 +573,8 @@ int main(void) {
         put(TOOL_RESPONSE);
         put('\n');
         if (n < 0) {
-            for (const char *m = "error\n"; *m; m++) put(*m);
+            for (const char *m = n == -2 ? "error (too long: split it)\n" : "error\n"; *m; m++)
+                put(*m);
         } else {
             calc_eval();
         }

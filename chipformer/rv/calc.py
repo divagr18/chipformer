@@ -71,9 +71,36 @@ class _Err(Exception):
     pass
 
 
+def _nd(x: int) -> int:
+    return len(str(abs(x)))
+
+
+def _frac(op, a, b):
+    """The firmware's rational step (calc.c frac_op): its products must fit MAXD digits."""
+    from fractions import Fraction
+
+    an, ad, bn, bd = a.numerator, a.denominator, b.numerator, b.denominator
+    fa, fb = ad != 1, bd != 1
+    if op == "*":
+        if _nd(an) + _nd(bn) > MAXD or (fa and fb and _nd(ad) + _nd(bd) > MAXD):
+            raise _Err
+        return a * b
+    if op == "/":
+        if bn == 0 or (fb and _nd(an) + _nd(bd) > MAXD) or (fa and _nd(ad) + _nd(bn) > MAXD):
+            raise _Err
+        return Fraction(a) / b
+    if (fb and _nd(an) + _nd(bd) > MAXD) or (fa and _nd(bn) + _nd(ad) > MAXD) or \
+            (fa and fb and _nd(ad) + _nd(bd) > MAXD):
+        raise _Err
+    t1, t2 = an * bd, (bn * ad if op == "+" else -bn * ad)
+    if (t1 < 0) == (t2 < 0) and max(_nd(t1), _nd(t2)) + 1 > MAXD:
+        raise _Err
+    return a + b if op == "+" else a - b
+
+
 def _value(node):
-    """An integer expression's value as a Fraction: / is exact, but a non-integer value may only
-    be the final result (or negated); // and % floor, ** needs an exponent 0..999."""
+    """An integer expression's value as a Fraction: + - * / are exact on rationals; // and %
+    floor, ** (an exponent 0..999) and gcd need integers."""
     import ast
     from fractions import Fraction
 
@@ -92,15 +119,18 @@ def _value(node):
         return Fraction(gcd(*ints(*map(_value, node.args))))
     if not isinstance(node, ast.BinOp):
         raise _Err
-    a, b = ints(_value(node.left), _value(node.right))
+    fa, fb = _value(node.left), _value(node.right)
     op = type(node.op)
-    if op in (ast.Div, ast.FloorDiv, ast.Mod) and b == 0:
+    sym = {ast.Add: "+", ast.Sub: "-", ast.Mult: "*", ast.Div: "/"}.get(op)
+    if sym == "/" or (sym and (fa.denominator != 1 or fb.denominator != 1)):
+        return _frac(sym, fa, fb)
+    a, b = ints(fa, fb)
+    if op in (ast.FloorDiv, ast.Mod) and b == 0:
         raise _Err
     if op is ast.Pow and not 0 <= b <= 999:
         raise _Err
     f = {ast.Add: lambda: a + b, ast.Sub: lambda: a - b, ast.Mult: lambda: a * b,
-         ast.Div: lambda: Fraction(a, b), ast.FloorDiv: lambda: a // b, ast.Mod: lambda: a % b,
-         ast.Pow: lambda: a**b}.get(op)
+         ast.FloorDiv: lambda: a // b, ast.Mod: lambda: a % b, ast.Pow: lambda: a**b}.get(op)
     if f is None:
         raise _Err
     return Fraction(f())
@@ -125,7 +155,7 @@ def _n(rng, d):
     return str(rng.randint(10 ** (d - 1) if d > 1 else 0, 10**d - 1))
 
 
-OPS = ["add", "sub", "mul", "div", "mod", "gcd", "pow", "expr", "frac"]
+OPS = ["add", "sub", "mul", "div", "mod", "gcd", "pow", "expr", "frac", "rat"]
 
 
 def case(rng: random.Random, op: str) -> str:
@@ -157,6 +187,16 @@ def case(rng: random.Random, op: str) -> str:
         if rng.random() < 0.3:
             x = y * int(_n(rng, rng.randint(1, 8)))
         return rng.choice([f"{sa}{x}/{y}", f"({x}+{y})/{sb}{y}", f"{x}*{g}/({y}-{g})"])
+    if op == "rat":  # rational chains, like the DeepMind mul_div / mixed modules
+        k = rng.randint(2, 7)
+        s = _n(rng, rng.randint(1, 3))
+        for _ in range(k):
+            x = _n(rng, rng.randint(1, 3))
+            x = f"(-{x})" if rng.random() < 0.3 else x
+            if rng.random() < 0.2:
+                x = f"({x}/{_n(rng, 1) or 1})"
+            s += rng.choice(["*", "/", "+", "-", "*", "/"]) + x
+        return s
     # a random expression of 2-4 operands
     k = rng.randint(2, 4)
     nums = [_n(rng, rng.randint(1, 8)) for _ in range(k)]
@@ -205,17 +245,20 @@ def main():
         return
     t = time.time()
     per = {op: [0, 0, 0] for op in OPS}  # cases, instructions, tokens
-    bad = 0
+    bad = limited = 0
     for op, e in cases(args.cases, args.seed):
         out, toks = run(e)
-        if out != expected(e):
+        if out.startswith("error (too complex"):  # out of registers (7): a limit, not a wrong value
+            limited += 1
+        elif out != expected(e):
             bad += 1
             print("MISMATCH", e, repr(out), repr(expected(e)))
         st = ref.trace_stats(toks)
         per[op][0] += 1
         per[op][1] += st["instructions"]
         per[op][2] += st["tokens"]
-    print(f"{args.cases} cases, {bad} mismatches ({time.time() - t:.0f} s)")
+    print(f"{args.cases} cases, {bad} mismatches, {limited} too complex for the registers "
+          f"({time.time() - t:.0f} s)")
     for op, (n, i, tk) in per.items():
         if n:
             print(f"  {op:5s} {n:5d} cases  {i / n:8.0f} instructions  {tk / n:8.0f} tokens")

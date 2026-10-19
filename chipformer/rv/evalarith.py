@@ -45,13 +45,41 @@ def calc_response(expr: str) -> str:
     return f"\n<tool_response>\n{v}</tool_response>\n<think>\n\n</think>\n\n"
 
 
+class BridgeHost:
+    """pytool's host as the machine itself: a reference bridge.Session on the calc firmware,
+    fed base Qwen's own tokens (the prompt as history). At </tool_call> it runs the call exactly
+    as rv1's machine would (the same capture window, firmware and echo tokens) and returns the
+    response's Qwen tokens to force."""
+
+    def __init__(self, T, firmware, prompt: list[int]):
+        m = ref.Machine.from_program(elf.program(firmware))
+        BR.park(m)
+        self.ses = BR.Session(T, m)
+        self.ses.history(prompt)
+        self.tcc = T.TCC
+
+    def feed(self, t: int) -> list[int]:
+        """Qwen's token t; the response tokens to force (empty unless t ran a call)."""
+        from chipformer.rv import spec as S
+
+        k = len(self.ses.toks)
+        try:
+            self.ses.qwen([t])
+        except RuntimeError:  # the run did not halt: an error response (rv1 would loop on)
+            p = self.ses.T.printable
+            body = [10, 256, 10, *b"error (did not halt)\n", 257, 10, 258, 10, 10, 259, 10, 10]
+            return [p[b] for b in body]
+        return [x - S.TEXT_TOKEN for x in self.ses.toks[k + 1:] if S.is_text(x)]
+
+
 def problems(data: str, n: int, seed: int) -> list[dict]:
     return E.load_data("arith", n, seed) if data == "arith" else AB.load(data, n, seed)
 
 
 @torch.no_grad()
-def run_base(model, tok, ids, tool: bool, budget: int):
-    """Greedy decoding of base Qwen; with ``tool`` the host answers calc calls."""
+def run_base(model, tok, ids, tool: bool, budget: int, host: BridgeHost | None = None):
+    """Greedy decoding of base Qwen; with ``tool`` the host answers calc calls (``host``: the
+    machine's own responses, else calc.expected's)."""
     dev = next(model.parameters()).device
     tcc = tok.convert_tokens_to_ids("</tool_call>")
     eos = {tok.convert_tokens_to_ids("<|im_end|>"), tok.convert_tokens_to_ids("<|endoftext|>")}
@@ -63,11 +91,17 @@ def run_base(model, tok, ids, tool: bool, budget: int):
         gen += new
         seq += new
         own += len(new)
+        resp = []
+        if host is not None:
+            for t in new:
+                resp = host.feed(t)
         if not new or new[-1] in eos or not tool or new[-1] != tcc:
             break
-        txt = tok.decode(gen, skip_special_tokens=False)
-        m = re.findall(r"<parameter=[^>]*>(.*?)</parameter>", txt.split("<tool_call>")[-1], re.S)
-        resp = tok(calc_response(m[0] if m else ""), add_special_tokens=False).input_ids
+        if host is None:
+            txt = tok.decode(gen, skip_special_tokens=False)
+            m = re.findall(r"<parameter=[^>]*>(.*?)</parameter>", txt.split("<tool_call>")[-1],
+                           re.S)
+            resp = tok(calc_response(m[0] if m else ""), add_special_tokens=False).input_ids
         gen += resp
         seq += resp
         calls += 1
@@ -91,6 +125,9 @@ def main() -> None:
     ap.add_argument("--max-len", type=int, default=6144, help="rv1 --batch: Qwen KV slots")
     ap.add_argument("--shard", default=None, help="i/k: every k-th problem from the i-th")
     ap.add_argument("--ids", default=None, help="comma-separated problem ids (a subset)")
+    ap.add_argument("--host", default="bridge", choices=("bridge", "expected"),
+                    help="pytool's responses: the calc firmware on a reference bridge Session "
+                         "(rv1's machine exactly), or calc.expected (Python, BPE-tokenized)")
     args = ap.parse_args()
     n = args.n or (40 if args.data == "arith" else None)
     probs = problems(args.data, n, args.seed)
@@ -107,6 +144,11 @@ def main() -> None:
         tok = AutoTokenizer.from_pretrained(args.model)
         model = AutoModelForImageTextToText.from_pretrained(args.model, dtype=torch.bfloat16)
         model = model.to("cuda").eval()
+        if tool and args.host == "bridge":
+            T = BR.Text(Path(args.model) / "tokenizer.json")
+
+    def make_host(prompt):
+        return BridgeHost(T, args.firmware, prompt)
     if args.shard:
         i, k = map(int, args.shard.split("/"))
         probs = probs[i::k]
@@ -179,7 +221,9 @@ def main() -> None:
                                           tokenize=True)
             prompts.append(ids if isinstance(ids, list) else ids["input_ids"])
         tcc = tok.convert_tokens_to_ids("</tool_call>")
-        state = [{"forced": [], "own": 0, "gen": [], "calls": 0} for _ in todo]
+        state = [{"forced": [], "own": 0, "gen": [], "calls": 0,
+                  "host": make_host(pr) if tool and args.host == "bridge" else None}
+                 for pr in prompts]
 
         def hook(i, t):
             """pytool: after </tool_call> the next tokens are the host's response (forced);
@@ -191,7 +235,10 @@ def main() -> None:
                 return t, False
             s["own"] += 1
             s["gen"].append(t)
-            if tool and t == tcc:
+            if s["host"] is not None:
+                s["forced"] = s["host"].feed(t)
+                s["calls"] += bool(s["forced"])
+            elif tool and t == tcc:
                 txt = tok.decode(s["gen"], skip_special_tokens=False)
                 mm = re.findall(r"<parameter=[^>]*>(.*?)</parameter>",
                                 txt.split("<tool_call>")[-1], re.S)
@@ -208,7 +255,8 @@ def main() -> None:
             s = state[i]
             text = tok.decode(toks, skip_special_tokens=False)
             emit(todo[i], text, dict(calls=s["calls"], n_qwen=s["own"], n_chip=0,
-                                     batch=args.batch), time.time() - t0)
+                                     batch=args.batch, host=args.host if tool else None),
+                 time.time() - t0)
 
         if prompts:
             bd.run(prompts, 2 * args.budget, on_done=fin, hook=hook)
@@ -224,9 +272,10 @@ def main() -> None:
                                           add_generation_prompt=True, enable_thinking=False,
                                           tokenize=True)
             ids = ids if isinstance(ids, list) else ids["input_ids"]
-            gen, calls, own = run_base(model, tok, ids, tool, args.budget)
+            host = make_host(ids) if tool and args.host == "bridge" else None
+            gen, calls, own = run_base(model, tok, ids, tool, args.budget, host)
             text = tok.decode(gen, skip_special_tokens=False)
-            fields = dict(calls=calls, n_qwen=own, n_chip=0)
+            fields = dict(calls=calls, n_qwen=own, n_chip=0, host=args.host if tool else None)
         emit(p, text, fields, time.time() - t0)
     wall = time.time() - t_all
     if todo:
