@@ -56,7 +56,7 @@ class Plan:
 
 FORMS = {"add": [[B.PLUS]], "sub": [[B.MINUS], [B.MINUS2]],
          "mul": [[B.TIMES], [B.BSL, B.TIMESW, B.SPACE]],
-         "div": [[B.DIV], [B.BSL, B.FN_DIV, B.SPACE]]}
+         "div": [[B.DIV], [B.DIV2], [B.BSL, B.FN_DIV, B.SPACE]]}
 LEADS = [[B.SPACE], [B.DOLLAR], [B.SDOLLAR, B.SPACE], [B.DDOLLAR], [B.SDDOLLAR], [B.NL],
          [B.WS], [B.LPAREN], [B.OTHER], [B.EQ, B.SPACE]]
 
@@ -106,7 +106,7 @@ def _expr16(rng: random.Random) -> list[int]:
     r = rng.random()
     lead = rng.choice(LEADS)
     if r < 0.4:
-        op = rng.choice([[B.TIMES], [B.DIV], [B.RPDIV], [B.BSL, B.FN_DIV, B.SPACE]])
+        op = rng.choice([[B.TIMES], [B.DIV], [B.DIV2], [B.RPDIV], [B.BSL, B.FN_DIV, B.SPACE]])
         if rng.random() < 0.5:
             a = _signed(rng, a)
         if rng.random() < 0.5:

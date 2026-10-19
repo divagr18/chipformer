@@ -76,14 +76,14 @@ NUDGE = ("You have tools for exact arithmetic ({names}). Use them for every arit
          "they cover instead of calculating by hand.")
 NUDGE3 = ("Exact arithmetic: whenever you write a calculation like `a \\times b =`, `a / b =`, "
           "`a + b =` or `a - b =` with whole numbers, its exact result is filled in right after the "
-          "`=` (a quotient that does not end shows 10 decimals, then `...`). So never do long "
+          "`=` (a quotient that does not end within 10 decimals shows as the reduced fraction `p/q`). So never do long "
           "multiplication or long division by hand: write the whole calculation, e.g. "
           "`918274 / 37 =`, and let the result appear.")
 NUDGE4 = ("Exact arithmetic: whenever you write a whole calculation followed by `=`, its exact "
           "value is filled in right after the `=`. It can be one line of whole numbers and "
           "decimals with +, -, \\times, /, ^ and brackets, e.g. `(3.5 + 12) \\times 48 / 7 =` or "
-          "`20 \\times (-8) / (-60) =` (a quotient that does not end shows 10 decimals, then "
-          "`...`). So never calculate by hand or step by step: write the whole calculation at "
+          "`20 \\times (-8) / (-60) =` (a quotient that does not end within 10 decimals shows as "
+          "the reduced fraction `p/q`). So never calculate by hand or step by step: write the whole calculation at "
           "once and let the result appear.")
 # mix (a tool kind): products inline, sums and differences of big numbers through the tools
 NUDGE_MIX = ("Exact arithmetic: whenever you write a multiplication of whole numbers like "
@@ -92,7 +92,7 @@ NUDGE_MIX = ("Exact arithmetic: whenever you write a multiplication of whole num
              "For additions and subtractions of large numbers, call the add and sub tools.")
 NUDGE_MIX3 = ("Exact arithmetic: whenever you write a multiplication or division of whole numbers "
               "like `a \\times b =` or `a / b =`, its exact result is filled in right after the "
-              "`=` (a quotient that does not end shows 10 decimals, then `...`), so never multiply "
+              "`=` (a quotient that does not end within 10 decimals shows as the reduced fraction `p/q`), so never multiply "
               "or divide long numbers by hand: write the whole calculation and let the result "
               "appear. For additions and subtractions of large numbers, call the add and sub tools.")
 
@@ -127,13 +127,15 @@ def _div(a, b):
 
 
 def div_text(a: int, b: int) -> str:
-    """How the computer prints a / b (lib/bcd.py div): the exact quotient, or its first DEC
-    decimals and "..." when it does not end; "-" first when exactly one of a, b is negative."""
+    """How the computer prints a / b (lib/bcd.py div): the exact quotient if it ends within DEC
+    decimals, else the reduced fraction "p/q"; "-" first when exactly one of a, b is negative."""
     from chipformer.q35.lib import bcd
 
     if (a < 0) != (b < 0):
         return "-" + div_text(abs(a), abs(b))
     a, b = abs(a), abs(b)
+    if a == 0 and len(str(b)) > 1 + bcd.DEC:  # (B is too long: div goes straight to frac)
+        return "0/1"
     q, r = divmod(a, b)
     if not r:
         return str(q)
@@ -144,7 +146,8 @@ def div_text(a: int, b: int) -> str:
         r %= b
         if not r:
             return f"{q}." + "".join(digs)
-    return f"{q}." + "".join(digs) + "..."
+    g = math.gcd(a, b)
+    return f"{a // g}/{b // g}"
 
 
 def _mod(a, b):
@@ -730,7 +733,7 @@ def inline_fires(text: str, pred) -> list[dict]:
     digits Qwen added after it (for A - B < 0, everything shown is Qwen's)."""
     out = []
     # v14 quotients: digits, then "." and decimals, then "..." if inexact
-    for m in re.finditer(r"\[machine:\d+\]( ?-?)((?:\d|,(?=\d))*(?:\.\d+(?:\.\.\.)?)?)", text):
+    for m in re.finditer(r"\[machine:\d+\]( ?-?)((?:\d|,(?=\d))*(?:\.\d+(?:\.\.\.)?|/\d+)?)", text):
         before = MARK.sub("", text[:m.start()])
         if before.rstrip().endswith("</tool_call>") or m.end() == len(text):
             continue  # a tool call, or a run cut off by the budget / context before its print
@@ -771,7 +774,8 @@ def inline_fires(text: str, pred) -> list[dict]:
         f["reused"] = bool(machine) and machine in later
         f["is_answer"] = (bool(machine) and machine.lstrip("-") != "..." and len(machine) < 60
                           and pred is not None
-                          and Fraction(Decimal(machine.removesuffix("..."))) == pred)
+                          and (Fraction(machine) if "/" in machine else
+                               Fraction(Decimal(machine.removesuffix("...")))) == pred)
         out.append(f)
     return out
 

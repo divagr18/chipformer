@@ -71,6 +71,9 @@ class Chip8:
         self.cells = [0] * spec.NUM_CELLS
         self.cells[spec.FONT_BASE:spec.FONT_BASE + len(spec.FONT)] = spec.FONT
         self.cells[spec.PROGRAM_START:spec.PROGRAM_START + len(rom)] = rom
+        for at, data in getattr(rom, "segments", ()):  # code below PROGRAM_START (q35's BIOS)
+            assert spec.FONT_BASE + len(spec.FONT) <= at and at + len(data) <= spec.PROGRAM_START
+            self.cells[at:at + len(data)] = data
         self.cells[PC] = spec.PROGRAM_START
         self.cells[RNG] = spec.RNG_SEED
         for a, v in spec.quirk_cells(quirks).items():

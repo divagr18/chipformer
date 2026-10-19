@@ -64,7 +64,10 @@ EXPR = list(range(EXPR_BASE, EXPR_BASE + len(EXPR_CLASSES)))
 DLPAREN = EXPR[-1]  # "$(": also opens the math the result closes ("$")
 RPDIV = EXPR[[e[1][0] for e in EXPR_CLASSES].index(")/")]  # ")/": also the single-op path's "/"
 FN_CALC = EXPR_BASE + len(EXPR_CLASSES)  # the tool calc(expression)
-N_TEXT = 55 + len(EXPR_CLASSES)
+# "/" is printed (a fraction p/q), so its other spellings (" /", "\u00f7") are their own
+# class
+DIV2 = FN_CALC + 1
+N_TEXT = 56 + len(EXPR_CLASSES)
 FUNCS = {"add": FN_ADD, "mul": FN_MUL, "sub": FN_SUB, "div": FN_DIV, "mod": FN_MOD,
          "gcd": FN_GCD}  # tool names it answers
 PRINT_OP = 0x00FD
@@ -91,12 +94,12 @@ QWEN_TEXT = {**{TEXT_BASE + i: c for i, c in enumerate("0123456789abcdef")},
 # (never for a class the circuit prints: the tied lm_head rows would tie)
 # (and <function=gcd> as "=g" "cd")
 EXTRA_TEXT = {FN_ADD: ["=add"], FN_MUL: ["ul"], FN_SUB: ["=sub", "ub"], EQ: ["="], PLUS: ["+"],
-              MINUS2: [" \u2212", "\u2212"], DIV: [" /", "\u00f7"], TIMES: ["\u00d7", " *", "*"],
+              MINUS2: [" \u2212", "\u2212"], DIV2: [" /", "\u00f7"], TIMES: ["\u00d7", " *", "*"],
               BSL: ["\\"], MODOP: [" %"], FN_GCD: [" gcd", "cd"], TIMESW: ["cdot"],
               CURR: ["\\$"], FN_CALC: ["alc"],
               WS: ["\n\n\n", "\n\n\n\n", "  ", "   ", "    ", "     ", " \n", " \n\n"],
               **{cls: e[1][1:] for cls, e in zip(EXPR, EXPR_CLASSES) if len(e[1]) > 1}}
-INLINE_OPS = {PLUS: "add", MINUS: "sub", MINUS2: "sub", TIMES: "mul", DIV: "div", RPDIV: "div",
+INLINE_OPS = {PLUS: "add", MINUS: "sub", MINUS2: "sub", TIMES: "mul", DIV: "div", DIV2: "div", RPDIV: "div",
               MODOP: "mod", FN_GCD: "gcd"}
 # and after a backslash: TIMESW ("\times", "\cdot") mul, FN_DIV ("\div") div, FN_MOD ("\mod", also
 # "\bmod": "b" has the hex digit's class) mod
@@ -106,14 +109,14 @@ SIGNED = ("mul", "div", "gcd")  # the others only answer A and B without signs
 SIGNS = (MINUS, MINUS2, LPMINUS)  # a sign when it follows SIGN_PREV (" (-" always is one)
 # may precede a first number (and so may chip tokens)
 SAFE = (SPACE, NL, WS, LPAREN, SLPAREN, *DOLLARS)
-OPISH = (PLUS, MINUS, MINUS2, TIMES, DIV, RPDIV, TIMESW, FN_DIV, MODOP, FN_MOD, FN_GCD)
+OPISH = (PLUS, MINUS, MINUS2, TIMES, DIV, DIV2, RPDIV, TIMESW, FN_DIV, MODOP, FN_MOD, FN_GCD)
 SIGN_PREV = SAFE + (EQ, COMMA) + OPISH
 
 
 def _codes():
     """Tape code of every class an expression is made of, and the expansions of the codes."""
     single = {**{HEX[d]: d for d in range(10)}, PERIOD: 10, PLUS: 11, MINUS: 12, MINUS2: 12,
-              TIMES: 13, TIMESW: 13, DIV: 14, FN_DIV: 14, LPAREN: 15, SLPAREN: 15, RPAREN: 16}
+              TIMES: 13, TIMESW: 13, DIV: 14, DIV2: 14, FN_DIV: 14, LPAREN: 15, SLPAREN: 15, RPAREN: 16}
     multi = ["(-"]  # v16's sign classes LPMINUS / SLPMINUS
     single[LPMINUS] = single[SLPMINUS] = len(SYMS)
     for cls, e in zip(EXPR, EXPR_CLASSES):
@@ -153,7 +156,7 @@ def readout(cells: list[int]) -> list[int]:
 
     i, n = cells[spec.I], min(cells[spec.V], MAX_PRINT)
     # 10 and 11 print as "." and "..." (a quotient's decimals), so no hex digits a / b
-    shown = {**dict(enumerate(HEX)), 10: PERIOD, 11: ELLIPSIS}
+    shown = {**dict(enumerate(HEX)), 10: PERIOD, 11: ELLIPSIS, 12: DIV}
     digits = [shown[cells[(i + k) & 0xFFF] & 15] for k in range(n)]
     mode = cells[bcd.MODE]
     if mode & 1:  # an inline call: " digits" (" -digits" below 0) and a closer (the math's

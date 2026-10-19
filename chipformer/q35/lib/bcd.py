@@ -20,7 +20,7 @@ A_ADDR, B_ADDR, LEN, R_ADDR = 0x600, 0x620, 0x640, 0x660
 MODE = LEN + 2
 DSTOP = LEN + 3  # BDIV / BADB stop at t = LA + DSTOP (div: DEC; mod, gcd: 0)
 # div: W = 0, A's digits (the CALL record writes them at W_ADDR + 1), DEC zeros; the quotient goes
-# to R_ADDR as P[t] (t <= LA), "." (10) at P[LA + 1], P[t + 1] (t > LA), "..." (11) if inexact
+# to R_ADDR as P[t] (t <= LA), "." (10) at P[LA + 1], P[t + 1] (t > LA); not ending: frac
 W_ADDR = 0x6BF
 DEC = 10  # decimals of an inexact quotient
 TMP = 0x6E4  # gcd: the remainder while A and B move (after W; 0x700.. holds eval's code)
@@ -55,7 +55,8 @@ trim:   btrim                   ; macro: drop a leading 0 (keeping one digit); r
 sub_neg: brsub trim
 
 ; ---------------------------------------------------------------- div: A / B
-; digits of an exact quotient, else DEC decimals and "..."; "..." if B starts with 0
+; the quotient if it ends within DEC decimals, else the reduced fraction p/q (frac, in low
+; memory); "..." if B starts with 0
 div:    bzero                   ; P[0 .. LA+LB) = 0
         ld i, {LEN}
         ld v1, [i]              ; v0 = LA, v1 = LB
@@ -65,6 +66,8 @@ div:    bzero                   ; P[0 .. LA+LB) = 0
         ld v0, [i]
         sne v0, 0
         jp div_z
+        ld i, {W_ADDR + 1}
+        bld a, va               ; A = A's digits (div works on W; frac needs them)
         ld i, {R_ADDR + 1}
         add i, va
         ld v0, 10
@@ -96,13 +99,7 @@ div_lp: bdiv vc                 ; repeats itself, one quotient digit per record
         jp div_lp
 div_end: se vf, 3
         jp div_ex
-div_rem: ld i, {R_ADDR + 2}
-        add i, vc
-        ld v0, 11
-        ld [i], v0              ; "..." after the last decimal
-        ld ve, vc
-        add ve, 2               ; the last index printed
-        jp div_pr
+div_rem: jp frac                 ; no end within DEC decimals: the reduced fraction p/q
 div_ex: ld ve, vc
         se vc, va
         add ve, 1               ; t > LA: P[t + 1]; t == LA: no "."
@@ -208,9 +205,7 @@ gcd_c:  bld a, vb               ; A = B, LA = LB (the next A)
         ld va, vb
         ld vb, vc
         jp gcd_lp
-gcd_b:  ld i, {B_ADDR}
-        ld v0, vb
-        print
+gcd_b:  jp gcd_e                 ; (low memory: frac's gcd returns instead)
 """
 MODGCD4 = f"""
 ; rem: A mod B for A at W[1 .. va] (W[0] = 0), B at B[0 .. vb) (B[0] != 0), LEN = LA, LB and
@@ -300,7 +295,126 @@ EVAL_SRC = (Path(__file__).with_name("eval.asm").read_text(encoding="utf-8")
                                .read_text(encoding="utf-8").format(**_NAMES)
                                .split("; ---- part 2")))))
 
-ROM, LABELS = assemble(SRC + EVAL_SRC)
+# ---------------------------------------------------------------- frac: a reduced fraction
+# Below PROGRAM_START (0x0E0 .. 0x1FF: after the font and chain mode's accumulators) the 4 KB
+# still had room: the boot record writes this segment too (ROM.segments, ref/emu.Chip8).
+# div jumps here when A / B does not end within DEC decimals: p = A / g, q = B / g for
+# g = gcd(A, B) (v16's gcd, which returns to frac instead of printing), printed as "p/q" (12 is
+# "/"), MODE's sign as for the quotient. A's and B's digits wait in the tape's cells (eval is done
+# with them when it prints through div).
+LOW_ORG = 0x0E0
+SAVE_A, SAVE_B = TAPE, TAPE + MAX_DIGITS
+FRAC_F, LA0, LB0, LP = LEN + 28, LEN + 29, LEN + 30, LEN + 31  # (after args' code in the hole)
+OUT = W_ADDR  # the print: p, "/", q (W and TMP are free by then)
+SLASH = 12  # the print's code for "/"
+LOW_SRC = f"""
+frac:   ld i, {SAVE_A}
+        bsta                    ; SAVE_A = A (div saved it in A at its start)
+        ld i, {B_ADDR}
+        bld a, vb
+        ld i, {SAVE_B}
+        bsta                    ; SAVE_B = B
+        ld v0, va
+        ld v1, vb
+        ld i, {LA0}
+        ld [i], v1              ; LA0, LB0
+        ld i, {SAVE_A}
+        bld a, va
+        ld i, {W_ADDR + 1}
+        bsta                    ; W + 1 = A, as gcd takes it
+        ld v0, 1
+        ld i, {FRAC_F}
+        ld [i], v0
+        call gcd                ; B = g, LB its length
+        ld v0, 0
+        ld i, {FRAC_F}
+        ld [i], v0
+        ld i, {LA0}
+        ld v0, [i]
+        ld i, {SAVE_A}
+        bld a, v0
+        ld i, {W_ADDR + 1}
+        bsta                    ; W + 1 = A
+        call quo                ; I = p's first digit, v0 = its digits
+        bld a, v0
+        ld i, {LP}
+        ld [i], v0              ; LP = lp
+        ld i, {SAVE_A}
+        bsta                    ; SAVE_A = p
+        ld i, {LB0}
+        ld v0, [i]
+        ld i, {SAVE_B}
+        bld a, v0
+        ld i, {W_ADDR + 1}
+        bsta                    ; W + 1 = B
+        call quo                ; I = q's first digit, v0 = its digits
+        ld v3, v0
+        bld a, v3               ; A = q
+        ld i, {LP}
+        ld v0, [i]
+        ld v2, v0               ; v2 = lp, v3 = lq
+        ld i, {OUT + 1}
+        add i, v2
+        bsta                    ; OUT + lp + 1 = q
+        ld i, {OUT}
+        add i, v2
+        ld v0, {SLASH}
+        ld [i], v0              ; "/"
+        ld i, {SAVE_A}
+        bld a, v2
+        ld i, {OUT}
+        bsta                    ; OUT = p
+        ld v0, v2
+        add v0, v3
+        add v0, 1
+        ld i, {OUT}
+        print
+
+; quo: A / B for A at W + 1 and B dividing it: I = the quotient's first digit (P[LB .. LA]
+; without leading zeros), v0 = its digits
+quo:    call args
+        call rem
+        ld v6, vb
+q_lp:   se v6, va
+        jp q_chk
+        jp q_go
+q_chk:  ld i, {R_ADDR}
+        add i, v6
+        ld v0, [i]
+        se v0, 0
+        jp q_go
+        add v6, 1
+        jp q_lp
+q_go:   ld v0, va
+        sub v0, v6
+        add v0, 1
+        ld i, {R_ADDR}
+        add i, v6
+        ret
+
+; gcd's end: the gcd op prints B; frac's call returns with it
+gcd_e:  ld i, {FRAC_F}
+        ld v0, [i]
+        se v0, 0
+        ret
+        ld i, {B_ADDR}
+        ld v0, vb
+        print
+low_end:
+        org {spec.PROGRAM_START}
+"""
+
+
+class Image(bytes):
+    """A ROM (loaded at PROGRAM_START) and its segments below it: [(address, bytes)]."""
+
+    segments: tuple = ()
+
+
+_out, LABELS = assemble(LOW_SRC + SRC + EVAL_SRC, start=LOW_ORG)
+ROM = Image(_out[spec.PROGRAM_START - LOW_ORG:])
+ROM.segments = ((LOW_ORG, bytes(_out[:LABELS["low_end"] - LOW_ORG])),)
+assert LABELS["idle"] == spec.PROGRAM_START and LABELS["low_end"] <= spec.PROGRAM_START
 OPS = {op: LABELS[op] for op in ("add", "mul", "sub", "div", "mod", "gcd", "eval")}
 # The entries are compiled into the circuit's CALL record (chip8_q35.py), so they are part of the
 # weights: moving a routine means rebuilding every checkpoint. Add new code after the entries.
@@ -310,14 +424,14 @@ W_OPS = ("div", "mod", "gcd")  # A goes to W + 1: they work on it in place
 assert LABELS["sm_t"] < 0x400 and LABELS["am_t"] < 0x400, "macro targets must sit below 0x400"
 # compiled into the weights (the expression CALL record): eval's entry, the tape and its length
 # (q35-int: div, mod and gcd come first, so eval sits later than v18's 0x2CA)
-EVAL_ENTRY = 0x2D4
+EVAL_ENTRY = 0x2CC
 assert (OPS["eval"], TAPE, TLEN) == (EVAL_ENTRY, 0xC00, 0xC30), (hex(OPS["eval"]), TAPE, TLEN)
 assert W_ADDR + 1 + MAX_DIGITS + DEC <= TMP and TMP + MAX_DIGITS <= CODE2, "gcd's TMP"
 assert LABELS["code1_end"] <= A_ADDR and LABELS["eval_end"] <= TAPE, "eval's code overflows"
 assert LABELS["dbuf"] + MAX_DIGITS < CODE3 and spec.FONT_BASE + 80 <= ACC0 < ACC1 + 32 <= 0x200
 assert LABELS["chain_end"] <= H, "chain mode's code overflows"
 # mod / gcd's pieces in the data page: clear of LEN's cells, R's 48 digits (mul) and W
-assert DSTOP < GAP_LEN and LABELS["args_end"] <= R_ADDR, "args overflows its hole"
+assert DSTOP < GAP_LEN and LABELS["args_end"] <= FRAC_F, "args overflows its hole"
 assert LABELS["gcd1_end"] <= W_ADDR, "gcd overflows its hole"
 
 

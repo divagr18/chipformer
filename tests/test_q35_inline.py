@@ -13,7 +13,7 @@ BS = chr(92)
 WORDS = {" ": B.SPACE, " =": B.EQ, "=": B.EQ, " +": B.PLUS, "+": B.PLUS, " -": B.MINUS,
          "-": B.MINUS2, "−": B.MINUS2, " ×": B.TIMES, "*": B.TIMES, " *": B.TIMES, " " + BS: B.BSL, "times": B.TIMESW,
          ",": B.COMMA, "$": B.DOLLAR, " $": B.SDOLLAR, "$$": B.DDOLLAR, " $$": B.SDDOLLAR, "(": B.LPAREN, "\n": B.NL, "\n\n": B.WS,
-         "/": B.DIV, " /": B.DIV, "÷": B.DIV, "div": B.FN_DIV, ".": B.PERIOD,
+         "/": B.DIV, " /": B.DIV2, "÷": B.DIV2, "div": B.FN_DIV, ".": B.PERIOD,
          "(-": B.LPMINUS, " (-": B.SLPMINUS, ")": B.RPAREN, ")/": B.RPDIV,
          " mod": B.MODOP, " %": B.MODOP, "mod": B.FN_MOD, "b": B.HEX[11], "gcd": B.FN_GCD,
          " gcd": B.FN_GCD}
@@ -43,7 +43,7 @@ def printed(bm) -> str:
     for t, g in zip(bm.tokens, bm.generated):
         if g and B.is_text(t):
             close = {B.SPACE: " ", B.MINUS: " -", B.PERIOD: ".", B.DOLLAR: "$", B.DDOLLAR: "$$",
-                     B.ELLIPSIS: "..."}
+                     B.ELLIPSIS: "...", B.DIV: "/"}
             out.append(close[t] if t in close else str(B.HEX.index(t)) if t in B.HEX else "?")
     return "".join(out)
 
@@ -133,24 +133,24 @@ def test_scan_prints_and_chains():
 
 def test_div_prints():
     for a, b, want in [("1686", "6", " 281."), ("1000", "8", " 125."), ("10", "16", " 0.625."),
-                       ("100", "7", " 14.2857142857...."), ("1", "3000", " 0.0003333333...."),
+                       ("100", "7", " 100/7."), ("1", "3000", " 1/3000."),
                        ("99999999", "9999", " 10001."),
-                       ("5", "125000000000000", " 0.0000000000....")]:
+                       ("5", "125000000000000", " 1/25000000000000."), ("1234", "56", " 617/28.")]:
         bm, calls = run([" ", a, "/", b, " ="])
         assert calls == [("div", a, b)] and printed(bm) == want, (a, b, printed(bm))
     bm, _ = run(["$", "355", "/", "113", " ="])
-    assert printed(bm) == " 3.1415929203...$"
+    assert printed(bm) == " 355/113$"
     bm, _ = run([" ", "1234", "/", "0", " ="])  # division by zero: "..."
     assert printed(bm) == " ...."
 
 
 def test_signed_mod_gcd_prints():
     for tokens, want in [
-            (["\n", "-", "1418261", " /", " (-", "408", ")", " ="], " 3476.1299019607...."),
+            (["\n", "-", "1418261", " /", " (-", "408", ")", " ="], " 1418261/408."),
             (["$", "-", "2548", " /", " ", "52", " ="], " -49$"),
             ([" ", "12", *TIMES, "-", "34", " ="], " -408."),
             ([" (-", "1234", ")", *TIMES, "(-", "5", ")", " ="], " 6170."),
-            (["\n", "-", "1", " /", " ", "3000", " ="], " -0.0003333333...."),
+            (["\n", "-", "1", " /", " ", "3000", " ="], " -1/3000."),
             (["\n", "-", "1234", " /", " ", "0", " ="], " -...."),  # by zero: "..." (and the sign)
             ([" ", "1785", " mod", " ", "13", " ="], " 4."),
             ([" ", "1785", " mod", " ", "1785", " ="], " 0."),
@@ -207,13 +207,13 @@ def test_circuit_with_tool_calls(circuit):
     bm.tool_call("div", "355", "113")
     while not bm.halted:
         bm.step()
-    assert printed(bm).endswith("???3.1415929203..." + tail)
+    assert printed(bm).endswith("???355/113" + tail)
     check(circuit, bm)
     bm.tool_call("sub", "5", "675")  # below 0: " -" instead of the newline
     while not bm.halted:
         bm.step()
-    assert printed(bm).endswith("..." + tail + "??" + " -670" + tail)
-    for op, x, y, want in [("div", "-1418261", "-408", "3476.1299019607..."),
+    assert printed(bm).endswith("355/113" + tail + "??" + " -670" + tail)
+    for op, x, y, want in [("div", "-1418261", "-408", "1418261/408"),
                            ("mul", "-63075", "8808", " -555564600"), ("div", "-5", "0", " -..."),
                            ("mod", "13201915", "1785", "55"), ("gcd", "1785", "13201915", "5"),
                            ("gcd", "-12", "18", "6")]:

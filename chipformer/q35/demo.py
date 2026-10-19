@@ -30,8 +30,8 @@ TOOLS = [{"type": "function", "function": {
                        ("add", "Add two non-negative integers exactly. Use it for any addition."),
                        ("sub", ("Subtract b from a exactly (a must be >= b). Use it for any "
                                "subtraction.")),
-                       ("div", ("Divide a by b exactly (integers): the quotient, or its first 10 "
-                                "decimals followed by ... when it does not end. Use it for any "
+                       ("div", ("Divide a by b exactly (integers): the quotient, or the reduced "
+                                "fraction p/q when it does not end within 10 decimals. Use it for any "
                                 "division.")),
                        ("mod", ("The remainder of a divided by b (non-negative integers). Use it "
                                 "for any remainder or modulo.")),
@@ -41,8 +41,8 @@ TOOLS = [{"type": "function", "function": {
 CALC_TOOL = {"type": "function", "function": {
     "name": "calc", "description": (
         "Evaluate an arithmetic expression exactly: whole numbers and decimals with + - * / ^ "
-        "and brackets, e.g. (3.5 + 12) * 48 / 7. The value, or its first 10 decimals followed "
-        "by ... when it does not end. Use it for any calculation."),
+        "and brackets, e.g. (3.5 + 12) * 48 / 7. The value, or the reduced fraction p/q when "
+        "it does not end within 10 decimals. Use it for any calculation."),
     "parameters": {"type": "object", "required": ["expression"], "properties": {
         "expression": {"type": "string", "description": "the expression"}}}}}
 

@@ -51,7 +51,8 @@ def run_eval(tape, mode=1):
         steps += 1
         assert steps < 20000, "eval does not halt"
     out = [t for t, g in zip(bm.tokens[n0:], bm.generated[n0:]) if B.is_text(t)]
-    shown = {**{h: str(i) for i, h in enumerate(B.HEX)}, B.PERIOD: ".", B.ELLIPSIS: "..."}
+    shown = {**{h: str(i) for i, h in enumerate(B.HEX)}, B.PERIOD: ".", B.ELLIPSIS: "...",
+             B.DIV: "/"}
     # inline: " -" first; a tool response: " -" instead of the newline after <tool_response>
     return B.MINUS in out[:3], "".join(shown.get(t, "") for t in out[1:-1]), len(bm.tokens) - n0
 
@@ -78,8 +79,8 @@ def random_expr(rng, d=0):
     return "".join(parts)
 
 
-FIXED = [("3+4*5", "23"), ("(3+4)*5", "35"), ("2^10-5", "1019"), ("((-8)/(-60))*329", "43.8666666666..."),
-         ("20*(-8)/(-60)*329*9/((-36)/2)*7*(-6)/49", "376"), ("1/3", "0.3333333333..."),
+FIXED = [("3+4*5", "23"), ("(3+4)*5", "35"), ("2^10-5", "1019"), ("((-8)/(-60))*329", "658/15"),
+         ("20*(-8)/(-60)*329*9/((-36)/2)*7*(-6)/49", "376"), ("1/3", "1/3"),
          ("-2^2", "-4"), ("2^-2", "0.25"), ("0.5*4", "2"), ("1.25+2.5", "3.75"), ("7-10", "-3"),
          ("-(3-5)", "2"), ("2(3+4)", "14"), ("10/4", "2.5"), ("1/0", "..."), ("0*(-5)/7", "0"),
          ("(((9/12)/((-2)/232*-6))/((244521/6456)/303))/(((-2)/(-2))/1)", "116"),
@@ -165,7 +166,7 @@ def test_prints():
     bm, _ = scan([" $", " ", "(", "3", " -", " ", "40", ")", " ", "*", " ", "2", " =", "$"])
     assert printed(bm) == " -74$"
     bm, _ = scan([" ", "100", " /", " ", "(", "3", " +", " ", "4", ")", " ="])
-    assert printed(bm) == " 14.2857142857...."
+    assert printed(bm) == " 100/7."
     bm, _ = scan([" ", "(", "12", " /", " ", "0", ")", " +", " ", "5", " ="])
     assert printed(bm) == " ...."  # can't: "..."
 

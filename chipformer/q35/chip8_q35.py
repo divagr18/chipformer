@@ -258,7 +258,7 @@ def build(target: Target | None = None, store=None, schedule: bool = True) -> Ch
     md_op = c.node(c.t_and([T[B.FN_MOD], prev_bs]) + c.t_and([T[B.FN_MOD], prev_b, prev2_bs]),
                    "mod.op")  # \\mod, \\bmod
     inl = {"add": T[B.PLUS], "sub": minus - s_minus, "mul": T[B.TIMES] + tw_op,
-           "div": T[B.DIV] + T[B.RPDIV] + dv_op, "mod": T[B.MODOP] + md_op, "gcd": T[B.FN_GCD]}
+           "div": T[B.DIV] + T[B.DIV2] + T[B.RPDIV] + dv_op, "mod": T[B.MODOP] + md_op, "gcd": T[B.FN_GCD]}
     op_tok = sum(inl.values(), Expr())
     comma_join = c.and_([T[B.COMMA], prev_dig], "comma.join")
     paren_join = c.and_([T[B.RPAREN], prev_dig], "paren.join")
@@ -1272,11 +1272,13 @@ def build(target: Target | None = None, store=None, schedule: bool = True) -> Ch
                       ([mode, jeq(0), neg_p], B.MINUS), ([trail, one - mode_d], B.PERIOD),
                       ([trail, mode_d, one - mode_dd], B.DOLLAR), ([trail, mode_dd], B.DDOLLAR)]:
         case(in_print + lits, 2, code[cls])
-    # TEXT_CODE + low nibble; 10 and 11 (a quotient's "." and "...") print as their classes
-    p10, p11 = (c.and_(nib_lits(vread[:4], v), f"print.is{v}") for v in (10, 11))
-    case(in_print + [digit, one - p10 - p11], 2, list(vread[:4]) + [1])
+    # TEXT_CODE + low nibble; 10, 11 and 12 (a quotient's ".", "...", a fraction's "/") print
+    # as their classes
+    p10, p11, p12 = (c.and_(nib_lits(vread[:4], v), f"print.is{v}") for v in (10, 11, 12))
+    case(in_print + [digit, one - p10 - p11 - p12], 2, list(vread[:4]) + [1])
     case(in_print + [digit, p10], 2, TEXT_CODE + B.PERIOD - B.TEXT_BASE)
     case(in_print + [digit, p11], 2, TEXT_CODE + B.ELLIPSIS - B.TEXT_BASE)
+    case(in_print + [digit, p12], 2, TEXT_CODE + B.DIV - B.TEXT_BASE)
     s_owner, anyp, ybits = [], None, None
     if st is not None:  # the store's answer (its cases are not gated by s_gate)
         s_owner, anyp, ybits = store_q35.respond(c, st, A, cnt, jeq, tcc)
