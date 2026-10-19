@@ -67,7 +67,11 @@ FN_CALC = EXPR_BASE + len(EXPR_CLASSES)  # the tool calc(expression)
 # "/" is printed (a fraction p/q), so its other spellings (" /", "\u00f7") are their own
 # class
 DIV2 = FN_CALC + 1
-N_TEXT = 56 + len(EXPR_CLASSES)
+# the falsehood monitor's flag (monitor/): a token of its own after the chip tokens, printed by the
+# monitor layers after Qwen's; the chip layers see it at the next position and log it
+FLAG = DIV2 + 1
+FLAG_TOKEN = "<|flag|>"
+N_TEXT = 57 + len(EXPR_CLASSES)
 FUNCS = {"add": FN_ADD, "mul": FN_MUL, "sub": FN_SUB, "div": FN_DIV, "mod": FN_MOD,
          "gcd": FN_GCD}  # tool names it answers
 PRINT_OP = 0x00FD

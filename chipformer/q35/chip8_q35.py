@@ -31,6 +31,7 @@ NCODE = 15  # output code: [is_addr, is_ctrl, payload bits 0..12]
 CODE_AMP = 128
 KAPPA = 2**-20  # output code after the exit: tiny, so it never disturbs Qwen's norms
 TAU_TEXT = 2.0**-40
+FLAG_WINDOW = 24  # tokens after a flag in which the monitor stays quiet
 V, VF = spec.V, spec.V + 0xF
 TEXT_CODE = 16  # text classes are ctrl codes with payload 16 + class (STEP/TICK/BOOT: 0..2)
 
@@ -82,6 +83,9 @@ class Chip8Q35(Circ):
         # The final norm amplifies it, pushing the chip tokens' logits far down wherever Qwen
         # speaks.
         self.tau = f("tau", lambda t: TAU_TEXT if B.is_text(t) else -1)
+        # the falsehood monitor's suppression signal, written by the exit (TAU_TEXT while a flag is
+        # recent) and read by the monitor layers after Qwen's (monitor/monitor.py)
+        self.flag_r = f("flag_r", lambda t: 0)
         self.rs = self.is_step + self.is_boot  # record start
 
     def bit_lit(self, i: int, v: int):
@@ -1304,6 +1308,24 @@ def build(target: Target | None = None, store=None, schedule: bool = True) -> Ch
                 out.append([*lits, b])
         return out
 
+    # ---------------------------------------------------------- falsehood monitor log
+    # The monitor layers (after Qwen's) print <|flag|>; here the chip layers see it as a text
+    # token and keep an exact log in their own DeltaNet state:
+    #   flag.count  2^-(flags since BOOT): written at BOOT, halved at every flag
+    #   flag.recent 2^-(text tokens since the last flag): reset at a flag, halved at every token
+    # flag_r (kept through the exit) is TAU_TEXT within FLAG_WINDOW tokens of a flag: the
+    # monitor stays quiet then, so one lie gets one flag
+    is_flag = c.text[B.FLAG]
+    (c.flag_count,) = c.slot_head("flag.count", {0: c.is_boot, 1: one - c.is_boot},
+                                  {0: one - c.is_boot, 1: one - c.is_boot}, {2: c.is_boot},
+                                  one - c.is_boot, 110 * is_flag + 238 * c.is_boot, tiny=2.0**-90)
+    (x_rec,) = c.slot_head("flag.recent", {0: is_flag, 1: one - is_flag},
+                           {0: one - is_flag, 1: one - is_flag}, {2: is_flag}, one - is_flag,
+                           110 * (c.is_text - is_flag) + 238 * is_flag, tiny=2.0**-90)
+    since = thermo(x_rec, is_flag, FLAG_WINDOW, "flag.since")  # [tokens since the flag > m]
+    flag_recent = c.node(c.t_and([c.is_text, one - since[FLAG_WINDOW - 1]]), "flag.recent?")
+    c.flag_recent = flag_recent
+
     fuse = st is None  # the exit computes the output code from the cases themselves
     if fuse:
         nxt = None
@@ -1345,8 +1367,11 @@ def build(target: Target | None = None, store=None, schedule: bool = True) -> Ch
     # TAU_TEXT where Qwen does, which keeps chip tokens out of Qwen's text
     c.ffn([(1, c.mu, one)] + c.t_and([owner, c.is_text], -TAU_TEXT), "exit.tau", into=c.tau,
           min_level=top)
+    c.ffn(c.t_and([flag_recent, c.is_text], TAU_TEXT), "exit.flag_r", into=c.flag_r,
+          min_level=top)
     c.keep = [next(iter(e.terms)) for e in out_dims] + [next(iter(c.tau.terms)),
-                                                         next(iter(c.mu.terms))]
+                                                         next(iter(c.mu.terms)),
+                                                         next(iter(c.flag_r.terms))]
     c.out = {"regs": R, "x": x, "cnt": cnt, "in_tick": in_tick, "old": old, "b1": b1, "b2": b2,
              "ind": ind, "vx": vxb, "vy": vyb, "ctx": k, "vread": vread, "next": nxt}
     if schedule:

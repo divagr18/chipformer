@@ -132,8 +132,9 @@ def chip_token_names() -> list[str]:
     return names
 
 
-def extend_tokenizer(src: Path, dst: Path, first_id: int) -> None:
-    """Copy the tokenizer, padding with reserved tokens up to first_id, then the chip tokens."""
+def extend_tokenizer(src: Path, dst: Path, first_id: int, extra: tuple = ()) -> None:
+    """Copy the tokenizer, padding with reserved tokens up to first_id, then the chip tokens, then
+    ``extra`` (ordinary, visible tokens, such as the monitor's <|flag|>)."""
     import shutil
 
     from tokenizers import AddedToken, Tokenizer
@@ -144,6 +145,10 @@ def extend_tokenizer(src: Path, dst: Path, first_id: int) -> None:
     chip = [AddedToken(s, special=True) for s in chip_token_names()]
     tok.add_special_tokens(pad + chip)
     assert tok.token_to_id(chip_token_names()[0]) == first_id
+    more = [AddedToken(t, special=False, normalized=False) for t in extra]
+    if more:
+        tok.add_tokens(more)
+        assert tok.token_to_id(extra[0]) == first_id + len(chip)
     dst.mkdir(parents=True, exist_ok=True)
     tok.save(str(dst / "tokenizer.json"))
     for f in ("chat_template.jinja", "preprocessor_config.json",
@@ -152,9 +157,9 @@ def extend_tokenizer(src: Path, dst: Path, first_id: int) -> None:
             shutil.copy(src / f, dst / f)
     tc = json.loads((src / "tokenizer_config.json").read_text(encoding="utf-8"))
     dec = tc.setdefault("added_tokens_decoder", {})
-    for i, t in enumerate(pad + chip):
+    for i, t in enumerate(pad + chip + more):
         dec[str(n + i)] = {"content": t.content, "lstrip": False, "normalized": False,
-                           "rstrip": False, "single_word": False, "special": True}
+                           "rstrip": False, "single_word": False, "special": t in pad + chip}
     (dst / "tokenizer_config.json").write_text(json.dumps(tc, indent=2, ensure_ascii=False),
                                                encoding="utf-8")
 
@@ -204,7 +209,8 @@ def bios_meta() -> dict:
 
 
 def build_merged(src, dst, hidden: int | None = None, m: int | None = None,
-                 mute_qwen: bool = True, overlay: bool = True, store: bool = False):
+                 mute_qwen: bool = True, overlay: bool = True, store: bool = False,
+                 monitor: str | None = None):
     """Write Qwen3.5 + the CHIP-8 circuit as one checkpoint ("v2" layout); returns (circuit,
     layout).
 
@@ -276,7 +282,8 @@ def build_merged(src, dst, hidden: int | None = None, m: int | None = None,
     sd = {shift.sub(lambda mt: f"{mt[1]}{int(mt[2]) + n_chip}.", k): v for k, v in sd.items()}
     tc["layer_types"] = ["linear_attention"] * n_chip + tc["layer_types"]
     tc["num_hidden_layers"] = n_chip + n0
-    vocab = -(-(v0 + spec.VOCAB_SIZE) // 64) * 64
+    flag_id = v0 + spec.VOCAB_SIZE  # the monitor's <|flag|>, right after the chip tokens
+    vocab = -(-(v0 + spec.VOCAB_SIZE + bool(monitor)) // 64) * 64
     tc["vocab_size"] = vocab
 
     if mute_qwen:
@@ -312,6 +319,11 @@ def build_merged(src, dst, hidden: int | None = None, m: int | None = None,
             full[:v0, col] = vals.to(torch.bfloat16)
     chip = embedding_rows(c, lay, list(range(spec.VOCAB_SIZE)), hidden)
     full[v0 : v0 + spec.VOCAB_SIZE] = chip.to(torch.bfloat16)
+    if monitor:  # <|flag|>: Qwen reads it as a warning sign; the chip layers as the FLAG class
+        (warn,) = tok.encode("⚠", add_special_tokens=False)[:1]
+        full[flag_id, :d0] = full[warn, :d0]
+        full[flag_id, d0:] = rows[bridge.FLAG][d0:]
+        text_ids[bridge.FLAG] = flag_id
     sd[TEXT + "embed_tokens.weight"] = full
     # image tokens come from the vision merger: give them the OTHER class too
     bias = "model.visual.merger.linear_fc2.bias"
@@ -329,6 +341,24 @@ def build_merged(src, dst, hidden: int | None = None, m: int | None = None,
     check_bf16("final norm", norm[d0:])
     sd[TEXT + "norm.weight"] = norm.to(torch.bfloat16)
 
+    mon_meta = None
+    if monitor:  # the falsehood monitor's layers (monitor/monitor.py)
+        from chipformer.q35.monitor import monitor as mon
+
+        pr = torch.load(monitor)
+        s_dim = hidden - 1
+        assert d0 + m + 1 + alloc.n_slots <= s_dim, "no spare dim for the monitor's score"
+        ms = mon.MonitorSpec(w=pr["w"].float(), b=float(pr["b"]), threshold=float(pr["threshold"]),
+                             k=int(pr["layer"]), s_dim=s_dim,
+                             r_dim=lay.dim(next(iter(c.flag_r.terms))), tau_dim=lay.dim(tau),
+                             code_dims=[lay.dim(d) for d in code],
+                             flag_bits=chip8_q35.token_code(bridge.FLAG))
+        sd, mon_meta = mon.add_monitor(sd, tc, ms, n_chip, TEXT, empty_chip_layer)
+        mon_meta.update(qwen_layer=ms.k, threshold=ms.threshold, window=chip8_q35.FLAG_WINDOW,
+                        log_head=mon.log_head(c),
+                        flag_token=bridge.FLAG_TOKEN, flag_id=flag_id, s_dim=s_dim,
+                        report=pr.get("report"))
+
     dst.mkdir(parents=True, exist_ok=True)
     shard, size, shards = {}, 0, []
     for k in sorted(sd):
@@ -345,7 +375,7 @@ def build_merged(src, dst, hidden: int | None = None, m: int | None = None,
         index["weight_map"].update({k: name for k in sh})
     (dst / "model.safetensors.index.json").write_text(json.dumps(index, indent=2))
     (dst / "config.json").write_text(json.dumps(cfg, indent=2))
-    extend_tokenizer(src, dst, v0)
+    extend_tokenizer(src, dst, v0, (bridge.FLAG_TOKEN,) if monitor else ())
     gen_path = dst / "generation_config.json"
     gen = json.loads(gen_path.read_text()) if gen_path.exists() else {}
     if "eos_token_id" not in gen:
@@ -364,6 +394,8 @@ def build_merged(src, dst, hidden: int | None = None, m: int | None = None,
             "slots": alloc.n_slots, "overlay_slots": len(alloc.final_over),
             "overlay": plan.summary() if plan else None, "muted": mute_qwen,
             "text_ids": {str(k): v for k, v in text_ids.items()}, "bios": bios_meta()}
+    if mon_meta:
+        meta["monitor"] = mon_meta
     if store:
         from chipformer.q35 import store_q35
 
@@ -385,9 +417,11 @@ def main() -> None:
     ap.add_argument("--no-overlay", action="store_true",
                     help="give every circuit dim its own dim (the v15 layout, much wider)")
     ap.add_argument("--store", action="store_true", help="add the object store (store.py)")
+    ap.add_argument("--monitor", default=None,
+                    help="a falsehood-monitor probe (monitor/probe.py train2) to compile in")
     args = ap.parse_args()
     c, lay = build_merged(args.src, args.out, args.hidden, args.ballast, not args.no_mute,
-                          not args.no_overlay, args.store)
+                          not args.no_overlay, args.store, args.monitor)
     print(f"{args.out}: hidden {lay.hidden}, {c.n_layers()} chip layers, {c.stats()}")
 
 
