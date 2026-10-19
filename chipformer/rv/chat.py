@@ -95,15 +95,63 @@ class RvChat:
                 self.model = inner
 
         self.compact = F.compact(_Wrap(cm), qwen=False, n_chip=self.n_chip)
-        self.cfwd = torch.compile(cm.forward, mode="reduce-overhead", fullgraph=False)
+        self.graph = None  # captured after the first prefill (the cache buffers are static)
+
+    def _chip_cache(self):
+        """The chip view's cache, allocated once: its state buffers keep their addresses (HF
+        updates them in place), so one CUDA graph serves every conversation."""
+        from transformers import DynamicCache
+
+        if getattr(self, "ccache", None) is None:
+            self.ccache = DynamicCache(config=self.ccfg)
+        else:
+            for L in range(self.n_chip):
+                lay = self.ccache.layers[L]
+                lay.conv_states[0].zero_()
+                lay.recurrent_states[0].zero_()
+                lay.has_previous_state[0] = False
+        return self.ccache
+
+    @torch.no_grad()
+    def _chip_body(self):
+        h = self.cm.embed_tokens(self.g_ids)
+        for L in range(self.n_chip):
+            h = self.cm.layers[L](h, position_embeddings=None, attention_mask=None,
+                                  position_ids=None, past_key_values=self.ccache)
+        self.g_out.copy_(h)
+
+    @torch.no_grad()
+    def _capture(self):
+        """One CUDA graph of the chip layers' single-token decode step. Warm-up runs change the
+        cache, so the state is saved and put back around them."""
+        self.g_ids = torch.zeros((1, 1), dtype=torch.long, device=self.dev)
+        self.g_out = torch.zeros((1, 1, self.model.config.hidden_size), dtype=torch.bfloat16,
+                                 device=self.dev)
+        lays = [self.ccache.layers[L] for L in range(self.n_chip)]
+        saved = [(lay.conv_states[0].clone(), lay.recurrent_states[0].clone()) for lay in lays]
+        s = torch.cuda.Stream()
+        s.wait_stream(torch.cuda.current_stream())
+        with torch.cuda.stream(s):
+            for _ in range(3):
+                self._chip_body()
+        torch.cuda.current_stream().wait_stream(s)
+        self.graph = torch.cuda.CUDAGraph()
+        with torch.cuda.graph(self.graph):
+            self._chip_body()
+        for lay, (cs, rs) in zip(lays, saved):
+            lay.conv_states[0].copy_(cs)
+            lay.recurrent_states[0].copy_(rs)
 
     @torch.no_grad()
     def _chip_step(self, ids: int, g: int, cache, compiled: bool = True):
-        x = torch.tensor([[ids]], device=self.dev)
-        fwd = self.cfwd if compiled else self.cm.forward
-        out = fwd(input_ids=x, past_key_values=cache, use_cache=True,
-                  cache_position=torch.tensor([g], device=self.dev))
-        return out.last_hidden_state[0, -1].clone()
+        if not compiled or self.graph is None:
+            x = torch.tensor([[ids]], device=self.dev)
+            out = self.cm(input_ids=x, past_key_values=cache, use_cache=True,
+                          cache_position=torch.tensor([g], device=self.dev))
+            return out.last_hidden_state[0, -1].clone()
+        self.g_ids.fill_(ids)
+        self.graph.replay()
+        return self.g_out[0, -1].clone()
 
     @torch.no_grad()
     def _qwen_step(self, hc, cache, pos: int):
@@ -172,12 +220,14 @@ class RvChat:
         cache = out.past_key_values  # (fast: Qwen's layers only)
         core.snapshot(self.c, machine)
         if self.fast:
-            from transformers import StaticCache
-
-            ccache = StaticCache(config=self.ccfg, max_cache_len=len(ids) + max_chip + max_new + 8)
-            self.cm(input_ids=x, past_key_values=ccache, use_cache=True,
-                    cache_position=torch.arange(len(ids), device=self.dev))
+            ccache = self._chip_cache()
+            h = self.cm.embed_tokens(x)  # the prompt through the chip layers only
+            for L in range(self.n_chip):
+                h = self.cm.layers[L](h, position_embeddings=None, attention_mask=None,
+                                      position_ids=None, past_key_values=ccache)
             hf.inject(self.c, ccache)
+            if self.graph is None:
+                self._capture()
             g = len(ids)  # the chip view's cache position (every token)
         else:
             hf.inject(self.c, cache)
@@ -189,6 +239,7 @@ class RvChat:
         nxt = int(torch.argmax(logits[: self.v0]))
         t0 = time.time()
         mismatch = 0
+        t_chip = t_text = 0.0
         expect, lock_error = [], None
         while n_text < max_new and n_chip_tok < max_chip:
             gen.append(nxt)
@@ -218,6 +269,7 @@ class RvChat:
                         for t in gen[-8:]]
                 print(f"  {len(gen)} tokens ({n_text} text, {n_chip_tok} chip) "
                       f"{time.time() - t0:.0f}s: {' '.join(tail)}", flush=True)
+            ts = time.time()
             if nxt >= self.v0:  # a chip token
                 n_chip_tok += 1
                 if self.fast:
@@ -226,6 +278,7 @@ class RvChat:
                 else:
                     hc, _ = self._layers(nxt, cache, None)
                 nxt = self.circuit_token(hc)
+                t_chip += time.time() - ts
                 if nxt is None:
                     raise RuntimeError("the circuit gave up a chip position")
             else:
@@ -242,11 +295,13 @@ class RvChat:
                 if ct is not None and check_head and q != ct:
                     mismatch += 1
                 nxt = ct if ct is not None else int(torch.argmax(logits[: self.v0]))
+                t_text += time.time() - ts
             if check_head:
                 stream_hc.append(hc[self.code_dims].float().cpu().numpy())
         dt = time.time() - t0
         return {"tokens": gen, "text_tokens": n_text, "chip_tokens": n_chip_tok,
-                "seconds": dt, "head_mismatch": mismatch, "lock_error": lock_error}
+                "seconds": dt, "head_mismatch": mismatch, "lock_error": lock_error,
+                "chip_seconds": round(t_chip, 2), "text_seconds": round(t_text, 2)}
 
     def to_stream(self, ids: list[int]) -> list[int]:
         """Model ids -> the circuit's token stream (chip tokens, TEXT_TOKEN | qwen id)."""
