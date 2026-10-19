@@ -425,27 +425,28 @@ def build(target: Target | None = None) -> RvCore:
         ports.append(dims)
     A, B, C = ports
 
-    # the quotient head: row d (0..7) holds the record's d-th digit, written at its QD token, in
-    # one copy per alignment nd' > d (nibble nd' - 1 - d); an 8-hot read of all rows, gated by
-    # the current nd, gives the digits so far right-aligned (the whole |Q| after the last)
+    # the quotient heads: value head d (4 key heads x 2) holds the record's d-th digit in one row,
+    # written at its QD token (beta: QD and j == d + 2), in one copy per alignment nd' > d
+    # (nibble nd' - 1 - d); one-hot reads gated by the current nd give the digits so far
+    # right-aligned (the whole |Q| after the last). (One-hot reads only: a multi-hot read of
+    # often-rewritten rows picks up fp32 residues in fla's chunk kernel.)
     qal = c.zeros(32, "quo")
-    vhs = []
-    for rows in (range(0, 3), range(3, 8)):
-        v, z, outs, into, col = {}, {}, [], [], 2
-        for d in rows:
+    for h in range(4):
+        vhs = []
+        for d in (2 * h, 2 * h + 1):
+            v, z, outs, into, col = {}, {}, [], [], 2
             for ndp in range(d + 1, 9):
                 for b in range(4):
-                    v[col] = chan(Chan(pay["QD"][b] + jeq(d + 2) - 1), A_BIT)
+                    v[col] = chan(Chan(pay["QD"][b]), A_BIT)
                     z[col] = K * nd_is[ndp]
-                    outs.append((col, 2.0**10))  # (an 8-hot read: the ballast is 8x)
+                    outs.append((col, OUT_W))
                     into.append(qal[4 * (ndp - 1 - d) + b])
                     col += 1
-        for rc in REF_COLS:
-            v[rc] = chan(one, A_REF)
-        vhs.append({"v": v, "z": z, "outs": outs, "into": into, "beta": fam["QD"]})
-    c.table("quo", {d: one for d in range(8)}, {d: andpre([jeq(d + 2), fam["QD"]])
-                                                 for d in range(8)}, vhs)
-    c.tables["quo"].qhot = 8  # (for the executor's row gather)
+            for rc in REF_COLS:
+                v[rc] = chan(one, A_REF)
+            vhs.append({"v": v, "z": z, "outs": outs, "into": into,
+                        "beta": fam["QD"] + jeq(d + 2) - 1})
+        c.table(f"quo{h}", {0: one}, {0: fam["QD"]}, vhs)
 
     # ---------------------------------------------------------------- L5-6: the digit file
     # 8 registers of 128 digits; read port 1 at row j (a row op's digit i is its record index),
@@ -1109,7 +1110,8 @@ def snapshot(c: RvCore, m: "RF.Machine") -> None:
         c.tables[f"regs.{p}"].init = [regs]
     quo = np.zeros(HD)
     quo[list(REF_COLS)] = A_REF
-    c.tables["quo"].init = [{d: quo.copy() for d in range(8)} for _ in range(2)]
+    for h in range(4):
+        c.tables[f"quo{h}"].init = [{0: quo.copy()} for _ in range(2)]
     key = (hash(tuple(m.rom)), hash(m.drom))  # (rows of one firmware share ROM and DROM)
     if _ROM_CACHE.get("key") != key:
         rom = np.array([RF.rom_word(wd, S.ROM_BASE + 4 * i) if wd else 0

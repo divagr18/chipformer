@@ -10,6 +10,7 @@
 import argparse
 import time
 
+import numpy as np
 import torch
 
 from chipformer.q35 import ir
@@ -24,16 +25,26 @@ def residual_check(model, c, prog) -> int:
     toks = ref.Machine.from_program(prog).run(10**6)
     core.snapshot(c, ref.Machine.from_program(prog))
     want = ir.evaluate(c, toks, check=False)
-    cache = firmware.load_cache(model, c, ref.Machine.from_program(prog))
-    with torch.no_grad():
-        o = model(input_ids=torch.tensor([toks], device=dev), past_key_values=cache,
-                  use_cache=True, output_hidden_states=True)
+    # (twice: on a new shape fla's Triton autotuner runs the kernels several times, and they
+    # update the recurrent state in place, so the first call's result is not to be used)
+    for _ in range(2):
+        cache = firmware.load_cache(model, c, ref.Machine.from_program(prog))
+        with torch.no_grad():
+            o = model(input_ids=torch.tensor([toks], device=dev), past_key_values=cache,
+                      use_cache=True, output_hidden_states=True)
     h = o.hidden_states[c.n_layers() - 1][0].double().cpu().numpy()
     lay = model.layout
     dims = [d for d in range(1, len(c.dims))
             if c.dims[d].level < 2 * c.n_layers() - 1 and d not in c.keep]
-    bad = [c.dims[d].name for d in dims if (h[:, lay.dim(d)] != want[:, d]).any()]
-    assert not bad, bad[:5]
+    bad = [d for d in dims if (h[:, lay.dim(d)] != want[:, d]).any()]
+    if bad:
+        d = bad[0]
+        t = int(np.nonzero(h[:, lay.dim(d)] != want[:, d])[0][0])
+        nd = [e for e in range(len(c.dims)) if c.dims[e].name.startswith(("nd==", "v>", "j>"))]
+        raise AssertionError(f"{[c.dims[e].name for e in bad[:5]]} first at {t} "
+                             f"({S.name(toks[t])}): hf {h[t, lay.dim(d)]} ir {want[t, d]}; "
+                             + "; ".join(f"{c.dims[e].name} hf {h[t, lay.dim(e)]} ir {want[t, e]}"
+                                         for e in nd if h[t, lay.dim(e)] != want[t, e]))
     return len(dims) * len(toks)
 
 
@@ -65,6 +76,7 @@ def main():
         t = time.time()
         cells = residual_check(model, c, prog)
         want = ref.Machine.from_program(prog).run(10**6)
+        firmware.run(model, c, ref.Machine.from_program(prog), max_new=4)  # (autotune warm-up)
         got = firmware.run(model, c, ref.Machine.from_program(prog), max_new=len(want) + 5)
         ok = got == want[1:]
         out = firmware.output_text(got)
