@@ -13,7 +13,8 @@ Code: `chipformer/rv/store.py` (reference, protocol), `chipformer/rv/store_rv.py
 | F2 capacity and fit (merge, executor, batch) | done |
 | F3 persistence (`save_store` / `load_store`) | done (chat, rvbatch; GPU round trip) |
 | F4 merge and GPU checks | done, gate reached (see "GPU results") |
-| F5 benchmarks, F6 write-up | not started |
+| F5 benchmarks | done (see "Benchmarks") |
+| F6 write-up | not started |
 
 Checkpoint `rv-q4store` (q35-eval `~/weights/dist/rv-q4store`, not uploaded): `python -m
 chipformer.rv.merge BASE --out DIR --store`, 4 min on the g6.4xlarge, peak RAM 44.7 GB,
@@ -178,6 +179,10 @@ v1 needed 2 per directory entry up to the match for every op.
 - **HF modules vs IR** (`test_store_in_hf`, chip-only model, prefill and decode, every dim at
   every position): pass; `test_rv_hf` passes on the Linux box.
 
+- **Executor after the bf16 change** (`rv/execsuite.py`, q35-eval): the executor equals the IR on
+  every dim at every position of the 51 rv32u* programs (19,609 positions) and of a bridge
+  stream with 9 calc runs on the store circuit (25,251 positions). Both arithmetic regressions
+  above (160 problems) ran on the new executor: 0 lock errors.
 - **Text fidelity** (`rv/textcheck.py`, 16 prompts): mean KL vs base 5.48e-4, noise floor
   (base sdpa vs eager) 5.07e-4; greedy text identical on 10/16 (rv-q4p2: 6.1e-4, 10/16);
   tokenizer identical 4/4.
@@ -209,6 +214,102 @@ Bugs found on the GPU and fixed:
   now rounds the gate, the up value and their product to bf16, as the HF model and the IR's
   hardware model do, and beta / decay are read by nearest value (as sigmoid / softplus are in
   HF). Exact values are unchanged.
+
+## Benchmarks (F5; `rv/storebench.py`, tables by `rv/benchsum.py`)
+
+Greedy decoding at batch 1, budget 512 tokens per answer (2048 for a needle save turn). The
+Qwenputer runs on the executor with every circuit token checked in lockstep against the
+store's reference: 0 lock errors and 0 head mismatches in every run below. The host-tool
+baseline is base Qwen3.5-4B with the same tools, system prompt and messages; its tool calls are
+answered by the store's reference in Python, which prints the same responses token for token.
+
+**How Qwen was prompted (a nudge, in both tool conditions).** System prompt:
+
+> You have a memory that keeps texts across conversations, with the tools put, append, get, list
+> and delete, and a calc tool for exact arithmetic. When the user tells you something about
+> themselves (facts, preferences, changes), save it in your memory with put, one short name per
+> fact; when a fact changes, put the new value under the same name. Before you answer a
+> question about the user, look in your memory first (list, then get).
+
+The tools are the five store tools plus calc (`store.TOOLS`, `chat.CALC_TOOL`). The base and
+context conditions get "You are a helpful assistant." and no tools.
+
+### A. Multi-session recall (synthetic, LongMemEval-style)
+
+30 cases (seed 0): 4 past sessions each, one user message per session, chit-chat around 2 facts
+about the user (city, job, dog, food, partner, car, hobby, allergy, sister, gym day; 8 facts per
+case); the 4th session also changes 2 earlier facts. Then 3 questions, each in a new session
+with an empty context: a fact from sessions 1 and 2, a changed fact (the new value must appear,
+the old one must not), a fact from sessions 3 and 4. n = 90 questions (60 facts, 30 changed).
+Scored on Qwen's own words (tool calls and responses removed), case-insensitive.
+
+| Condition | All | Facts | Updated facts |
+|---|---|---|---|
+| Base Qwen3.5-4B, fresh session, no memory | 7/90 | 6/60 | 1/30 |
+| **Qwenputer + in-weights store** | **75/90** | 48/60 | **27/30** |
+| Base Qwen + the same tools run by Python on the host | 71/90 | 46/60 | 25/30 |
+| Base Qwen, the past sessions pasted into context | 69/90 | 60/60 | 9/30 |
+
+- Qwen saved on its own in 93 of the 120 past sessions with the store (318 put / append
+  calls) and in 94 of 120 with the host tools (376 calls). The store's 15 misses: 11 facts
+  never saved, 3 saved but not read back, 1 read back and answered wrongly. Host: 14, 4, 1.
+- The store and the host baseline are both right on 70 questions; 5 only with the store, 1
+  only with the host. They run on different GPUs (L4 / A10G) and the merged model's rounding
+  differs, so Qwen's choices of what to save drift apart.
+- With the sessions in context Qwen gets every plain fact but mostly answers a changed fact
+  with its old value, or with both.
+- Time: the store run took 79 min of generation (L4); host 48 min (A10G); base and context a
+  few minutes each.
+
+### B. Long-context needle
+
+N named strings (`s1`..: two words, a code, a word, a decimal; about 15 tokens). Save phase: 10
+per user message, "Save each of these in your memory with put, one call per item, the name and
+the text exactly as given:"; each message in a session of its own (the store carried over).
+Then one question per string: plain "What is the text for s17? Reply with the text only." or
+tool "Use the get tool to read s17, then reply with the text only.", either in a fresh session
+(empty context, the store loaded) or in the same conversation after P tokens of unrelated chat
+(GSM8K problems and answers as user / assistant turns). Base in-context: the strings are given
+in the same messages (each answered with a fixed "Got it, I'll keep them in mind.") and only
+the plain ask. Exact match of the string in Qwen's own words. n = 50 questions per cell.
+
+N = 50 (all 50 saved by both tool conditions):
+
+| Setting | Base in-context | Store, plain ask | Store, tool ask | Host tools, plain | Host tools, tool ask |
+|---|---|---|---|---|---|
+| fresh session (empty context) | (cannot know) | **50/50** | **50/50** | 50/50 | 50/50 |
+| same conversation, 10k tokens of padding | 49/50 | 44/50 | 42/50 | 44/50 | 42/50 |
+| same conversation, 100k tokens of padding | 37/50 | 30/50 | 12/50 | 30/50 | 12/50 |
+
+N = 200, all 200 saved: fresh session store 50/50 (plain) and 50/50 (tool), host tools 50/50
+and 50/50; base with the 200 strings in context and 10k of padding: 44/50.
+
+- In the same conversation the strings are still in the context (the user's save messages),
+  and Qwen answers from there: it called `get` on at most 3 of 50 questions even when told to.
+  At 100k tokens Qwen no longer uses tools defined that far back (as in v1): the store's
+  100k cells give 96 of 100 answers identical to the host baseline's, all from context.
+- So the store wins where the context does not hold the strings (a new session: 50/50 at
+  N = 50 and N = 200, against nothing for base), and inside one long conversation it adds
+  nothing over the context, because Qwen does not call it there.
+- The store's answers are its own text read back exactly; the store's per-question time is 5-6
+  s (L4 / A10G, a `get` round trip), the host's 2.3 s (A10G / L4).
+
+Infrastructure notes:
+- The first needle runs kept the save phase in one growing conversation whose earlier
+  assistant turns showed only their replies (tool calls stripped): Qwen then answered "saved"
+  without calling put from the 5th message on (40 of 50 and 60 of 200 saved). Those runs were
+  discarded; each save message now has its own session.
+- A 100k-token prompt does not fit the merged model (18 GB with the chip layers compacted) and
+  its KV cache on a 24 GB GPU. HF's offloaded cache (`offloading=True`) gave wrong answers (a
+  20k-token check: it answered a different string than the same prompt without it), so the
+  100k store cells ran on an L40S (q35-tc), with the checkpoint rebuilt there (tensor for
+  tensor the same as q35-eval's: 594 of 594 sha1 equal).
+- A shared prompt prefix is prefilled once per cell (`RvChat.make_prefix`, the base model's
+  equivalent) and each question runs only its own tokens; the prefix and no-prefix paths give
+  the same tokens (checked at 20k).
+
+GPU time for F5 (box start to stop): q35-eval (L4) 2.1 h, q35-eval2 (A10G) 1.9 h, q35-inline
+(A10G) 1.4 h, q35-batch (L4) 1.2 h, q35-tc (L40S) 0.3 h: 6.9 GPU-hours in all (F2-F4 before it: about 2.8, q35-eval and q35-inline).
 
 ## Found along the way
 
