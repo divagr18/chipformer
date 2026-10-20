@@ -382,3 +382,32 @@ def test_snapshot_restore(T):
     out = s2.printed()
     assert out[0] == "alpha\nbeta\ndelta\neps\n" and out[3] == "not found\n"
     check(T, c, s2, init=snap)
+
+
+@pytest.mark.parametrize("mode", ["prefill", "decode"])
+def test_store_in_hf(T, mode):
+    """The 4B-size store circuit as stock Qwen3_5ForCausalLM modules (bf16, the torch kernels):
+    the residual equals the IR's on every dim at every position (slow on CPU; uses CUDA if
+    there is one)."""
+    torch = pytest.importorskip("torch")
+    from chipformer.rv import hf
+
+    cfg = ST.Config()
+    c = circuit(T, cfg)
+    ses = session(T, cfg)
+    ses.qwen(T.encode("<|im_start|>assistant\nHi."))
+    nm = T.encode("notes")
+    ses.call("put", nm, T.encode("Buy milk."))
+    ses.call("append", nm, T.encode("And eggs."))
+    ses.call("get", nm)
+    ses.call("list")
+    ses.call("delete", nm)
+    ses.call("get", nm)
+    toks = ses.toks
+    core.snapshot(c, fresh_machine())
+    for node in c.store.persistent.values():
+        node.init = None
+    model, lay, ids = hf.build_model(c, toks)
+    if torch.cuda.is_available():
+        model = model.cuda()
+    assert hf.check(c, model, lay, ids, toks, mode) == len(toks)
