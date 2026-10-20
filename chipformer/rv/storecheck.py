@@ -129,7 +129,24 @@ def exact(chat, firmware, n_ops=60, seed=1):
         h = chat.cm.layers[L](h, position_embeddings=None, attention_mask=None,
                               position_ids=None, past_key_values=cc)
     hf.inject(chat.c, cc)
-    preds_hf = []
+    if chat.graph is None:
+        chat._capture()
+    preds_hf, g = [], len(ids)
+    for t in rest:  # token by token, as in generation (the decode kernel)
+        preds_hf.append(chat.circuit_token(chat._chip_step(t, g, cc)))
+        g += 1
+    snap_hf = chat.save_store(("hf", cc))
+    # (for information: the same stream as chunked prefills, which generation never runs on the
+    # circuit's state: the prompt's prefill comes before the snapshot is injected)
+    core.snapshot(chat.c, machine(firmware))
+    chat.load_store(None)
+    cc = chat._chip_cache()
+    h = chat.cm.embed_tokens(x)
+    for L in range(chat.n_chip):
+        h = chat.cm.layers[L](h, position_embeddings=None, attention_mask=None,
+                              position_ids=None, past_key_values=cc)
+    hf.inject(chat.c, cc)
+    preds_pf = []
     for a in range(0, len(rest), 1024):
         xx = torch.tensor([rest[a:a + 1024]], device=chat.dev)
         h = chat.cm.embed_tokens(xx)
@@ -137,8 +154,7 @@ def exact(chat, firmware, n_ops=60, seed=1):
             h = chat.cm.layers[L](h, position_embeddings=None, attention_mask=None,
                                   position_ids=None, past_key_values=cc)
         for t in range(h.shape[1]):
-            preds_hf.append(chat.circuit_token(h[0, t]))
-    snap_hf = chat.save_store(("hf", cc))
+            preds_pf.append(chat.circuit_token(h[0, t]))
     # the executor, token by token
     core.snapshot(chat.c, machine(firmware))
     chat.load_store(None)
@@ -161,6 +177,7 @@ def exact(chat, firmware, n_ops=60, seed=1):
         return {"wrong": wrong, "owner_mismatch": owner}
 
     out["hf"], out["exec"] = score(preds_hf), score(preds_ex)
+    out["hf_prefill_info"] = score(preds_pf)
     same = set(snap_hf) == set(snap_ex) and all(
         len(snap_hf[k]) == len(snap_ex[k]) and all(
             set(a) == set(b) and all(np.array_equal(a[r], b[r]) for r in a)
