@@ -630,6 +630,30 @@ def replay(chat: RvChat, prompt: list[int], gen: list[int], firmware) -> dict:
             "owner_mismatch": bad_own, "runs": len(ses.runs)}
 
 
+def save_store_file(path, snap: dict) -> None:
+    """A store snapshot (RvChat.save_store) as a .npz file."""
+    arrays = {}
+    for name, vs in snap.items():
+        arrays[f"{name}/n"] = np.array(len(vs))
+        for x, rows in enumerate(vs):
+            for r, row in rows.items():
+                arrays[f"{name}/{x}/{r}"] = np.asarray(row, dtype=np.float64)
+    np.savez_compressed(path, **arrays)
+
+
+def load_store_file(path) -> dict:
+    z = np.load(path)
+    snap = {}
+    for k in z.files:
+        if k.endswith("/n"):
+            snap[k[:-2]] = [{} for _ in range(int(z[k]))]
+    for k in z.files:
+        if not k.endswith("/n"):
+            name, x, r = k.rsplit("/", 2)
+            snap[name][int(x)][int(r)] = z[k]
+    return snap
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("model")
@@ -638,16 +662,40 @@ def main() -> None:
     ap.add_argument("--max-new", type=int, default=600)
     ap.add_argument("--check", action="store_true")
     ap.add_argument("--slow", action="store_true", help="every layer through the HF modules")
+    ap.add_argument("--executor", action="store_true", help="the chip layers on the executor")
+    ap.add_argument("--memory", default=None,
+                    help="a store checkpoint: a file that keeps its files between runs (loaded "
+                         "when it exists, saved after the answer)")
     args = ap.parse_args()
-    chat = RvChat(args.model, fast=not args.slow)
+    chat = RvChat(args.model, fast=not args.slow, executor=args.executor)
     m = ref.Machine.from_program(elf.program(args.firmware))
     BR.park(m)
-    ids = chat.prompt_ids([{"role": "user", "content": args.ask}])
+    store = chat.store_cfg is not None
+    msgs = [{"role": "user", "content": args.ask}]
+    tools = (CALC_TOOL,)
+    if store:
+        from chipformer.rv import store as ST
+
+        msgs = [{"role": "system", "content": ST.MEM_SYSTEM}] + msgs
+        tools = (CALC_TOOL, *ST.TOOLS)
+    ids = chat.prompt_ids(msgs, tools)
+    remembered = bool(args.memory) and Path(args.memory).exists()
+    if remembered:
+        chat.store_snap = load_store_file(args.memory)
     m2 = ref.Machine.from_program(elf.program(args.firmware))
     BR.park(m2)
-    lock = BR.Session(chat.T, m2)
-    lock.history(ids)
+    lock = None
+    if not remembered:  # (the reference does not know a store loaded from a file)
+        if store:
+            from chipformer.rv import store as ST
+
+            lock = ST.StoreSession(chat.T, m2, chat.store_cfg)
+        else:
+            lock = BR.Session(chat.T, m2)
+        lock.history(ids)
     r = chat.generate(ids, m, args.max_new, check_head=True, verbose=True, lock=lock)
+    if args.memory:
+        save_store_file(args.memory, chat.save_store())
     print(chat.text_of(r["tokens"]))
     print(f"[{r['text_tokens']} text + {r['chip_tokens']} chip tokens in {r['seconds']:.1f}s, "
           f"head mismatches {r['head_mismatch']}, lock error {r['lock_error']}]")

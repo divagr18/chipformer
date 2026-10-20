@@ -50,12 +50,7 @@ from chipformer.rv.chat import CALC_TOOL, cache_restore, cache_snapshot
 
 FW = "tests/data/rv/calc-bridge.elf"
 TOOLS = [CALC_TOOL] + ST.TOOLS
-MEM_SYSTEM = ("You have a memory that keeps texts across conversations, with the tools put, "
-              "append, get, list and delete, and a calc tool for exact arithmetic. When the user "
-              "tells you something about themselves (facts, preferences, changes), save it in "
-              "your memory with put, one short name per fact; when a fact changes, put the new "
-              "value under the same name. Before you answer a question about the user, look in "
-              "your memory first (list, then get).")
+MEM_SYSTEM = ST.MEM_SYSTEM
 PLAIN_SYSTEM = "You are a helpful assistant."
 PAD_DATA = Path(__file__).resolve().parents[2] / "tests" / "data" / "rv" / "bench_padding.json"
 

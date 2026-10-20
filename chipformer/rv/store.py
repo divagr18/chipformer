@@ -70,6 +70,13 @@ PARAM_JOINED = {"name": 37943, "text": 46696}
 MSG = {"ok": [547], "not_found": [1856, 1669], "empty": [3092], "full": [8610]}
 TAIL = [Q_TRC, Q_NL, Q_THO, Q_NL, Q_NL, Q_THC, Q_NL, Q_NL]  # the last NL is Qwen's to follow
 
+# the system prompt the benchmarks use with the store tools (docs/rv-store.md)
+MEM_SYSTEM = ("You have a memory that keeps texts across conversations, with the tools put, "
+              "append, get, list and delete, and a calc tool for exact arithmetic. When the user "
+              "tells you something about themselves (facts, preferences, changes), save it in "
+              "your memory with put, one short name per fact; when a fact changes, put the new "
+              "value under the same name. Before you answer a question about the user, look in "
+              "your memory first (list, then get).")
 TOOLS = [
     {"type": "function", "function": {
         "name": "put", "description": "Store a text under a name in your memory (replaces it). "
