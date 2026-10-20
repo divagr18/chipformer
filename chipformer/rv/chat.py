@@ -38,6 +38,35 @@ CALC_TOOL = {"type": "function", "function": {
         "required": ["expression"]}}}
 
 
+def cache_snapshot(cache) -> list:
+    """What a DynamicCache holds now (attention: its length; linear attention: copies of the
+    states), for cache_restore."""
+    out = []
+    for lay in cache.layers:
+        if getattr(lay, "keys", None) is not None and hasattr(lay, "get_seq_length"):
+            out.append(("kv", lay.get_seq_length()))
+        elif hasattr(lay, "recurrent_states"):
+            out.append(("lin", {i: (lay.conv_states[i].clone(), lay.recurrent_states[i].clone(),
+                                    lay.has_previous_state[i])
+                                for i in lay.recurrent_states if lay.recurrent_states[i] is not None}))
+        else:
+            out.append(("none", None))
+    return out
+
+
+def cache_restore(cache, snap) -> None:
+    """Back to a cache_snapshot (the attention keys cut to their old length)."""
+    for lay, (kind, v) in zip(cache.layers, snap):
+        if kind == "kv":
+            lay.keys = lay.keys[..., :v, :]
+            lay.values = lay.values[..., :v, :]
+        elif kind == "lin":
+            for i, (cs, rs, hp) in v.items():
+                lay.conv_states[i].copy_(cs)
+                lay.recurrent_states[i].copy_(rs)
+                lay.has_previous_state[i] = hp
+
+
 class ExecRow:
     """One conversation's circuit on the Triton executor (batch 1) with its own CUDA graph."""
 
@@ -73,20 +102,30 @@ class ExecRow:
             st["hist"].copy_(h)
 
     @torch.no_grad()
-    def start(self, ids: list[int]) -> None:
+    def start(self, ids: list[int], prefix: dict | None = None, init: bool = True) -> None:
         """As the HF path does it: the prompt through the circuit from zero states, then every
         head's state set to its init (the snapshot now in the circuit; hf.inject), the lag
-        windows kept."""
+        windows kept. ``prefix`` (RvChat.make_prefix): the states after its ids are restored
+        and only the rest of ``ids`` runs."""
         if self.graph is None:
             self._capture()
-        for st in self.heads:
-            st["S"].zero_()
-            st["hist"].zero_()
-        emb = self.chat._exec_emb(ids)
-        for t in range(len(ids)):
-            self.xbuf.copy_(emb[t:t + 1])
-            self.graph.replay()
-        self.ex.load_init()
+        n = 0
+        if prefix is None:
+            for st in self.heads:
+                st["S"].zero_()
+                st["hist"].zero_()
+        else:
+            n = len(prefix["ids"])
+            for st, (S_, h) in zip(self.heads, prefix["exec"]):
+                st["S"].copy_(S_)
+                st["hist"].copy_(h)
+        for a in range(n, len(ids), 4096):
+            emb = self.chat._exec_emb(ids[a:a + 4096])
+            for t in range(emb.shape[0]):
+                self.xbuf.copy_(emb[t:t + 1])
+                self.graph.replay()
+        if init:
+            self.ex.load_init()
 
     @torch.no_grad()
     def step(self, ids: int) -> torch.Tensor:
@@ -169,8 +208,8 @@ class RvChat:
                 self.emb_cache[i] = r
         return torch.stack([self.emb_cache[i] for i in ids])
 
-    def _exec_start(self, ids: list[int]) -> None:
-        self.erow.start(ids)
+    def _exec_start(self, ids: list[int], prefix=None) -> None:
+        self.erow.start(ids, prefix)
 
     def _exec_step(self, ids: int) -> torch.Tensor:
         return self.erow.step(ids)
@@ -346,19 +385,47 @@ class RvChat:
         return [int(x) for x in out]
 
     @torch.no_grad()
+    @torch.no_grad()
+    def _prefill(self, ids: list[int], cache=None, chunk: int = 8192):
+        """The whole model on a prompt (in chunks: long prompts), from ``cache``."""
+        out = None
+        for a in range(0, len(ids), chunk):
+            x = torch.tensor([ids[a:a + chunk]], device=self.dev)
+            out = self.model(input_ids=x, past_key_values=cache, use_cache=True,
+                             logits_to_keep=1)
+            cache = out.past_key_values
+        return out
+
+    @torch.no_grad()
+    def make_prefix(self, ids: list[int]) -> dict:
+        """A prompt prefix shared by several generate calls (``prefix=``): Qwen's cache and the
+        executor's states after it, kept so each call runs only its own suffix."""
+        assert self.executor and not self.fast
+        out = self._prefill(ids)
+        cache = out.past_key_values
+        self.erow.start(ids, init=False)
+        ex = [(st["S"].clone(), st["hist"].clone()) for st in self.erow.heads]
+        return {"ids": list(ids), "cache": cache, "snap": cache_snapshot(cache), "exec": ex}
+
     def generate(self, ids: list[int], machine: "ref.Machine", max_new: int = 4000,
                  max_chip: int = 60000, check_head: bool = False, verbose: bool = False,
-                 lock: "BR.Session | None" = None) -> dict:
+                 lock: "BR.Session | None" = None, prefix: dict | None = None) -> dict:
         """Greedy decoding after the prompt ``ids`` with the parked ``machine`` loaded.
         ``lock`` (a Session on a copy of the machine): stop at the first token that differs from
         the reference's."""
         x = torch.tensor([ids], device=self.dev)
-        out = self.model(input_ids=x, use_cache=True)
+        if prefix is not None:  # (a long shared prompt prefix, prefilled once: make_prefix)
+            assert self.executor and not self.fast and ids[:len(prefix["ids"])] == prefix["ids"]
+            cache = prefix["cache"]
+            cache_restore(cache, prefix["snap"])
+            out = self._prefill(ids[len(prefix["ids"]):], cache)
+        else:
+            out = self._prefill(ids)
         cache = out.past_key_values  # (fast: Qwen's layers only)
         core.snapshot(self.c, machine)
         self.load_store(self.store_snap)
         if self.executor:
-            self._exec_start(ids)
+            self._exec_start(ids, prefix)
         if self.fast:
             ccache = self._chip_cache()
             h = self.cm.embed_tokens(x)  # the prompt through the chip layers only
