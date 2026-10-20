@@ -395,7 +395,10 @@ def run_needle(args):
             msg = ("Save each of these in your memory with put, one call per item, the name and "
                    f"the text exactly as given:\n{lines}")
             hist.append({"role": "user", "content": msg})
-            text, info, state = M.turn(hist, state, args.budget * 4, tools)
+            # each batch in a session of its own (the store carried over); a single growing
+            # conversation whose earlier turns show only the replies teaches Qwen to answer
+            # "saved" without calling put
+            text, info, state = M.turn([sys_m, hist[-1]], state, args.budget * 4, tools)
             save_info.append(info)
             hist.append({"role": "assistant", "content": own_text(text) or "Saved."})
         else:
