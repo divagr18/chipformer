@@ -406,8 +406,10 @@ class RvChat:
         # a long prefix keeps the attention keys and values in host memory, each layer's
         # fetched while it runs (the same numbers: the model and its cache do not fit a 24 GB
         # GPU at 100k tokens)
-        cache = DynamicCache(config=self.model.config, offloading=len(ids) > 50000)
-        out = self._prefill(ids, cache)
+        long = len(ids) > 50000
+        cache = DynamicCache(config=self.model.config, offloading=long)
+        # (shorter chunks there too: the attention mask of a chunk is chunk x prefix)
+        out = self._prefill(ids, cache, chunk=2048 if long else 8192)
         cache = out.past_key_values
         self.erow.start(ids, init=False)
         ex = [(st["S"].clone(), st["hist"].clone()) for st in self.erow.heads]
