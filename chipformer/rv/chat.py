@@ -109,15 +109,28 @@ class RvChat:
         self.meta = json.loads((self.path / "chipformer.json").read_text())
         self.dev = device or ("cuda" if torch.cuda.is_available() else "cpu")
         self.model = Qwen3_5ForCausalLM.from_pretrained(self.path, dtype=torch.bfloat16)
+        if self.dev == "cuda":  # the chip layers' nonzero blocks only (exact: fast.compact),
+            from chipformer.q35 import fast as F  # before they reach the GPU
+
+            F.compact(self.model, qwen=False, n_chip=self.meta["chip_layers"])
         self.model = self.model.to(self.dev).eval()
         self.lm = self.model.model
         self.tok = AutoTokenizer.from_pretrained(self.path)
         self.T = BR.Text(self.path / "tokenizer.json")
         cfg = self.model.config
+        self.store_cfg = None
+        if self.meta.get("store"):
+            from chipformer.rv.store import Config
+
+            self.store_cfg = Config(**self.meta["store"])
         self.c = core.build(Target(cfg.linear_num_key_heads, cfg.linear_num_value_heads,
-                                   cfg.intermediate_size), self.T)
+                                   cfg.intermediate_size), self.T, self.store_cfg)
         self.n_chip, self.v0 = self.meta["chip_layers"], self.meta["chip_token_offset"]
         self.code_dims = torch.tensor(self.meta["code_dims"], device=self.dev)
+        self.id_dims = (torch.tensor(self.meta["id_code_dims"], device=self.dev)
+                        if self.store_cfg else None)
+        self.store_snap = None  # the store heads' state to start from (load_store)
+        self.last_state = None  # where the last generate's chip state is (save_store)
         self.eos = {248046, 248044}
         self.fast = fast and self.dev == "cuda"
         # executor "verify": both chip paths, the HF view's hc checked against the executor's
@@ -139,6 +152,7 @@ class RvChat:
         code."""
         self.keep_ir = torch.tensor(self.c.keep, device=self.dev)
         cols = self.meta["code_dims"] + [self.meta["tau_dim"], self.meta["mu_dim"]]
+        cols += self.meta.get("id_code_dims", [])
         assert len(cols) == len(self.c.keep)
         self.keep_cols = torch.tensor(cols, device=self.dev)
         self.d0 = self.meta["chip_dims_offset"]
@@ -169,8 +183,18 @@ class RvChat:
         hc[self.keep_cols] = keep.to(torch.bfloat16)
         return hc
 
-    def code_token(self, code) -> int | None:
-        """circuit_token from the output code values."""
+    def keep_token(self, keep) -> int | None:
+        """The circuit's token from the executor's kept values (code, tau, mu, id code)."""
+        n = len(self.code_dims)
+        return self.code_token(keep[:n], keep[n + 2:] if self.id_dims is not None else None)
+
+    def code_token(self, code, idc=None) -> int | None:
+        """circuit_token from the output code values (and the store's id code: an any-print
+        leaves the class code at 0 and the token's id bits there)."""
+        if idc is not None:
+            idc = idc.float()
+            if bool((idc != 0).any()):
+                return sum(1 << i for i, b in enumerate((idc > 0).tolist()) if b)
         code = code.float()
         if not bool((code != 0).any()):
             return None
@@ -309,7 +333,8 @@ class RvChat:
 
     def circuit_token(self, hc) -> int | None:
         """The model id the circuit predicts at a position, None where Qwen predicts."""
-        return self.code_token(hc[self.code_dims])
+        return self.code_token(hc[self.code_dims],
+                               None if self.id_dims is None else hc[self.id_dims])
 
     # --- a conversation --------------------------------------------------------------------
     def prompt_ids(self, messages, tools=(CALC_TOOL,)) -> list[int]:
@@ -331,6 +356,7 @@ class RvChat:
         out = self.model(input_ids=x, use_cache=True)
         cache = out.past_key_values  # (fast: Qwen's layers only)
         core.snapshot(self.c, machine)
+        self.load_store(self.store_snap)
         if self.executor:
             self._exec_start(ids)
         if self.fast:
@@ -346,6 +372,8 @@ class RvChat:
         elif not self.executor:
             hf.inject(self.c, cache)
         n_verify_bad = 0
+        self.last_state = ("exec", self.erow) if self.executor else (
+            ("hf", ccache) if self.fast else ("hf", cache))
         logits = out.logits[0, -1]
         pos = len(ids)  # the next text token's RoPE position
         gen, n_text, n_chip_tok = [], 0, 0
@@ -407,8 +435,7 @@ class RvChat:
                 hc, logits = self._layers(nxt, cache, None if chip_in else pos)
             if chip_in:  # a chip token
                 n_chip_tok += 1
-                nxt = (self.code_token(keep[: len(self.code_dims)]) if hc is None
-                       else self.circuit_token(hc))
+                nxt = self.keep_token(keep) if hc is None else self.circuit_token(hc)
                 t_chip += time.time() - ts
                 if nxt is None:
                     raise RuntimeError("the circuit gave up a chip position")
@@ -428,6 +455,50 @@ class RvChat:
                 "seconds": dt, "head_mismatch": mismatch, "lock_error": lock_error,
                 "verify_mismatch": n_verify_bad if self.verify else None,
                 "chip_seconds": round(t_chip, 2), "text_seconds": round(t_text, 2)}
+
+    # --- the store's state ------------------------------------------------------------------
+    def save_store(self, where=None) -> dict | None:
+        """The store heads' states after the last generate (or ``where``: ("exec", ExecRow) /
+        ("hf", cache)): {head name: [{row: state row} per value head]}, the rows that are set.
+        A snapshot of the files and registers only; the firmware's state is not in it."""
+        if self.store_cfg is None:
+            return None
+        kind, obj = where or self.last_state
+        out = {}
+        if kind == "exec":
+            for st in obj.ex.steps:
+                if st["kind"] != "head":
+                    continue
+                j = 0
+                for n in st["heads"]:
+                    nv = len(n.vheads())
+                    if n.name in self.c.store.persistent:
+                        S_ = st["S"][0, j:j + nv].float().cpu().numpy()
+                        out[n.name] = [{int(r): S_[x, r].astype(np.float64)
+                                        for r in np.nonzero(np.abs(S_[x]).sum(1))[0]}
+                                       for x in range(nv)]
+                    j += nv
+        else:
+            r_ = self.c.target.value_heads // self.c.target.key_heads
+            idx = {id(n): i for i, n in enumerate(self.c.nodes)}
+            slots = hf.head_slots(self.c)
+            for name, n in self.c.store.persistent.items():
+                L, j = slots[idx[id(n)]]
+                st = obj.layers[L].recurrent_states[0]
+                vs = []
+                for x in range(len(n.vheads())):
+                    S_ = st[0, j * r_ + x].float().cpu().numpy()
+                    vs.append({int(r): S_[r].astype(np.float64)
+                               for r in np.nonzero(np.abs(S_).sum(1))[0]})
+                out[name] = vs
+        return out
+
+    def load_store(self, snap: dict | None) -> None:
+        """Start the next generate from this store state (None: an empty store)."""
+        if self.store_cfg is None:
+            return
+        for name, n in self.c.store.persistent.items():
+            n.init = None if snap is None else snap.get(name)
 
     def to_stream(self, ids: list[int]) -> list[int]:
         """Model ids -> the circuit's token stream (chip tokens, TEXT_TOKEN | qwen id)."""
