@@ -401,7 +401,13 @@ class RvChat:
         """A prompt prefix shared by several generate calls (``prefix=``): Qwen's cache and the
         executor's states after it, kept so each call runs only its own suffix."""
         assert self.executor and not self.fast
-        out = self._prefill(ids)
+        from transformers import DynamicCache
+
+        # a long prefix keeps the attention keys and values in host memory, each layer's
+        # fetched while it runs (the same numbers: the model and its cache do not fit a 24 GB
+        # GPU at 100k tokens)
+        cache = DynamicCache(config=self.model.config, offloading=len(ids) > 50000)
+        out = self._prefill(ids, cache)
         cache = out.past_key_values
         self.erow.start(ids, init=False)
         ex = [(st["S"].clone(), st["hist"].clone()) for st in self.erow.heads]
