@@ -178,6 +178,24 @@ v1 needed 2 per directory entry up to the match for every op.
 - **HF modules vs IR** (`test_store_in_hf`, chip-only model, prefill and decode, every dim at
   every position): pass; `test_rv_hf` passes on the Linux box.
 
+- **Text fidelity** (`rv/textcheck.py`, 16 prompts): mean KL vs base 5.48e-4, noise floor
+  (base sdpa vs eager) 5.07e-4; greedy text identical on 10/16 (rv-q4p2: 6.1e-4, 10/16);
+  tokenizer identical 4/4.
+- **Arithmetic regression** (`evalarith`, n = 40, batch 8, the fixed calc firmware on every
+  side; exact rational match):
+
+| Set | rv-q4store (L4) | rv-q4p2 (L4) | rv-q4p2 (A10G) | rv-q4p2 published (L4, batch 1, calc v1) |
+|---|---|---|---|---|
+| arith | 36/40 | 38/40 | 37/40 | 39/40 |
+| dmx_mul_big | 39/40 | 39/40 | 39/40 | 39/40 |
+
+  Every miss is Qwen's: 0 lock errors, 0 head mismatches, and every machine result exact.
+  The misses are 42 to 50-call loops on a result the machine returned correctly, and one
+  wrong final answer after correct results. The store model and rv-q4p2 on the same L4 give
+  identical token streams on 23 of 40 arith problems (the two rv-q4p2 runs on different GPUs:
+  25 of 40), among them three 100k-token loops; they split only on arith-18 and arith-39, in
+  Qwen's text. So the store moves Qwen's rounding about as much as a change of GPU does.
+
 Bugs found on the GPU and fixed:
 
 - `rv/tiny.embedding_matrix` built rows only for the core's families: the store's chip tokens
