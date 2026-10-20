@@ -9,11 +9,15 @@ Code: `chipformer/rv/store.py` (reference, protocol), `chipformer/rv/store_rv.py
 
 | Phase | State |
 |---|---|
-| F0 port + F1 hashed directory (IR) | done, gate passed (below) |
-| F2 capacity and fit (merge, executor, batch) | not started (waits for go-ahead: GPU) |
-| F3 persistence (`save_store` / `load_store`) | IR round trip tested; chat / rvbatch not started |
-| F4 merge and GPU checks | not started |
+| F0 port + F1 hashed directory (IR) | done, gate passed |
+| F2 capacity and fit (merge, executor, batch) | done |
+| F3 persistence (`save_store` / `load_store`) | done (chat, rvbatch; GPU round trip) |
+| F4 merge and GPU checks | see "GPU results" (KL and arithmetic: running) |
 | F5 benchmarks, F6 write-up | not started |
+
+Checkpoint `rv-q4store` (q35-eval `~/weights/dist/rv-q4store`, not uploaded): `python -m
+chipformer.rv.merge BASE --out DIR --store`, 4 min on the g6.4xlarge, peak RAM 44.7 GB,
+22.3 GB on disk (hidden 4608, 12 chip layers + 32 Qwen layers).
 
 ## What it is
 
@@ -152,6 +156,38 @@ v1 needed 2 per directory entry up to the match for every op.
   test_rv_core 94, test_q35_ir 3, test_q35_ir_vheads 1, all pass. test_rv_hf crashes with a
   Windows access violation in torch 2.14.1+cpu here, in the untouched rv-p3b worktree too; it
   is run on the GPU box in F2.
+
+## GPU results (q35-eval, L4; `rv/storecheck.py`)
+
+- **Teacher-forced exactness** (a reference stream of 60 random store calls with random tokens,
+  7 calc runs, 17,612 positions, 14,564 owned): 0 wrong and 0 owner mismatches on the HF chip
+  modules decoding token by token, on the executor, and (for information) as chunked prefills.
+  The store heads' states after the stream are bitwise equal on both paths. The executor also
+  equals the IR on every dim at every position of that stream (`tritonexec` vs `ir.evaluate`).
+- **Live, Qwen deciding** (6 prompts: save; save + append + get; two puts + list; put +
+  delete + get; calc then save the result; put + get), HF and executor side by side
+  ("verify"): 0 lock errors, 0 head mismatches, 0 verify mismatches; the executor alone gives
+  the same tokens; IR replay of every stream clean. Qwen called the tools on its own and
+  restated the results after each response.
+- **Save / restore:** session 1 stored 4 facts with `put` (30 state rows saved); 3 fresh
+  sessions (empty context, the store loaded) read them back with `get` / `list`: the printed
+  texts are the stored ones exactly, Qwen answered from them, lock and IR replay (from the
+  snapshot) clean.
+- **Batch:** 4 live prompts decoded together in a 4-row rvbatch and each alone in it: the same
+  tokens, 0 lock errors, 0 head mismatches.
+- **HF modules vs IR** (`test_store_in_hf`, chip-only model, prefill and decode, every dim at
+  every position): pass; `test_rv_hf` passes on the Linux box.
+
+Bugs found on the GPU and fixed:
+
+- `rv/tiny.embedding_matrix` built rows only for the core's families: the store's chip tokens
+  had zero rows in the merge (no ballast), so the HF path dropped every store record.
+- The executor computed MLP units in plain fp32, where `7 - 2^-22` (a threshold unit) is a
+  rounding tie that 7 and 6 break in opposite directions: 0/1 dims carried 2^-21, and a decay
+  selector of 238 * 2^-21 cleared the staging head (1 wrong content token in 14,564). Its MLP
+  now rounds the gate, the up value and their product to bf16, as the HF model and the IR's
+  hardware model do, and beta / decay are read by nearest value (as sigmoid / softplus are in
+  HF). Exact values are unchanged.
 
 ## Found along the way
 
