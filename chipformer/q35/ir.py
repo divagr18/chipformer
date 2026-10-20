@@ -130,6 +130,9 @@ class Graph:
         self.one = Expr({ONE: 1})
         self.units: dict[int, int] = {}  # sublayer -> FFN units used
         self.heads: dict[int, int] = {}  # sublayer -> key heads used
+        # dims that can hold large values (> 2^8): their slot is never handed over by a
+        # subtraction in the MLP that writes the new value (1 - 2^26 is not exact in fp32)
+        self.big: set[int] = set()
 
     # --- dims -----------------------------------------------------------------
 
