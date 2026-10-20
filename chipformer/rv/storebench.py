@@ -124,7 +124,7 @@ def recall_cases(n: int, seed: int = 0) -> list[dict]:
             if k == 3:
                 parts += [a[3].format(v=vals[a[0]][1]) for a in updated]
             parts.append(rng.choice(CLOSERS))
-            sessions.append(re.sub(r"a ([aeiouAEIOU])", r"an ", " ".join(parts)))
+            sessions.append(re.sub(r"\ba ([aeiouAEIOU])", r"an \1", " ".join(parts)))
         static = [a for a in order if a in early] + later
         q1, q3 = static[0], rng.choice(later[1:])
         qs = [{"q": q1[1], "gold": vals[q1[0]][0], "old": None, "kind": "fact"},
