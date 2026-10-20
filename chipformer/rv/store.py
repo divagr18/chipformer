@@ -55,8 +55,8 @@ SPECIAL = 248044  # <|endoftext|> and up: never stored or printed by the store (
 NMAX = 6  # name tokens kept and compared (a name's trailing newline counts)
 LEN_BITS = 3  # a name's length, min(length, NMAX + 1)
 CMAX = 104  # text tokens per call (one chunk); a longer text keeps its first CMAX
-TPR = 8  # tokens per content row (two value heads of 4)
-ROWS_PER_CHUNK = CMAX // TPR  # 13
+TPR = 14  # tokens per content row (two value heads of 7)
+ROWS_PER_CHUNK = -(-CMAX // TPR)  # 8
 OPS = ("put", "append", "get", "list", "delete")
 
 # Qwen3.5 token ids (tests check them against the tokenizer)

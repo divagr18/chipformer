@@ -1165,8 +1165,10 @@ def build(target: Target | None = None, text=None, store=None) -> RvCore:
     for i, e in enumerate(c.code):
         cs, bit = (fam_cases, i) if i < NFAM else (pay_cases, i - NFAM)
         terms = c.t_and(own, -KAPPA) if text else c.t_const(-KAPPA)
-        if st:
-            terms += c.t_and([st.S, one - st.anyp], -KAPPA)
+        if st:  # -KAPPA where the store owns the position, but 0 at its any-prints
+            terms += c.t_and([st.S], -KAPPA)
+            for lits, _ in st.any_cases:
+                terms += c.t_and(lits, KAPPA)
         for lits, val_ in cs:
             if isinstance(val_, int):
                 if val_ >> bit & 1:
@@ -1175,8 +1177,16 @@ def build(target: Target | None = None, text=None, store=None) -> RvCore:
                 terms += c.t_and([*lits, val_[bit]], 2 * KAPPA)
         c.ffn(terms, f"exit.code{i}", into=e, min_level=exit_min)
     for i, e in enumerate(id_code):
-        c.ffn(c.t_and([st.ybits[i], st.anyp], 2 * KAPPA) + c.t_and([st.anyp], -KAPPA),
-              f"exit.id{i}", into=e, min_level=exit_min)
+        terms = []
+        for lits, bits in st.any_cases:
+            v = bits[i]
+            terms += c.t_and(lits, -KAPPA)
+            if isinstance(v, int):
+                if v:
+                    terms += c.t_and(lits, 2 * KAPPA)
+            else:
+                terms += c.t_and([*lits, v], 2 * KAPPA)
+        c.ffn(terms, f"exit.id{i}", into=e, min_level=exit_min)
     c.keep = [next(iter(e.terms)) for e in c.code]
     if text:
         # tau: 0 wherever the circuit predicts (chip tokens: -1 + 1; owned text: TAU - TAU), the

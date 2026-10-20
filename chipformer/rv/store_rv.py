@@ -278,15 +278,36 @@ def build(c, cfg: "ST.Config", in_call):
     # name rows carry no ballast; the reset writes row 127 with it (and clears the rest)
     nbuf = thead(c, "st.nbuf", keys, {s: one for s in keys},
                  [{"data": data, "ref": Chan(nreset), "a": 238 * nreset}])[0]
+    c.nodes[-1].qhot = len(keys)  # (a multi-hot read: the executors' top-k)
     st.nbuf = [nbuf[ST.ID_BITS * n:ST.ID_BITS * (n + 1)] for n in range(ST.NMAX)]
 
     # the text: each value token's index, its length
     treset = tco + pt
     x_ci = counter(c, "st.ci", treset, val_text)
-    ibits = count_bits(c, x_ci, treset, ST.CMAX + 1, 7, "st.i")  # max(n - 1, 0)
-    st.tlen = ibits  # after the text: its length (the closer's "</" was counted)
-    content = c.node(c.t_and([val_text]) + neg(ge_terms(c, x_ci, treset, ST.CMAX + 1, a=val_text)),
-                     "st.content")
+    st.tlen = count_bits(c, x_ci, treset, ST.CMAX + 1, 7, "st.tlen")  # max(n - 1, 0) after it
+
+    def at_index(pred, name):
+        """val_text * [the token's index i < CMAX has pred(i)] (n = i + 1)."""
+        terms = []
+        for i in range(ST.CMAX):
+            if pred(i):
+                terms += ge_terms(c, x_ci, treset, i + 1, a=val_text)
+                terms += neg(ge_terms(c, x_ci, treset, i + 2, a=val_text))
+        return c.node(terms, name)
+
+    W = ST.TPR // 2  # tokens per value head row: 7
+    slot = [at_index(lambda i, k=k: i % W == k, f"st.slot=={k}") for k in range(W)]
+    half1 = at_index(lambda i: i // W % 2 == 1, "st.half")
+    crow = [at_index(lambda i, r=r: i // ST.TPR == r, f"st.crow=={r}")
+            for r in range(ST.ROWS_PER_CHUNK)]
+    content = sum(slot, Expr())  # a text token with index < CMAX
+    # the current value head row so far (tokens i - i % 7 .. i), one block each: row k holds
+    # the token of slot k; row 0 carries the ballast, and its write clears the others
+    gdata = {2 + ST.ID_BITS * k + b: match_form([st.xb[b], slot[k]])
+             for k in range(W) for b in range(ST.ID_BITS)}
+    gbuf = thead(c, "st.gbuf", {k: slot[k] for k in range(W)}, {k: one for k in range(W)},
+                 [{"data": gdata, "ref": slot[0], "a": 238 * slot[0]}])[0]
+    c.nodes[-1].qhot = W
 
     # ------------------------------------------------------------------ registers
     # NEXTG (next free chunk), NORD (order entries), GCUR (a get's chunk), LCUR (a list's
@@ -304,6 +325,7 @@ def build(c, cfg: "ST.Config", in_call):
             col += 1
     out = thead(c, "st.regs", rkeys, {s: one for s in rkeys},
                 [{"data": rdata, "ref": Chan(is_text)}])[0]
+    c.nodes[-1].qhot = len(rkeys)
     by_col = dict(zip(sorted(rdata), out))
     reg = {rname: [by_col[k] for k in cols] for rname, cols in blocks.items()}
     st.reg = reg
@@ -462,19 +484,26 @@ def build(c, cfg: "ST.Config", in_call):
         st.persistent[f"st.next{h}"] = c.nodes[-1]
     c_next, c_has = x_rows[:PAY_BITS], x_rows[PAY_BITS]
 
-    # content: written as the text is written (chunk NEXTG, index i < CMAX), read at chunk GCUR,
-    # index H (a get's print). Row (g, i // 8) of all chunks' 13 rows, back to back.
+    # content: row (g, i // 14) of each chunk's 8 rows, back to back; value head (i // 7) % 2
+    # holds tokens 7 at a time. Written at every text token with the row so far (the staging
+    # head), read at chunk GCUR, index H (a get's print): the output gates pick the token.
     gw = groups(c, reg["NEXTG"], "st.nextg")
-    iw = groups(c, ibits[3:7], "st.irow")
-    e = [[c.and_([st.xb[b], content, *lits_of(ibits[:2], s_)], f"st.e{s_}.{b}")
-          for b in range(ST.ID_BITS)] for s_ in range(4)]
-    beta = [c.and_([content, one - ibits[2]], "st.beta.a"), c.and_([content, ibits[2]], "st.beta.b")]
     get_print = c.and_([Sx, chain], "st.get_print")
-    hr = groups(c, hbits[3:7], "st.hrow")
-    cdata = {2 + ST.ID_BITS * s_ + b: Chan(e[s_][b], (1, 1, 1, 1))
-             for s_ in range(4) for b in range(ST.ID_BITS)}
+
+    def h_at(pred, name):
+        """[H has pred(H)] for H < CMAX."""
+        terms = [(1, one, one)] + neg(ge_terms(c, x_h, hreset, 1)) if pred(0) else []
+        for v in range(1, ST.CMAX):
+            if pred(v):
+                terms += ge_terms(c, x_h, hreset, v) + neg(ge_terms(c, x_h, hreset, v + 1))
+        return c.node(terms, name)
+
+    hrow = [h_at(lambda v, r=r: v // ST.TPR == r, f"st.hrow=={r}")
+            for r in range(ST.ROWS_PER_CHUNK)]
+    hgate = [[h_at(lambda v, x=x, k=k: v // W % 2 == x and v % W == k, f"st.hgate{x}.{k}")
+              for k in range(W)] for x in range(2)]
+    c_tok = c.zeros(ST.ID_BITS, "st.ctok")
     n_rows = cfg.n_chunks * ST.ROWS_PER_CHUNK
-    c_rows = None
     for h in range(-(-n_rows // 128)):
         keys, qs = {}, {}
         for r in range(128):
@@ -482,16 +511,24 @@ def build(c, cfg: "ST.Config", in_call):
             if R >= n_rows:
                 break
             g, ir = divmod(R, ST.ROWS_PER_CHUNK)
-            keys[r] = match_form([content, *addr_lits(gw, g), *addr_lits(iw, ir)])
-            qs[r] = match_form([get_print, *addr_lits(gcur_g, g), *addr_lits(hr, ir)])
-        vh = [{"data": cdata, "ref": one, "beta": beta[0], "gate": one - hbits[2],
-               "into": c_rows},
-              {"data": cdata, "ref": one, "beta": beta[1], "gate": hbits[2],
-               "into": c_rows or "main"}]
-        o = thead(c, f"st.content{h}", keys, qs, vh)
-        c_rows = c_rows or o[0]
+            keys[r] = match_form([crow[ir], *addr_lits(gw, g)])
+            qs[r] = match_form([get_print, hrow[ir], *addr_lits(gcur_g, g)])
+        vhs = []
+        for x in range(2):
+            v, z, outs, into = {}, {}, [], []
+            for k in range(W):
+                for b in range(ST.ID_BITS):
+                    col = 2 + ST.ID_BITS * k + b
+                    v[col] = Chan(gbuf[col - 2] * A_BIT)
+                    z[col] = K * hgate[x][k]
+                    outs.append((col, 2.0**7))
+                    into.append(c_tok[b])
+            for rc in REF_COLS:
+                v[rc] = Chan(one * A_REF)
+            vhs.append({"v": v, "z": z, "outs": outs, "into": into,
+                        "beta": half1 if x else content - half1})
+        c.table(f"st.content{h}", qs, keys, vhs)
         st.persistent[f"st.content{h}"] = c.nodes[-1]
-    c_tok = [c_rows[ST.ID_BITS * s_:ST.ID_BITS * (s_ + 1)] for s_ in range(4)]
 
     # ------------------------------------------------------------------ comparisons
     lenv = from_bits(c_len)
@@ -551,20 +588,20 @@ def build(c, cfg: "ST.Config", in_call):
     case([*hdr_l, hs[2]], NL)
     case([*hdr_l, hs[3], p_get, r_found], ("SG", r_head))
     case([*hdr_l, hs[3], p_lst, one - nord0], ("SL", 0))
-    m_ok = c.node(c.t_and([putapp, one - r_full]) + c.t_and([p_del, r_found]), "st.msg.ok")
-    m_full = c.and_([putapp, r_full], "st.msg.full")
-    m_nf = c.node(c.t_and([p_del, one - r_found]) + c.t_and([p_get, one - r_found]), "st.msg.nf")
-    m_em = c.and_([p_lst, nord0], "st.msg.empty")
-    for m_, toks in ((m_ok, ST.MSG["ok"]), (m_full, ST.MSG["full"]), (m_nf, ST.MSG["not_found"]),
-                     (m_em, ST.MSG["empty"])):
-        for i, q in enumerate(toks):
-            anyc([*hdr_l, hs[3 + i], m_], ST.id_bits(q))
-        case([*hdr_l, hs[3 + len(toks)], m_], NL)
-        case([*hdr_l, hs[4 + len(toks)], m_], TRC)
+    # the messages (each condition a list of exclusive literal sets: no extra sublayer)
+    msgs = [([[putapp, one - r_full], [p_del, r_found]], "ok"), ([[putapp, r_full]], "full"),
+            ([[p_del, one - r_found], [p_get, one - r_found]], "not_found"),
+            ([[p_lst, nord0]], "empty")]
+    for conds, mname in msgs:
+        toks = ST.MSG[mname]
+        for m_ in conds:
+            for i, q in enumerate(toks):
+                anyc([*hdr_l, hs[3 + i], *m_], ST.id_bits(q))
+            case([*hdr_l, hs[3 + len(toks)], *m_], NL)
+            case([*hdr_l, hs[4 + len(toks)], *m_], TRC)
     # a get's chunks: content[GCUR][H] while H < length, then the next chunk or the end
     gp = [chain, one - tl]
-    for s_ in range(4):
-        anyc([*gp, in_chunk, *lits_of(hbits[:2], s_)], c_tok[s_])
+    anyc([*gp, in_chunk], c_tok)
     case([*gp, one - in_chunk, c_has], ("SG", c_next))
     case([*gp, one - in_chunk, one - c_has], TRC)
     # a list: at SL(i) and each printed name token
@@ -582,20 +619,9 @@ def build(c, cfg: "ST.Config", in_call):
     case([tl, f_thc], NL)
     case([tl, f_nl, pv["thc1"]], NL)
 
-    # any-prints: their condition and the 18 id bits of the token
-    anyp = c.node([t for lits, _ in anyp_cases for t in c.t_and(lits)], "st.anyprint")
-    ybits = []
-    for b in range(ST.ID_BITS):
-        terms = []
-        for lits, bits in anyp_cases:
-            v = bits[b]
-            if isinstance(v, int):
-                if v:
-                    terms += c.t_and(lits)
-            else:
-                terms += c.t_and([*lits, v])
-        ybits.append(c.node(terms, f"st.ybit{b}"))
-    st.cases, st.anyp, st.ybits = cases, anyp, ybits
+    # any-prints: (literals, the 18 id bits as ints or forms); the exit computes the id code
+    # from them directly (core.build)
+    st.cases, st.any_cases = cases, anyp_cases
     st.debug = dict(match=match, found=found, stop=stop, full=full, H=hbits, rec=rec, tl=tl,
                     hash=hsh, in_chunk=in_chunk, in_name=in_name, d_used=d_used, d_alive=d_alive,
                     d_tail=d_tail, d_head=d_head, c_len=c_len, c_has=c_has, c_next=c_next,
