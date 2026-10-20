@@ -12,7 +12,7 @@ Code: `chipformer/rv/store.py` (reference, protocol), `chipformer/rv/store_rv.py
 | F0 port + F1 hashed directory (IR) | done, gate passed |
 | F2 capacity and fit (merge, executor, batch) | done |
 | F3 persistence (`save_store` / `load_store`) | done (chat, rvbatch; GPU round trip) |
-| F4 merge and GPU checks | see "GPU results" (KL and arithmetic: running) |
+| F4 merge and GPU checks | done, gate reached (see "GPU results") |
 | F5 benchmarks, F6 write-up | not started |
 
 Checkpoint `rv-q4store` (q35-eval `~/weights/dist/rv-q4store`, not uploaded): `python -m
@@ -195,6 +195,9 @@ v1 needed 2 per directory entry up to the match for every op.
   identical token streams on 23 of 40 arith problems (the two rv-q4p2 runs on different GPUs:
   25 of 40), among them three 100k-token loops; they split only on arith-18 and arith-39, in
   Qwen's text. So the store moves Qwen's rounding about as much as a change of GPU does.
+- **IR replay** of the 40 rv-q4store arith records (the reference with the store, the IR from
+  the snapshot): 40/40 clean, 453,152 positions, 417,834 circuit-owned, 0 wrong predictions,
+  0 owner mismatches.
 
 Bugs found on the GPU and fixed:
 
