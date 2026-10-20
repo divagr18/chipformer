@@ -297,9 +297,7 @@ def test_circuit_with_calc(T):
     ses.qwen(calc_call(T, "99999999999*99999999999"))
     ses.call("list")
     out = [T.decode_bytes(r).decode() for r in ses.runs]
-    # (only the first: calc-bridge.elf's later answers depend on earlier results, e.g. 7*6 after
-    # 12*34 prints 2; a firmware bug outside the store, which the circuit reproduces exactly)
-    assert out[0].split("\n")[2] == "408" and len(out) == 3
+    assert [o.split("\n")[2] for o in out] == ["408", "42", str(99999999999**2)]
     assert ses.printed()[3] == "12*34 = 408 and 7*6\n"  # (calc, put, calc, get)
     check(T, c, ses)
 

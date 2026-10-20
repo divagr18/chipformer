@@ -145,8 +145,18 @@ v1 needed 2 per directory entry up to the match for every op.
   - thousands of text tokens between calls;
   - a fresh session whose store heads start from session 1's state (the snapshot).
 
+- Extended fuzz (not in the suite): 2 x 150 random ops with every name colliding (`hash_bits` 0,
+  16 slots) and a 3-bit hash (64 slots), calc calls in between: 39k tokens, 26,249 owned
+  positions, 0 mismatches.
+- Existing suites on this branch: test_rv_bridge 9, test_rv_ref 130, test_rv_fuzz 4,
+  test_rv_core 94, test_q35_ir 3, test_q35_ir_vheads 1, all pass. test_rv_hf crashes with a
+  Windows access violation in torch 2.14.1+cpu here, in the untouched rv-p3b worktree too; it
+  is run on the GPU box in F2.
+
 ## Found along the way
 
-- `calc-bridge.elf` (rv-p3b) answers wrongly when calls follow each other: `12*34` then `7*6`
-  gives `2`, `12+34` then `7+6` gives `83`. The reference machine and the circuit agree on it,
-  so the merged model prints the same. Not fixed here (firmware, outside the store).
+- `calc-bridge.elf` (rv-p3b) answered wrongly when calls followed each other (`12*34` then `7*6`
+  gave `2`): digits left in the bignum registers. Fixed on rv-p3b (456c947) and cherry-picked
+  here (05ad59b); test_circuit_with_calc now checks all three answers.
+- `fastexec.Generator` iterated `OUT_NAMES` with `S.tok("Q", 0)` (a KeyError since P3 added
+  `Q`); it now skips `Q`.
