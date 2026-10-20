@@ -385,6 +385,10 @@ static int apply(int op, int nv) {  // returns the new value count
 static int calc_eval(void) {  // prints the value (or "error") and a newline; 0 on success
     used = 0;
     err = 0;
+    for (int r = 0; r < ONE; r++) {  // every call starts clean: no digits left by the last one
+        bn_mac(BN_OPS(63, 0, 0, r, r, 1));
+        dirty[r] = 0;
+    }
     bn_ld(&one_ch + 1, BN_OPS(1, 0, 0, ONE, 0, 0));
     const char *s = calc_in;
     int operand = 1, nv = 0, no = 0;  // operand: an operand (or a prefix) comes next
