@@ -78,3 +78,42 @@ The model's weights, scales and caches stay data.
    `run_check` harness), starting with VPUT/VGET, then VMAT, VQ, VEW, VMATR/VEXP/VRED.
 4. Whole-program checks (the IR on prefixes, the executor free-running) and the layer, hidden-size
    and checkpoint measurements.
+
+## Circuit facts that shaped the format (found while building)
+
+- **Runtime writes store bits.** A head's written row holds 0 or A_BIT per column; byte-valued
+  rows are allowed only in snapshot-loaded tables (ROM, DROM, WROM). So VM, VA and the caches
+  store bits: a 31-bit word is 31 columns.
+- **Reads:** keys are one-hot. Queries are multi-hot with equal values, and exact only at
+  power-of-4 counts (the kernel scales by 1 / sqrt(count)). A multi-hot read sums the rows, so
+  rows must use disjoint columns unless the sum is wanted, and a count stays exact up to 256.
+- **Gates:** beta is 1 or an integer <= 0. It can use dims computed below the head at t (a head
+  in L2 can gate on L1's counters and config). A head in L1 can use token features only.
+- **Keys:** a key comes from dims at t-1 below the head's layer, so an L2 head's key can use L1
+  outputs (counters, thermometers, config) in linear (andpre) forms, but nothing from an MLP above
+  L1. That is why addresses are concatenations: an element offset is aligned to the op's
+  power-of-two length, so element = offset | count.
+- **Counters:** a thermometer reaches m < 88 (bf16), so streams are at most 64 tokens. JMAX is 66.
+- **Vocabulary:** a 65,536-token family costs about 0.5 GB in the tied embedding. The unit adds
+  VE and VH (16 bits each); VC uses the freed WB family (15 bits).
+- **Config:** 8 slots of 12 bits, one single-row value head each (4 key heads in L1). A VC token
+  writes the slot named by its top 3 bits, gated by those token bits.
+- **Counters for the unit (L1):** vel counts VH tokens since the last VC or record start (the
+  element of the next token), and vsub counts VE tokens since the last VH or VC (its position
+  inside the element).
+- **VM:** one element per row (31 bit columns): 2 banks × 512 rows = 4 key heads. A read is the
+  2-hot pair containing the element; a write is one element at its VH, from lags 1 (VE, bits
+  0-15) and 0 (VH, bits 16-30).
+- **VA:** 6 chunks of 32 byte pairs. A row is a pair (16 columns), 4 rows per value head, so a
+  chunk read is 4-hot in each of 4 key heads. A VQ / VEXP byte goes in at the odd element's VH
+  together with the even byte from lag 1.
+- **The V cache for p.V** needs every slot's byte j in one read. Layout idea: one value head per
+  slot t (32 value heads = 16 key heads), rows (l, g), and z gates that pick byte j's 8 columns,
+  giving 256 dims. Not built yet. The head budget is tight: L2 has 16, L1 11; L3 frees 16 if the
+  ROM shrinks to 128 KB.
+
+## Status
+
+- Reference v5 (element units, aligned offsets, 6-chunk VA, slotted VC, VE / VH, 31-bit words):
+  stories260K 2.16M trace tokens for the 60-token story (12.53M today), same story.
+- Circuit: VDOT / WB / SMAQA removed (99 heads, 42.1k units, 11 layers). The unit isn't built yet.
