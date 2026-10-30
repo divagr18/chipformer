@@ -20,7 +20,13 @@ The int4 weights (`qat_int4.npz`) come from self-distillation against the float 
 samples (`qat.py`, KL 0.019, top-1 agreement 93.8%). Greedy output on the CPU matches the float
 model for 60 tokens.
 
-## Build and run
+## Run
+`stories260k.elf` is the prebuilt program (60 story tokens, about 41 s each on an L4):
+```sh
+cd ../.. && python guests/stories260k/storyrun.py guests/stories260k/stories260k.elf
+```
+
+## Build
 ```sh
 curl -LO https://huggingface.co/karpathy/tinyllamas/resolve/main/stories260K/stories260K.bin
 curl -LO https://huggingface.co/karpathy/tinyllamas/resolve/main/stories260K/tok512.bin
