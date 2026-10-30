@@ -295,6 +295,8 @@ def execute(m, ins) -> list[int]:
         src, eoff, n, dst, sh, off, r = (f[x] for x in ("src", "eoff", "n", "dst", "sh", "off", "r"))
         check(n % 2 == 0 and 0 < n <= 64 and (dst or off + n <= 384), f"VQ n {n}")
         aligned(eoff, n)
+        if dst == 0:
+            aligned(off, n)
         qs = []
         for i in range(n):
             p = clamp16(v.vm[src][eoff + i] >> sh) * r
@@ -332,6 +334,7 @@ def execute(m, ins) -> list[int]:
     elif op == "VEXP":
         src, n, off, ksh, c, mx = (f[x] for x in ("src", "n", "off", "ksh", "c", "m"))
         check(0 < n <= 64 and off + n + n % 2 <= 384, f"VEXP n {n}")
+        aligned(off, n + n % 2)
         ps = []
         for i in range(n):
             e = min(sx(mx, 31) - v.vm[src][i], 65535)

@@ -45,6 +45,7 @@ from chipformer.dsl.graph import Expr
 from chipformer.q35.ir import A_BIT, A_REF, HD, REF_COLS, Chan, K, Target
 from chipformer.q35.prims import Circ, chan, from_bits, sel, thead
 from chipformer.rv import ref as RF
+from chipformer.rv import vxcirc
 from chipformer.rv import spec as S
 
 T4B = Target(key_heads=16, value_heads=32, intermediate=9216)  # Qwen3.5-4B's layers
@@ -60,7 +61,7 @@ CODE_AMP = 128  # a token's code in its (tied) embedding row: CODE_AMP * (2 * bi
 KAPPA = 2.0**-20  # the predicted code after the exit: KAPPA * (2 * bit - 1)
 TAU_TEXT = 2.0**-40  # (P3) tau on text tokens; -1 on chip tokens (see q35.merge)
 PAY_W = {"V": 15, "F0": 15, "F1": 15, "F2": 2, "J": 16, "R": 16, "BYTE": 9, "FLT": 3, "HEX": 4,
-         "QS": 4, "QD": 7, "BD": 8, "WB": 15}
+         "QS": 4, "QD": 7, "BD": 8, "VC": 15, "VE": 16, "VH": 16}
 
 
 def code_bits(fam: str, p: int) -> list[int]:
@@ -124,7 +125,7 @@ class RvCore(Circ):
             return lambda t: (famof(t)[1] >> i & 1) if famof(t)[0] == nm else 0
 
         names = list(S.FAMILIES) + S.CONTROL_NAMES
-        paid = ("V", "F0", "F1", "F2", "J", "R", "QD", "BD") + (("BYTE",) if text else ())
+        paid = ("V", "F0", "F1", "F2", "J", "R", "QD", "BD", "VC", "VE", "VH") + (("BYTE",) if text else ())
         self.fam = {n: f(f"is{n}", fam_is(n), full=True) for n in names}
         self.pay = {n: [f(f"{n}.b{i}", pay_bit(n, i), full=True) for i in range(w)]
                     for n, w in PAY_W.items() if n in paid}
@@ -1155,6 +1156,8 @@ def build(target: Target | None = None, text=None) -> RvCore:
     for k in range(8):
         case([jeq(1 + k), any_fault], "HEX", pc_bits[4 * (7 - k):4 * (8 - k)])
     case([jeq(9), any_fault], "HALT")
+    # the vector unit (vxcirc.py): its state, memories and exit cases
+    c.vx = vxcirc.build(c, one, fam, pay, uops, A, B, C, jt, jeq, nr, rec_start, case)
     owner = None
     if text:
         cases.append(([fam["BYTE"]], "Q", c.pay["BYTE"], 1))
@@ -1307,6 +1310,7 @@ def snapshot(c: RvCore, m: "RF.Machine") -> None:
                 row[2 + i] = A_BIT * (m.ram[wi] >> i & 1)
             (r1 if wi >> 4 & 1 else r0)[wi >> 5 & 127] = row
         c.tables[f"ram{h}"].init = [r0, r1]
+    vxcirc.snapshot(c, m)
 
 
 def decode_code(fid: int, p: int, text=None) -> int:
