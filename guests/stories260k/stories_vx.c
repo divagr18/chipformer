@@ -17,8 +17,8 @@
 #define NTOK 8
 #endif
 #define W 32       // cache slots: slot 0 holds position 0, slots 1..31 a ring of the latest
-#define OFFQ 192   // VA: xq at 0..191, the head's query at OFFQ, probabilities at OFFP
-#define OFFP 208
+#define OFFQ 3     // VA chunks: xq in 0..2, the head's query in 3, probabilities in 4
+#define OFFP 4
 // vector registers: bank A 0..7, bank B 8..15 (an op reads at most one of each)
 enum { RX = 0, RQ = 1, RK = 2, RH = 3 /* 3..5 */, RSC = 6, RXB = 8, RV = 9, RG = 10 /* 10..12 */,
        RO = 13 };
@@ -45,8 +45,8 @@ static void vq(int src, int eoff, int n, int dst, int sh, int off, int32_t r) {
 static void vew(int a, int b, int eoff, int n, int op, int keep, int sh, int so, int shb, int32_t p) {
     VOP(3, a | b << 4 | n << 8 | op << 15 | keep << 17 | eoff << 18, sh | (so & 63) << 5 | shb << 11, p);
 }
-static void vexp(int src, int n, int off, int ksh, int32_t c) {
-    VOP(4, src | n << 4 | off << 11 | ksh << 19, 0, c);
+static void vexp(int src, int n, int off, int ksh, int32_t m, int32_t c) {
+    VOP(4, src | n << 4 | off << 11 | ksh << 20, m, c);
 }
 static void vred(int n, int mode, int off) { VOP(6, n | mode << 7 | off << 8, 0, 0); }
 static void vput(int target, int32_t lo, int32_t hi) { VOP(7, target, lo, hi); }
@@ -131,7 +131,7 @@ static void attend(int l, int g, int n, int32_t f) {
             bl = bitlen((uint32_t)araw);
         }
         int sh = bl > 11 ? bl - 11 : 0;
-        vq(RQ, HS * h, HS, 0, sh, OFFQ, (127 << 15) / (araw >> sh));
+        vq(RQ, HS * h, HS, 0, sh, 64 * OFFQ, (127 << 15) / (araw >> sh));
         // ca = amax * KC >> 16 (stories6.c's exp-table scale), as its top 16 bits
         uint32_t lo = (uint32_t)amax * KC[l], hi = mulhu((uint32_t)amax, KC[l]);
         int32_t ca = (int32_t)(hi << 16 | lo >> 16), c, ksh;
@@ -143,7 +143,7 @@ static void attend(int l, int g, int n, int32_t f) {
             c = ca >> k1, ksh = 32 - k1;
         }
         vmatr(RSC, 0, n, 0, 0, OFFQ, row, 0);  // scores over the K cache, the signed max for VEXP
-        vexp(RSC, n, OFFP, ksh, c);
+        vexp(RSC, n, 64 * OFFP, ksh, vget(0), c);
         vred(n, 1, OFFP);
         int32_t r = (VMAX[l] << 12) / (127 * vget(1));
         // o (Q16) = sum p v8 * VMAX / 127 / sum p; max |o| over the heads
@@ -217,7 +217,7 @@ static int forward(int tok, int pos) {
     // the classifier: the final norm only rescales the logits, so argmax skips it
     quantize(RX, DIM, vmax, bl, 0);
     for (int r = 0; r < VOCAB; r += 64) vmat(0, 0, 64, 1, 1, r > 0, 0, WB_CLS + r);
-    return vget(2);
+    return vget(2) - WB_CLS;
 }
 
 int main(void) {
