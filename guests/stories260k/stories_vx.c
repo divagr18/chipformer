@@ -101,11 +101,11 @@ static int32_t norm_f(int n) {
 
 static int32_t plain_f(int32_t amax) { return (int32_t)(((uint32_t)amax << 9) / 127 << 8); }
 
-// rows of a 64-input matrix into registers dst.. (64 rows a register, 32 an op); returns the
+// rows of a 64-input matrix into registers dst.. (64 rows a register, 16 an op); returns the
 // window of the outputs
 static int matmul(int dst, int base, int rows) {
-    for (int r = 0; r < rows; r += 32)
-        vmat(dst + r / 64, r % 64, rows - r < 32 ? rows - r : 32, 1, 0, r > 0, 0, base + r);
+    for (int r = 0; r < rows; r += 16)
+        vmat(dst + r / 64, r % 64, rows - r < 16 ? rows - r : 16, 1, 0, r > 0, 0, base + r);
     return vwin();
 }
 
@@ -216,7 +216,7 @@ static int forward(int tok, int pos) {
     }
     // the classifier: the final norm only rescales the logits, so argmax skips it
     quantize(RX, DIM, vmax, bl, 0);
-    for (int r = 0; r < VOCAB; r += 64) vmat(0, 0, 64, 1, 1, r > 0, 0, WB_CLS + r);
+    for (int r = 0; r < VOCAB; r += 16) vmat(0, 0, 16, 1, 1, r > 0, 0, WB_CLS + r);
     return vget(2) - WB_CLS;
 }
 

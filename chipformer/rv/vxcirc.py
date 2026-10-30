@@ -70,7 +70,7 @@ def count_bit(c, x, b, top, name, base=None, shift=0):
     return node + base
 
 
-def build(c, one, fam, pay, uops, A, B, C, jt, jeq, nr, rec_start, case):
+def build(c, one, fam, pay, uops, A, B, C, jt, jeq, nr, rec_start, case, rdw_any, ok):
     """Builds the unit and adds its exit cases; returns its state (for snapshots and probes)."""
     u = VX()
     # ---------------------------------------------------------------- L1: config, counters
@@ -139,7 +139,7 @@ def build(c, one, fam, pay, uops, A, B, C, jt, jeq, nr, rec_start, case):
                 for i in range(15):
                     data[18 + i] = Chan(pay["VH"][i], (1, 0, 0, 0))
                 # the element this VH completes: offset | vel - 1 (its pair's bit 4, parity)
-                gate = ([isVH] + w_is(1) + lits(dst[3:4], int(bank == "B"))
+                gate = ([isVH, wt[2], 1 - wt[1]] + lits(dst[3:4], int(bank == "B"))
                         + lits(pairw[4:5], kh) + lits([parw], x))
                 vhs.append({"data": data, "ref": one, "beta": andpre(gate), "into": dims[x]})
             thead(c, f"vx.vm{bank}{kh}", keys, q, vhs)
@@ -183,7 +183,8 @@ def build(c, one, fam, pay, uops, A, B, C, jt, jeq, nr, rec_start, case):
         c.tables[f"vx.va{kh}"] = c.nodes[-1]
         for x in range(2):
             va_read += [outs[x][16 * j:16 * j + 16] for j in range(4)]  # 4 pairs of 16 bits
-    u.va = [bits for pr in va_read for bits in (pr[0:8], pr[8:16])]  # 64 bytes, as bit lists
+    # a 4-hot read returns each row at 1/4
+    u.va = [[4 * d for d in bits] for pr in va_read for bits in (pr[0:8], pr[8:16])]  # 64 bytes
 
     # ---------------------------------------------------------------- VQ
     # q = clamp(round(clamp16(VM[src][e] >> sh) * r / 2^15), +-127): the element (bank and
@@ -211,6 +212,85 @@ def build(c, one, fam, pay, uops, A, B, C, jt, jeq, nr, rec_start, case):
     q8 = sat127_bits(c, p[15:31], "vx.vq.q")
     u.vq = q8
 
+
+    # ---------------------------------------------------------------- L2: trackers
+    # stored from the payloads of a result's two tokens (VE bits 0-15 at lag 1, VH bits 0-14 at
+    # lag 0): vsum at VRED's VH (write target 1); vmx at a flagged VH writing VM (targets 4 / 5,
+    # bit 0 = signed, kept with it); vbest at a flagged VH writing nothing (VMAT's argmax), with
+    # varg = the row's last row-chunk (base | vel - 1)
+    word_v = {2 + i: Chan(pay["VE"][i], (0, 1, 0, 0)) for i in range(16)}
+    word_v.update({18 + i: Chan(pay["VH"][i], (1, 0, 0, 0)) for i in range(15)})
+    flag = pay["VH"][15]
+    s4c, s5c = cfg[4], cfg[5]
+    wbase = s4c[0:12] + s5c[0:1]
+    varg = [count_bit(c, xel, b, 64, f"vx.varg{b}", base=wbase[b], shift=1) for b in range(13)]
+    trk = {}
+    for name, extra, gate in (
+            ("vsum", {}, [isVH, wt[0], 1 - wt[1], 1 - wt[2]]),
+            ("vmx", {33: wt[0]}, [isVH, flag, wt[2], 1 - wt[1]]),
+            ("vbest", {33 + b: varg[b] for b in range(13)}, [isVH, flag] + lits(wt, 0))):
+        data = dict(word_v)
+        data.update(extra)
+        (outs,) = thead(c, f"vx.{name}", {0: one}, {0: one},
+                        [{"data": data, "ref": one, "beta": andpre(gate)}])
+        c.tables[f"vx.{name}"] = c.nodes[-1]
+        trk[name] = outs
+    u.trk = trk
+
+    # ---------------------------------------------------------------- VRED
+    # vsum = sum over i < n of VA chunk byte i, squared (mode 0) or as is (mode 1): per lane the
+    # nibble products lo^2, 2 lo hs, hs^2 (q = lo + 16 hs, hs signed), summed by sum_columns
+    n_red = from_bits(s2[10:12]) + 4 * from_bits(s4c[0:5])
+    mode1 = s2[9]
+    lane = [c.node(c.t_ge(n_red, i + 1, 0, 127), f"vx.red.g{i}") for i in range(64)]
+    cols = [[], [], []]
+    for i, q in enumerate(u.va):
+        lo_b, hs_b = q[0:4], q[4:8]
+        lo_v = from_bits(lo_b)
+        hs_v = from_bits(hs_b[0:3]) - 8 * hs_b[3]
+        g0, g1 = [lane[i], 1 - mode1], [lane[i], mode1]
+
+        def sv(v):
+            return v - 16 if v >= 8 else v
+
+        c0 = (sum((c.t_and(lits(lo_b, v) + g0, v, a=lo_v) for v in range(1, 16)), [])
+              + sum((c.t_and([lo_b[b]] + g1, 1 << b) for b in range(4)), []))
+        c1 = (sum((c.t_and(lits(lo_b, v) + g0, 2 * v, a=hs_v) for v in range(1, 16)), [])
+              + sum((c.t_and([hs_b[b]] + g1, -8 if b == 3 else 1 << b) for b in range(4)), []))
+        c2 = sum((c.t_and(lits(hs_b, v) + g0, sv(v), a=hs_v) for v in range(1, 16)), [])
+        cols[0].append((c.node(c0, f"vx.red.c0.{i}"), 0, 225))
+        cols[1].append((c.node(c1, f"vx.red.c1.{i}"), -240, 210))
+        cols[2].append((c.node(c2, f"vx.red.c2.{i}"), 0, 64))
+    red = sum_columns(c, cols, 8, "vx.red")
+    u.red = red
+
+    # ---------------------------------------------------------------- VGET
+    # rd = vmx (|s|, or s when it was tracked signed) / vsum / varg / bit length of vmx, by rs1
+    sv_bits = trk["vmx"][0:31]
+    signed_t = trk["vmx"][31]
+    neg = [1 - b for b in sv_bits] + [one]  # -s = ~s + 1 (32 bits, s sign-extended)
+    from chipformer.rv import core as CORE
+    negs = CORE.add_nibbles(c, neg, [one] + [ZERO] * 31, 8, [], "vx.get.neg")
+    sgn = sv_bits[30]
+    absv = [c.node(c.t_and([1 - sgn, sv_bits[min(i, 30)]]) + c.t_and([sgn, 1 - signed_t, negs[i]])
+                   + c.t_and([sgn, signed_t, sv_bits[min(i, 30)]]), f"vx.get.abs{i}")
+            for i in range(32)]
+    th = [c.node(c.t_const(1) + c.t_and([1 - b for b in absv[m:31]], -1), f"vx.get.ge{m}")
+          for m in range(31)]
+    blen = c.int_bits(sum(th, Expr()), 31, "vx.get.bl", 5)
+    srcs = [absv, list(trk["vsum"][0:31]) + [trk["vsum"][30]], list(trk["vbest"][31:44]),
+            blen]
+    gv = []
+    for i in range(32):
+        terms = []
+        for sel, bl in enumerate(srcs):
+            if i < len(bl):
+                terms += c.t_and(lits(A[0:2], sel) + [bl[i]])
+        gv.append(c.node(terms, f"vx.get.v{i}"))
+    k0 = c.node(c.t_and(gv[14:32]) + c.t_and([1 - b for b in gv[14:32]]), "vx.get.fits15")
+    k1 = c.node(c.t_and(gv[29:32]) + c.t_and([1 - b for b in gv[29:32]]), "vx.get.fits30")
+    u.get = gv
+
     # ---------------------------------------------------------------- the exit
     def vc_case(op, k, slot, parts):
         """VC token k of op: slot, then the 12 data bits packed from (bit list, width) parts."""
@@ -229,15 +309,15 @@ def build(c, one, fam, pay, uops, A, B, C, jt, jeq, nr, rec_start, case):
 
     # VPUT: one VC (slot 0: target >> 5, target & 31, write target VM when target < 512), then
     # rs1 and rs2 as words
-    vc_case("VPUT", 0, 0, [(C[5:9], 4), (C[0:5], 5), ([one - C[9]], 3)])
+    vc_case("VPUT", 0, 0, [(C[5:9], 4), (C[0:5], 5), ([ZERO, ZERO, one - C[9]], 3)])
     for e, src in enumerate((A, B)):
         stream("VPUT", 1, [el_eq(e), sub_eq(0)], "VE", src[0:16])
         stream("VPUT", 1, [el_eq(e), sub_eq(1)], "VH", src[16:31] + [ZERO])
     stream("VPUT", 1, [el_eq(2)], "NT")
 
     # VQ: VC slots 0, 1, 2, 3, 4, 5, then a VH per element (the byte), NT after n
-    vc_case("VQ", 0, 0, [([ZERO] * 4, 4), (C[5:10], 5),
-                         ([C[17], 1 - C[18], C[18]], 3)])
+    dst_any = c.node(c.t_and([C[17]]) + c.t_and([C[18]]) + c.t_and([C[17], C[18]], -1), "vx.vq.dany")
+    vc_case("VQ", 0, 0, [([ZERO] * 4, 4), (C[5:10], 5), ([C[18], one, dst_any], 3)])
     vc_case("VQ", 1, 1, [(and_bits(c, C[0:3], 1 - C[3], "vx.vq.ra"), 3),
                          (and_bits(c, C[0:3], C[3], "vx.vq.rb"), 3)])
     vc_case("VQ", 2, 2, [(A[0:9], 9), (C[15:17], 2), ([C[3]], 1)])
@@ -248,6 +328,22 @@ def build(c, one, fam, pay, uops, A, B, C, jt, jeq, nr, rec_start, case):
     done = c.node(c.t_eq(sum(velt, Expr()) - n_vq, 0, -126, 64), "vx.vq.done")
     stream("VQ", 6, [1 - done], "VH", q8 + [ZERO] * 8)
     stream("VQ", 6, [done], "NT")
+
+    # VRED: VC slots 0, 2, 4, then the sum as a word, NT
+    vc_case("VRED", 0, 0, [([ZERO] * 9, 9), ([one, ZERO, ZERO], 3)])
+    vc_case("VRED", 1, 2, [([ZERO] * 6 + C[8:11], 9), ([C[7]], 1), (C[0:2], 2)])
+    vc_case("VRED", 2, 4, [(C[2:7], 5)])
+    stream("VRED", 3, [el_eq(0), sub_eq(0)], "VE", red[0:16])
+    stream("VRED", 3, [el_eq(0), sub_eq(1)], "VH", red[16:31] + [ZERO])
+    stream("VRED", 3, [el_eq(1)], "NT")
+    # VGET: rd's value record (as an ALU result), NT for rd = x0
+    vg = uops["VGET"]
+    case(nr + [vg, rdw_any, k0], "F0", gv[0:15])
+    case(nr + [vg, rdw_any, 1 - k0], "V", gv[0:15])
+    case([jeq(1), ok, vg, rdw_any, k1], "F1", gv[15:30])
+    case([jeq(1), ok, vg, rdw_any, 1 - k1], "V", gv[15:30])
+    case([jeq(2), ok, vg, rdw_any], "F2", gv[30:32])
+    case(nr + [vg, 1 - rdw_any], "NT")
     return u
 
 

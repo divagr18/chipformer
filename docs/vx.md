@@ -114,6 +114,26 @@ The model's weights, scales and caches stay data.
 
 ## Status
 
-- Reference v5 (element units, aligned offsets, 6-chunk VA, slotted VC, VE / VH, 31-bit words):
-  stories260K 2.16M trace tokens for the 60-token story (12.53M today), same story.
-- Circuit: VDOT / WB / SMAQA removed (99 heads, 42.1k units, 11 layers). The unit isn't built yet.
+- **Reference v6:**
+  - element units, aligned offsets, 6-chunk VA, slotted VC, VE / VH, 31-bit words
+  - write-target codes in slot 0; trackers flagged on their own VH; argmax rows as words
+  - stories260K: 2.22M trace tokens for the 60-token story (12.53M today), same story
+- **Circuit (vxcirc.py), still 11 layers:**
+  - config slots, element counters, VM, VA, trackers
+  - VPUT, VQ, VRED and VGET, teacher-forced exact on random programs (tests/test_rv_vx.py)
+- **Lesson:** every literal in a case or t_and must be exactly 0 or 1 at every position,
+  including where the case doesn't fire. A sum of two register bits broke ordinary instructions.
+
+## Next: VMAT
+
+- **Weights.** WROM needs 9 heads: row-chunks packed 2 int4 cells a byte column, 2 chunks a row,
+  S in 2 byte columns. L2 has 7 free. Plan: a 128 KB ROM in the NPU build (a build option;
+  MicroPython images need 205 KB), pinned to L4 so the fetch timing stays, which frees L3's 16
+  heads for the WROM.
+- **One tracker.** Programs always read a tracker right after the op that set it, so vmx, vsum
+  and vbest could share one head (frees 2 in L2). The reference would follow.
+- **4 tokens a row.** The dot product (about 7 stages from the L3 read) and the row-scale
+  multiply (5) don't fit one token. A row becomes acc lo, acc hi, then o = acc * S lo, hi; the
+  multiply reads acc from the previous tokens through an L1 "lag" head (written every token from
+  the lagged payloads, read at once). Expect about 44k trace tokens per story token (4.7-5x
+  fewer than today) at about +0 layers.

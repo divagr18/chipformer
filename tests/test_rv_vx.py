@@ -13,7 +13,7 @@ from test_rv_core import EXIT, run_check
 
 @pytest.fixture(scope="module")
 def circ():
-    return core.build()
+    return core.build(vx=True)
 
 
 def word31(rng):
@@ -66,3 +66,19 @@ def test_vq(circ, seed):
             off = rng.randrange(0, 384 - span + 1, max(span, 8))
             lines += vq(reg, eoff, n, 0, rng.randrange(32), off, rng.randrange(1 << 15))
     run_check(circ, assemble("\n".join(lines) + EXIT))
+
+
+@pytest.mark.parametrize("seed", range(2))
+def test_vred_vget(circ, seed):
+    rng = random.Random(seed)
+    lines = []
+    for reg in rng.sample(range(16), 2):
+        lines += fill(rng, reg, [rng.randint(-40000, 40000) for _ in range(64)])
+        for ch in rng.sample(range(6), 2):
+            lines += vq(reg, 0, 64, 0, rng.randrange(4, 12), 64 * ch, rng.randrange(1 << 15))
+            for mode in (0, 1):
+                n = rng.randint(1, 64)
+                lines += [f"li t0, {n | mode << 7 | ch << 8}", "vred t0, zero, zero",
+                          "li t1, 1", "vget s1, t1, zero", "xor s2, s2, s1"]
+    toks = run_check(circ, assemble("\n".join(lines) + EXIT))
+    assert sum(S.family(t)[0] == "VC" for t in toks) > 0

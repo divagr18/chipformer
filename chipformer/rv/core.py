@@ -198,14 +198,14 @@ class RvCore(Circ):
         """Fresh dims that start at 0 (heads add onto them)."""
         return [self.token_feature(f"{name}[{i}]", lambda t: 0, full=True) for i in range(n)]
 
-    def table(self, name, queries, keys, vheads, levels="bit", tiny=0.0):
+    def table(self, name, queries, keys, vheads, levels="bit", tiny=0.0, min_level=0):
         """A head with explicit per-column values / gates: vheads are dicts with v {col: Chan},
         z {col: Expr}, outs [(col, weight)], into [Expr] (one per out), beta, a."""
         first, rest = vheads[0], vheads[1:]
         outs = self.head(name, {s: sel(self, e) for s, e in queries.items()},
                          {s: sel(self, e) for s, e in keys.items()}, first["v"], first.get("a", 0),
                          first["z"], first["outs"], tiny=tiny, beta=first.get("beta"),
-                         into=first.get("into"),
+                         into=first.get("into"), min_level=min_level,
                          vx=[{"v": x["v"], "a": x.get("a", 0), "z": x["z"], "outs": x["outs"],
                               "beta": x.get("beta"), "into": x.get("into")} for x in rest])
         node = self.nodes[-1]
@@ -336,11 +336,12 @@ def select_bits_w(c, cases, n: int, name: str) -> list:
     return out
 
 
-def build(target: Target | None = None, text=None) -> RvCore:
+def build(target: Target | None = None, text=None, vx: bool = False) -> RvCore:
     """The circuit; with ``text`` (P3) also the bridge to Qwen's text: a tool call's text goes
     into a buffer the program reads (TEXT_ADDR), ``</tool_call>`` starts a run (GO), putchar
     output is echoed as Qwen tokens, and the circuit owns the positions of a run."""
     c = RvCore(target, text)
+    c.vx_on = vx
     no_text = c.is_text if text else 0  # text tokens do not count as tokens of a record
     one, fam, pay, kk = c.one, c.fam, c.pay, c.kk
     isV, isJR = fam["V"], fam["J"] + fam["R"]
@@ -424,7 +425,8 @@ def build(target: Target | None = None, text=None) -> RvCore:
     # with p = w[9:4], half w[3] (row p: columns 2..33, row p + 64: 34..65), word w[2:0], 4 byte
     # columns (b0..b3 of the ROM word)
     fdims = c.zeros(4, "rom.b")
-    for h in range(S.ROM_WORDS >> 11):
+    # with the vector unit (vx): a 128 KB ROM pinned to L4, so L3 holds the unit's weights
+    for h in range((S.ROM_WORDS >> 11) // (2 if vx else 1)):
         hl = lits_of(w[11:16], h)
         q = {}
         for p in range(64):
@@ -443,7 +445,7 @@ def build(target: Target | None = None, text=None) -> RvCore:
                         outs.append((col, OUT_W))
                         into.append(fdims[b])
             vhs.append({"v": {}, "z": z, "outs": outs, "into": into})
-        c.table(f"rom{h}", q, {}, vhs, levels="byte")
+        c.table(f"rom{h}", q, {}, vhs, levels="byte", min_level=6 if vx else 0)
     B0, B1, B2, B3 = (256 * d for d in fdims)  # the word's bytes
 
     # ---------------------------------------------------------------- L4: decode
@@ -1157,7 +1159,8 @@ def build(target: Target | None = None, text=None) -> RvCore:
         case([jeq(1 + k), any_fault], "HEX", pc_bits[4 * (7 - k):4 * (8 - k)])
     case([jeq(9), any_fault], "HALT")
     # the vector unit (vxcirc.py): its state, memories and exit cases
-    c.vx = vxcirc.build(c, one, fam, pay, uops, A, B, C, jt, jeq, nr, rec_start, case)
+    c.vx = None if not vx else vxcirc.build(c, one, fam, pay, uops, A, B, C, jt, jeq, nr, rec_start, case,
+                         rdw_any, ok)
     owner = None
     if text:
         cases.append(([fam["BYTE"]], "Q", c.pay["BYTE"], 1))
@@ -1282,7 +1285,7 @@ def snapshot(c: RvCore, m: "RF.Machine") -> None:
         drom = np.frombuffer(m.drom.ljust(4 * S.DROM_WORDS, bytes(1)), dtype="<u4").astype(np.int64)
         _ROM_CACHE.update(key=key, rom=byte_rows(rom, S.ROM_WORDS >> 11),
                           drom=byte_rows(drom, S.DROM_WORDS >> 11))
-    for h, vh in enumerate(_ROM_CACHE["rom"]):
+    for h, vh in enumerate(_ROM_CACHE["rom"][:sum(n.startswith("rom") for n in c.tables)]):
         c.tables[f"rom{h}"].init = vh
     for h, vh in enumerate(_ROM_CACHE["drom"]):
         c.tables[f"drom{h}"].init = vh
@@ -1310,7 +1313,8 @@ def snapshot(c: RvCore, m: "RF.Machine") -> None:
                 row[2 + i] = A_BIT * (m.ram[wi] >> i & 1)
             (r1 if wi >> 4 & 1 else r0)[wi >> 5 & 127] = row
         c.tables[f"ram{h}"].init = [r0, r1]
-    vxcirc.snapshot(c, m)
+    if getattr(c, "vx", None):
+        vxcirc.snapshot(c, m)
 
 
 def decode_code(fid: int, p: int, text=None) -> int:
