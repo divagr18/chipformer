@@ -21,6 +21,7 @@ Token families (chip vocabulary ids from 0):
   BD    not final; a digit-file row step (custom ops): payload digit | carry << 4
   NT, ST0, ST1, SS0, SS1, HALT   final controls (ST/SS: the RAM value head, address bit 6)
   VE    not final; 16 bits of a vector op's streamed results (vx.py)
+  VB    not final; the same, and the element is the op's tracker's new max (vx.py)
   WB    final; WB rs1: the weight base D = (x[rs1] - w - 1) mod 2^15 (w: the WB's PC word index)
   GO    not final: the start of a run (after a state snapshot)
   SC    not final: BSCAN found one more ASCII digit
@@ -64,7 +65,7 @@ be 0 from the operands' sizes (see ref.div_start), so small quotients take few t
 
 FAMILY_SIZES = [("V", 1 << 15), ("F0", 1 << 15), ("F1", 1 << 15), ("F2", 4), ("J", 1 << 16),
                 ("R", 1 << 16), ("BYTE", 512), ("FLT", 8), ("HEX", 16), ("QS", 16), ("QD", 128),
-                ("BD", 256), ("WB", 1 << 15), ("VE", 1 << 16)]
+                ("BD", 256), ("WB", 1 << 15), ("VE", 1 << 16), ("VB", 1 << 16)]
 FAMILIES = {}
 _base = 0
 for _n, _s in FAMILY_SIZES:
