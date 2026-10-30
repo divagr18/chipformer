@@ -1,0 +1,7 @@
+*.bin
+*.elf
+weights.h
+weights_vd2.h
+wrom_data2.c
+vd2.S
+__pycache__/
