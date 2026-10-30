@@ -22,6 +22,7 @@ Token families (chip vocabulary ids from 0):
   NT, ST0, ST1, SS0, SS1, HALT   final controls (ST/SS: the RAM value head, address bit 6)
   VE    not final; 16 bits of a vector op's streamed results (vx.py)
   VB    not final; the same, and the element is the op's tracker's new max (vx.py)
+  VC    not final; 16 bits of a vector op's configuration, at the start of its record (vx.py)
   WB    final; WB rs1: the weight base D = (x[rs1] - w - 1) mod 2^15 (w: the WB's PC word index)
   GO    not final: the start of a run (after a state snapshot)
   SC    not final: BSCAN found one more ASCII digit
@@ -65,7 +66,7 @@ be 0 from the operands' sizes (see ref.div_start), so small quotients take few t
 
 FAMILY_SIZES = [("V", 1 << 15), ("F0", 1 << 15), ("F1", 1 << 15), ("F2", 4), ("J", 1 << 16),
                 ("R", 1 << 16), ("BYTE", 512), ("FLT", 8), ("HEX", 16), ("QS", 16), ("QD", 128),
-                ("BD", 256), ("WB", 1 << 15), ("VE", 1 << 16), ("VB", 1 << 16)]
+                ("BD", 256), ("WB", 1 << 15), ("VE", 1 << 16), ("VB", 1 << 16), ("VC", 1 << 16)]
 FAMILIES = {}
 _base = 0
 for _n, _s in FAMILY_SIZES:
@@ -89,6 +90,7 @@ RAM_BASE, RAM_WORDS = 0x0, 1 << 13  # 32 KB (two sublayers)
 # head 16 with slot WP[10:7] (< 15)
 WROM_BASE, WROM_WORDS, WROM_CELLS = 0x100000, 15 * 2048 + 15 * 128, 8
 WP_BITS = 15
+VX_CHUNKS = 17 * 256  # the VX weight memory: row-chunks of 72 cells (vx.py)
 DATA_BASE = 0x100  # .data starts here (address 0 stays a null pointer)
 SP_INIT = RAM_BASE + 4 * RAM_WORDS
 N_MAX = 63  # the R refresh comes before the instruction when n == N_MAX

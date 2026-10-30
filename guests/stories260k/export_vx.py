@@ -1,11 +1,10 @@
-"""stories260K for the VX build (export_vd2.py with whole w2 rows): int4 weights in the WROM.
+"""stories260K for the VX build: int4 weights in the WROM as VX row-chunks (chipformer/rv/vx.py).
 
 python export_vx.py [qat_int4.npz]   ->  weights_vx.h, wrom_vx.c
-RMSNorm gains are folded into the matrices that read them (the classifier gets the final gain);
-w2 rows are whole (176 cells), so one VMAT row reads all 172 inputs; every matrix is rows of whole
-words back to back. Row scales S' = s * 2^15.
+RMSNorm gains are folded into the matrices that read them (the classifier gets the final gain).
+Every matrix row is k = ceil(n / 64) row-chunks of 64 cells, each with the row scale S' = s * 2^15.
 Without the npz: int4 per-row MSE-clip codes (for token counts; the QAT codes for quality).
-Every matrix row is padded to whole 8-weight words; WB_* give each matrix's first word.
+WB_* give each matrix's first row-chunk.
 """
 import os
 import sys
@@ -51,27 +50,31 @@ else:
             Q[k], SC[k] = mse_codes(w)
 
 cells, bases, h = bytearray(), {}, []
+CHUNK = 72  # VX row-chunks: 64 int4 cells, the row scale in 4 nibble cells, 4 unused
 
 
-def add_matrix(name, q):
-    """Rows padded to whole words; returns the first word index."""
+def add_matrix(name, q, scale):
+    """Rows of k = ceil(n / 64) row-chunks, each with the row's scale; returns the first chunk."""
     rows, n = q.shape
-    npad = -(-n // 8) * 8
-    first = len(cells) // 8
+    k = -(-n // 64)
+    first = len(cells) // CHUNK
+    s = np.round(np.asarray(scale, np.float64) * 2**15).astype(np.int64)
+    assert s.max() < 2**16, (name, s.max())
     for r in range(rows):
-        row = np.zeros(npad, np.int64)
+        row = np.zeros(64 * k, np.int64)
         row[:n] = q[r]
-        cells.extend((row + 8).astype(np.uint8).tobytes())
-    return first, npad // 8
+        for c in range(k):
+            cells.extend((row[64 * c:64 * c + 64] + 8).astype(np.uint8).tobytes())
+            cells.extend(bytes((int(s[r]) >> 4 * i & 15) for i in range(4)) + bytes(4))
+    return first
 
 
 wb = {}
-wb["cls"], _ = add_matrix("cls", Q["cls"])
+wb["cls"] = add_matrix("cls", Q["cls"], SC["cls"])
 for l in range(nl):
-    for k in MATS[1:-1]:
-        wb[k, l], _ = add_matrix(k, Q[k][l])
-    wb["w2", l], _ = add_matrix("w2", Q["w2"][l])
-assert len(cells) // 8 <= 32640, len(cells) // 8
+    for k in MATS[1:]:
+        wb[k, l] = add_matrix(k, Q[k][l], SC[k][l])
+assert len(cells) // CHUNK <= 17 * 256, len(cells) // CHUNK
 
 
 def carr(name, ctype, a):
@@ -85,11 +88,6 @@ h.append(f"#define DIM {dim}\n#define HID {hid}\n#define HIDW {-(-hid // 8) * 8}
 h.append(f"#define WB_CLS {wb['cls']}\n")
 for k in MATS[1:]:
     h.append(carr(f"WB_{k}", "int32_t", [wb[k, l] for l in range(nl)]))
-for k in MATS:
-    s = np.round(np.asarray(SC[k], np.float64) * 2**15).astype(np.int64)
-    assert s.max() < 2**15, (k, s.max())
-    h.append(carr(f"S_{k}", "int32_t", s))
-h.append(carr("SILU", "int32_t", [round((x := (i - 256) / 32) / (1 + np.exp(-x)) * 4096) for i in range(512)]))
 # the embedding (lookups only): int8 rows with a row scale * 2^32
 q8, M8 = E.qrows(E.emb)
 h.append(carr("Q_emb", "int8_t", q8))
@@ -117,7 +115,6 @@ for seq_seed in range(4):
         vmax_[l] = max(vmax_[l], max(np.abs(v).max() for v in vc[l]))
 h.append(carr("KMAX", "int32_t", np.round(kmax * 1.25 * 65536)))
 h.append(carr("VMAX", "int32_t", np.round(vmax_ * 1.25 * 65536)))
-h.append(carr("P8", "uint8_t", [round(127 * np.exp(-i / 32)) for i in range(256)]))
 offs, blob = [], b""
 for pc in E.pieces:
     offs.append(len(blob))
@@ -129,4 +126,4 @@ open(f"{HERE}/weights_vx.h", "w").write("#include <stdint.h>\n" + "".join(h))
 open(f"{HERE}/wrom_vx.c", "w").write(
     "#include <stdint.h>\n__attribute__((section(\".wrom\"), used)) const uint8_t WROM_DATA["
     f"{len(cells)}] = {{{','.join(map(str, cells))}}};\n")
-print(f"{len(cells) // 8} WROM words of 32640")
+print(f"{len(cells) // CHUNK} WROM row-chunks of {17 * 256}")

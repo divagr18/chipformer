@@ -72,7 +72,7 @@ UOPS = ["ILLEGAL", "LUI", "AUIPC", "MISA",
 CUSTOM = {"BMAC": 64, "BMSB": 65, "BLD": 66, "BGET": 67, "BPRD": 68,
           "BSCAN": 69, "VDOT": 70, "WB": 71, "SMAQA": 72,
           "VMAT": 73, "VMATR": 74, "VQ": 75, "VEW": 76, "VEXP": 77, "VGET": 78, "VRED": 79,
-          "VSET": 80}  # uops 64..127: custom
+          "VPUT": 80}  # uops 64..127: custom
 CSR_STUBS = {0xC00: 0, 0xC01: 0, 0xC02: 0, 0xC80: 0, 0xC81: 0, 0xC82: 0, 0xF14: 0,
              0x301: S.MISA}  # cycle, time, instret (+h), mhartid, misa
 U = {n: i for i, n in enumerate(UOPS)} | CUSTOM
@@ -440,7 +440,8 @@ class Machine:
         rodata = getattr(prog, "rodata", b"")
         assert len(rodata) <= 4 * S.DROM_WORDS, "rodata does not fit the DROM"
         wrom = getattr(prog, "wrom", b"")
-        assert len(wrom) <= S.WROM_CELLS * S.WROM_WORDS, "the weights do not fit the WROM"
+        assert len(wrom) <= max(S.WROM_CELLS * S.WROM_WORDS, 72 * S.VX_CHUNKS), \
+            "the weights do not fit the WROM"
         return cls(rom, ram, x, (e - S.ROM_BASE) >> 2, drom=bytes(rodata), wrom=bytes(wrom))
 
     out: bytearray = field(default_factory=bytearray)  # putchar output
