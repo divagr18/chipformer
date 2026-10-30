@@ -25,6 +25,9 @@ def main() -> None:
     ap.add_argument("--max-len", type=int, default=6144)
     ap.add_argument("--local-ref", action="store_true",
                     help="compare with RvChat.generate here instead of the records' tokens")
+    ap.add_argument("--alone", action="store_true",
+                    help="per batch size, first decode each record alone in that decoder (the "
+                         "reference: the same GEMM shapes, one live row)")
     args = ap.parse_args()
     recs = []
     for spec in args.records:
@@ -55,6 +58,16 @@ def main() -> None:
                               "lock_error": out["lock_error"]}), flush=True)
     for B in args.batch:
         rb = RvBatch(chat, B, args.max_len)
+        if args.alone:  # the reference: each record alone in this B-row decoder (rows idle)
+            for r in recs:
+                one = {}
+                rb.run([job(r)], args.budget, args.max_chip,
+                       lambda j, out: one.__setitem__(j.key, out))
+                same = one[r["id"]]["tokens"] == r["gen_ids"]
+                r["gen_ids"] = one[r["id"]]["tokens"]
+                print(json.dumps({"batch": f"{B} alone", "id": r["id"],
+                                  "same_as_previous_ref": same, "len": len(r["gen_ids"])}),
+                      flush=True)
         res = {}
         t0 = time.time()
         st = rb.run((job(r) for r in recs), args.budget, args.max_chip,
