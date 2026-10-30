@@ -101,11 +101,11 @@ static int32_t norm_f(int n) {
 
 static int32_t plain_f(int32_t amax) { return (int32_t)(((uint32_t)amax << 9) / 127 << 8); }
 
-// rows of a 64-input matrix into registers dst.. (64 rows each, one op per register); returns
-// the window of the outputs
+// rows of a 64-input matrix into registers dst.. (64 rows a register, 32 an op); returns the
+// window of the outputs
 static int matmul(int dst, int base, int rows) {
-    for (int r = 0; r < rows; r += 64)
-        vmat(dst + r / 64, 0, rows - r < 64 ? rows - r : 64, 1, 0, r > 0, 0, base + r);
+    for (int r = 0; r < rows; r += 32)
+        vmat(dst + r / 64, r % 64, rows - r < 32 ? rows - r : 32, 1, 0, r > 0, 0, base + r);
     return vwin();
 }
 
@@ -113,7 +113,7 @@ static int matmul(int dst, int base, int rows) {
 static void residual(int sh, uint32_t f) {
     int32_t r;
     int sr = fwin(f, &r);
-    vew(RX, RO, 0, DIM, 0, 0, sh, sh + sr - 32, 0, r);
+    for (int i = 0; i < DIM; i += 32) vew(RX, RO, i, 32, 0, i > 0, sh, sh + sr - 32, 0, r);
 }
 
 static int32_t qmax[NH], xbmax;
@@ -199,15 +199,15 @@ static int forward(int tok, int pos) {
         int32_t ra;
         int sra = fwin((uint32_t)f, &ra);
         // hb = silu(true a) * (raw b >> shb) >> 8: 2^(36 - shb) / F of the true hb
-        for (int i = 0; i < HID; i += 32)
-            vew(RH + i / 64, RG + i / 64, i % 64, HID - i < 32 ? HID - i : 32, 1, i > 0, sha,
+        for (int i = 0; i < HID; i += 16)
+            vew(RH + i / 64, RG + i / 64, i % 64, HID - i < 16 ? HID - i : 16, 1, i > 0, sha,
                 sha + sra - 32, shb, ra);
         vmax = vmax_bl(&bl);
         if (vmax < 256) vmax = 256, bl = 9;
         int shq = bl > 11 ? bl - 11 : 0;
         int32_t rq = (127 << 15) / (vmax >> shq);
         for (int i = 0; i < HID; i += 64) vq(RH + i / 64, 0, HID - i < 64 ? HID - i : 64, 0, shq, i, rq);
-        for (int r2 = 0; r2 < DIM; r2 += 16) vmat(RO, r2, 16, 3, 0, r2 > 0, 0, WB_w2[l] + 3 * r2);
+        for (int r2 = 0; r2 < DIM; r2 += 8) vmat(RO, r2, 8, 3, 0, r2 > 0, 0, WB_w2[l] + 3 * r2);
         int a2 = vwin();
         uint32_t fp = mulhu((uint32_t)plain_f(vmax), (uint32_t)f);  // * F / 2^(36 - shb)
         fp = shb >= 4 ? fp << (shb - 4) : fp >> (4 - shb);

@@ -2,9 +2,12 @@
 
 Custom-2 (opcode 0x5B, R-type, funct7 = 0). The unit sits in the circuit's first layers with its
 own memories, so it never sees the registers or RAM: an op's record starts with VC tokens that
-carry its configuration (16 bits each, packed from the registers rd / rs1 / rs2), then streams its
-results as VE tokens (16 bits; VB: the same, and the element is the tracker's new max), then
-commits with NT. VGET answers with a value record; VPUT's VC tokens carry the data itself.
+carry its configuration, then streams its results, then commits with NT. A VC payload is a slot
+(3 bits) and 12 bits of data; the unit keeps the latest of each slot. Slots 0-3 hold the fields
+that address its memories, the same for every op (SLOTS); 4-7 the op's own parameters. Stream
+tokens are VE (16 bits) and VH (16 bits, the token that completes an element or a pair). A word
+result is VE(bits 0-15) VH(bits 16-30 | best << 15): vector words are 31-bit, and best marks the
+tracker's new max. VGET answers with a value record; VPUT streams its pair of words after one VC.
 
 Memories (all the unit's own):
   VM    16 vector registers of 64 int32 (bank A v0..v7, bank B v8..v15; an op reads at most one
@@ -19,8 +22,8 @@ Sized for the circuit: multiplies of a 16-bit window of a value, clamp16(v >> sh
 16-bit factor; dot products of at most 64 int8 x int4 or 32 int8 x int8 lanes a token; SiLU and
 exp as fixed-point function units. `check` raises on operands outside those widths.
 
-shift(x, s) is x << s for s >= 0, x >> -s below; clamp16 clamps to [-32768, 32767]. Every config
-field below is packed, in the order listed, into the record's VC tokens, 16 bits each.
+shift(x, s) is x << s for s >= 0, x >> -s below; clamp16 clamps to [-32768, 32767]. The fields
+below are the instruction's (register bits, in order); SLOTS gives their VC packing.
 
   f3 0  VMAT   rd: dst 4, n 7, k 2, mode 1, keep 1, chunk 2; rs1: base 13, doff 6
                rows r < n: acc = sum over c < k of VA[64 (chunk + c):][:64] . row-chunk
@@ -51,14 +54,14 @@ field below is packed, in the order listed, into the record's VC tokens, 16 bits
                i < n: e = min(vmx - VM[src][i], 65535), d = e * c >> ksh; VA[off + i] = EXP(d)
                (an odd n's last pair gets a 0). A token per 2 elements.
   f3 5  VGET   rs1 = sel: rd = vmx / vsum / varg / bit length of vmx: a value record
-  f3 6  VRED   rd: n 7, mode 1, off 8: vsum = sum VA[off + i]^2 (mode 0) or VA[off + i], i < n.
-               One token.
-  f3 7  VPUT   rd: target 10; rs1, rs2: the data (2 VC tokens each)
+  f3 6  VRED   rd: n 7, mode 1, off 8: vsum = sum VA[off + i]^2 (mode 0) or VA[off + i], i < n:
+               a word's two tokens.
+  f3 7  VPUT   rd: target 10; rs1, rs2: the data, streamed (VE VE VE VH)
                target < 512: VM pair target (register target / 32) = (rs1, rs2);
                512 + k: RoPE pair k = (cos rs1, sin rs2)
 SILU(y) (y in Q16): the Q12 table round(x / (1 + e^-x) 4096) at x = (y >> 11) / 32 for |y| < 8.0,
 min(y >> 4, 2^23) from 8.0, 0 below -8.0. EXP(d) = round(127 e^(-d / 32)) for d < 256, else 0.
-Streams are at most 128 tokens (software splits longer vectors into ops).
+Streams are at most 64 tokens (software splits longer vectors into ops).
 """
 
 import math
@@ -66,23 +69,69 @@ import math
 from chipformer.rv import spec as S
 
 OPS = ["VMAT", "VMATR", "VQ", "VEW", "VEXP", "VGET", "VRED", "VPUT"]
-MAX_STREAM = 128
+MAX_STREAM = 64
 M32 = 0xFFFFFFFF
 CHUNK_CELLS = 72
 SILU_T = [round((x := (i - 256) / 32) / (1 + math.exp(-x)) * 4096) for i in range(512)]
 EXP_T = [round(127 * math.exp(-i / 32)) for i in range(256)]
-FIELDS = {  # op -> [(register, lo bit, width)], packed into VC tokens in this order
-    "VMAT": [("rd", 0, 4), ("rd", 4, 7), ("rd", 11, 2), ("rd", 13, 1), ("rd", 14, 1),
-             ("rd", 15, 2), ("rs1", 0, 13), ("rs1", 13, 6)],
-    "VMATR": [("rd", 0, 4), ("rd", 4, 6), ("rd", 10, 1), ("rd", 11, 1), ("rd", 12, 8),
-              ("rs1", 0, 10), ("rs1", 10, 6), ("rs2", 0, 17)],
-    "VQ": [("rd", 0, 4), ("rd", 4, 6), ("rd", 10, 7), ("rd", 17, 2), ("rd", 19, 5),
-           ("rs1", 0, 10), ("rs2", 0, 15)],
-    "VEW": [("rd", 0, 4), ("rd", 4, 4), ("rd", 8, 7), ("rd", 15, 2), ("rd", 17, 1),
-            ("rd", 18, 6), ("rs1", 0, 5), ("rs1", 5, 6), ("rs1", 11, 5), ("rs2", 0, 15)],
-    "VEXP": [("rd", 0, 4), ("rd", 4, 7), ("rd", 11, 8), ("rd", 19, 5), ("rs2", 0, 16)],
-    "VRED": [("rd", 0, 7), ("rd", 7, 1), ("rd", 8, 8)],
-    "VPUT": [("rd", 0, 10), ("rs1", 0, 32), ("rs2", 0, 32)],
+FIELDS = {  # op -> [(name, register, lo bit, width)]: the instruction's operands
+    "VMAT": [("dst", "rd", 0, 4), ("n", "rd", 4, 7), ("k", "rd", 11, 2), ("mode", "rd", 13, 1),
+             ("keep", "rd", 14, 1), ("chunk", "rd", 15, 2), ("base", "rs1", 0, 13),
+             ("doff", "rs1", 13, 6)],
+    "VMATR": [("dst", "rd", 0, 4), ("n", "rd", 4, 6), ("mode", "rd", 10, 1), ("keep", "rd", 11, 1),
+              ("off", "rd", 12, 8), ("base", "rs1", 0, 10), ("eoff", "rs1", 10, 6),
+              ("s", "rs2", 0, 17)],
+    "VQ": [("src", "rd", 0, 4), ("eoff", "rd", 4, 6), ("n", "rd", 10, 7), ("dst", "rd", 17, 2),
+           ("sh", "rd", 19, 5), ("off", "rs1", 0, 10), ("r", "rs2", 0, 15)],
+    "VEW": [("a", "rd", 0, 4), ("b", "rd", 4, 4), ("n", "rd", 8, 7), ("op", "rd", 15, 2),
+            ("keep", "rd", 17, 1), ("eoff", "rd", 18, 6), ("sh", "rs1", 0, 5), ("so", "rs1", 5, 6),
+            ("shb", "rs1", 11, 5), ("p", "rs2", 0, 15)],
+    "VEXP": [("src", "rd", 0, 4), ("n", "rd", 4, 7), ("off", "rd", 11, 8), ("ksh", "rd", 19, 5),
+             ("c", "rs2", 0, 16)],
+    "VRED": [("n", "rd", 0, 7), ("mode", "rd", 7, 1), ("off", "rd", 8, 8)],
+    "VPUT": [("target", "rd", 0, 10), ("lo", "rs1", 0, 32), ("hi", "rs2", 0, 32)],
+}
+
+
+def reg3(f, name, bank):
+    """A register field as a bank's 3-bit index (0 when it is in the other bank)."""
+    return f[name] & 7 if f[name] >> 3 == bank else 0
+
+
+# each op's VC tokens, in order: (slot, [(value, width)] packed from bit 0); the shared slots are
+# 0 = (dst register 4, element offset / 2 5, flags 3), 1 = (bank A register 3, bank B register 3,
+# more 6), 2 = (VA offset 8, more 4), 3 = (cache row 10, more 2)
+SLOTS = {
+    "VMAT": lambda f: [(0, [(f["dst"], 4), (f["doff"] >> 1, 5), (f["mode"], 1), (f["keep"], 1),
+                            (f["k"] == 3, 1)]),
+                       (2, [(64 * f["chunk"], 8)]),
+                       (4, [(f["base"], 12)]),
+                       (5, [(f["base"] >> 12, 1), (f["n"], 7)])],
+    "VMATR": lambda f: [(0, [(f["dst"], 4), (f["eoff"] >> 1, 5), (f["mode"], 1), (f["keep"], 1)]),
+                        (2, [(f["off"], 8)]),
+                        (3, [(f["base"], 10)]),
+                        (4, [(f["n"], 6), (f["s"], 6)])]
+                       + ([(5, [(f["s"] >> 6, 11)])] if f["mode"] else []),
+    "VQ": lambda f: [(0, [(0, 4), (f["eoff"] >> 1, 5), (f["dst"], 2), (f["src"] >> 3, 1)]),
+                     (1, [(reg3(f, "src", 0), 3), (reg3(f, "src", 1), 3)]),
+                     (2, [(f["off"], 8), (f["n"] >> 1, 4)]),
+                     (3, [(f["off"], 10), (f["n"] >> 5, 2)]),
+                     (4, [(f["r"], 12)]),
+                     (5, [(f["r"] >> 12, 3), (f["sh"], 5)])],
+    "VEW": lambda f: [(0, [(f["a"], 4), (f["eoff"] >> 1, 5), (f["op"], 2), (f["keep"], 1)]),
+                      (1, [(reg3(f, "a", 0) | reg3(f, "b", 0), 3),
+                           (reg3(f, "a", 1) | reg3(f, "b", 1), 3), (f["shb"], 5)]),
+                      (4, [(f["n"] >> 1, 6), (f["sh"], 5)]),
+                      (5, [(f["so"], 6), (f["p"], 6)]),
+                      (6, [(f["p"] >> 6, 9)])],
+    "VEXP": lambda f: [(1, [(reg3(f, "src", 0), 3), (reg3(f, "src", 1), 3), (f["src"] >> 3, 1)]),
+                       (2, [(f["off"], 8), (f["n"], 4)]),
+                       (4, [(f["n"] >> 4, 3), (f["ksh"], 5), (f["c"], 4)]),
+                       (5, [(f["c"] >> 4, 12)])],
+    "VRED": lambda f: [(2, [(f["off"], 8), (f["mode"], 1), (f["n"], 3)]),
+                       (4, [(f["n"] >> 3, 4)])],
+    "VPUT": lambda f: [(0, [(f["target"] >> 5 & 15, 4), (f["target"] & 31, 5),
+                            (f["target"] >> 9, 1)])],
 }
 
 
@@ -117,19 +166,31 @@ def silu(y):
     return SILU_T[(y >> 11) + 256]
 
 
-def ve(v, best=False):
-    return S.tok("VB" if best else "VE", v & 0xFFFF)
+def ve(v):
+    return S.tok("VE", v & 0xFFFF)
+
+
+def vh(v, best=False):
+    return S.tok("VH", v & 0xFFFF | best << 15)
+
+
+def word(v, best=False):
+    """A 31-bit word's two tokens."""
+    return [ve(v), vh(v >> 16 & 0x7FFF, best)]
 
 
 def config(op, regs):
-    """The op's config fields (by register name) and its VC tokens."""
-    vals, bits, nb = [], 0, 0
-    for r, lo, w in FIELDS[op]:
-        f = regs[r] >> lo & ((1 << w) - 1)
-        vals.append(f)
-        bits |= f << nb
-        nb += w
-    return vals, [S.tok("VC", bits >> 16 * i & 0xFFFF) for i in range(-(-nb // 16))]
+    """The op's fields (by name) and its VC tokens."""
+    f = {name: regs[r] >> lo & ((1 << w) - 1) for name, r, lo, w in FIELDS[op]}
+    toks = []
+    for slot, parts in SLOTS[op](f):
+        bits, nb = 0, 0
+        for val, w in parts:
+            bits |= (int(val) & ((1 << w) - 1)) << nb
+            nb += w
+        assert nb <= 12, (op, slot)
+        toks.append(S.tok("VC", slot << 12 | bits))
+    return f, toks
 
 
 class VX:
@@ -166,18 +227,19 @@ def execute(m, ins) -> list[int]:
     n_vc = len(toks)
 
     def tracked(val, signed=False):
-        """A word result's two tokens; the second is VB when it is the tracker's new max."""
-        t = s32(val) if signed else abs(s32(val))
+        """A word result's two tokens, marked when it is the tracker's new max."""
+        t = val if signed else abs(val)
         best = t > v.vmx
         v.vmx = max(v.vmx, t)
-        return [ve(val), ve(val >> 16, best)]
+        return word(val, best)
 
     def put(reg, i, val):
-        check(0 <= i < 64, f"VM element {i}")
-        v.vm[reg][i] = s32(val)
+        check(0 <= i < 64 and -(1 << 30) <= val < 1 << 30, f"VM element {i} = {val}")
+        v.vm[reg][i] = val
 
     if op == "VMAT":
-        dst, n, k, mode, keep, chunk, base, doff = f
+        dst, n, k, mode, keep, chunk, base, doff = (
+            f[x] for x in ("dst", "n", "k", "mode", "keep", "chunk", "base", "doff"))
         check(k in (1, 3) and (mode or n % 2 == doff % 2 == 0) and 0 < n <= 64,
               f"VMAT n {n} k {k} doff {doff}")
         if not keep:
@@ -189,6 +251,7 @@ def execute(m, ins) -> list[int]:
                 acc += sum(v.va[64 * (chunk + c) + i] * w[i] for i in range(64))
             o = s32(acc * sc)
             if mode == 0:
+                o = sx(o, 31)
                 put(dst, doff + r, o)
                 toks += [ve(0)] * (2 * (k - 1)) + tracked(o)
             else:
@@ -196,9 +259,10 @@ def execute(m, ins) -> list[int]:
                 if best:
                     v.vbest, v.varg = o, v.vrow
                 v.vrow += 1
-                toks += [ve(0)] * (k - 1) + [ve(o, best)]
+                toks += [ve(0)] * (2 * (k - 1)) + [vh(o & 0x7FFF, best)]
     elif op == "VMATR":
-        dst, n, mode, keep, off, base, eoff, s = f
+        dst, n, mode, keep, off, base, eoff, s = (
+            f[x] for x in ("dst", "n", "mode", "keep", "off", "base", "eoff", "s"))
         check(0 < n <= 32, f"VMATR n {n}")
         if not keep:
             v.vmx = -(1 << 31) if mode == 0 else 0
@@ -213,9 +277,9 @@ def execute(m, ins) -> list[int]:
             toks += tracked(o, signed=mode == 0)
         if len(outs) % 2:
             put(dst, eoff + len(outs), 0)
-            toks += [ve(0), ve(0)]
+            toks += word(0)
     elif op == "VQ":
-        src, eoff, n, dst, sh, off, r = f
+        src, eoff, n, dst, sh, off, r = (f[x] for x in ("src", "eoff", "n", "dst", "sh", "off", "r"))
         check(n % 2 == 0 and 0 < n <= 64, f"VQ n {n}")
         qs = []
         for i in range(n):
@@ -227,9 +291,10 @@ def execute(m, ins) -> list[int]:
                 v.va[(off + i) & 255] = q
             else:
                 (v.kc if dst == 1 else v.vc)[off + 32 * (i // 8)][i % 8] = q
-        toks += [ve((qs[i] & 255) | (qs[i + 1] & 255) << 8) for i in range(0, n, 2)]
+        toks += [vh((qs[i] & 255) | (qs[i + 1] & 255) << 8) for i in range(0, n, 2)]
     elif op == "VEW":
-        a, b, n, sub, keep, eoff, sh, so, shb, p = f
+        a, b, n, sub, keep, eoff, sh, so, shb, p = (
+            f[x] for x in ("a", "b", "n", "op", "keep", "eoff", "sh", "so", "shb", "p"))
         so = sx(so, 6)
         check(n % 2 == 0 and 0 < n <= 64 and sub < 3 and (sub == 2 or a >> 3 != b >> 3),
               f"VEW a {a} b {b} n {n} op {sub}")
@@ -247,12 +312,12 @@ def execute(m, ins) -> list[int]:
                 c, sn = v.rope[(i % 8) // 2]
                 u, w = clamp16(old[i & ~1] >> sh), clamp16(old[i | 1] >> sh)
                 o = shift(u * c - w * sn, sh - 14) if i % 2 == 0 else shift(u * sn + w * c, sh - 14)
-            out.append(s32(o))
+            out.append(sx(o, 31))
         for i, o in enumerate(out):
             put(a, eoff + i, o)
             toks += [ve(0), ve(0)] * (sub == 1) + tracked(o)
     elif op == "VEXP":
-        src, n, off, ksh, c = f
+        src, n, off, ksh, c = (f[x] for x in ("src", "n", "off", "ksh", "c"))
         check(0 < n <= 64, f"VEXP n {n}")
         ps = []
         for i in range(n):
@@ -264,20 +329,22 @@ def execute(m, ins) -> list[int]:
         if n % 2:
             ps.append(0)
             v.va[(off + n) & 255] = 0
-        toks += [ve(ps[i] | ps[i + 1] << 8) for i in range(0, n, 2)]
+        toks += [vh(ps[i] | ps[i + 1] << 8) for i in range(0, n, 2)]
     elif op == "VRED":
-        n, mode, off = f
+        n, mode, off = f["n"], f["mode"], f["off"]
         vals = [v.va[(off + i) & 255] for i in range(n)]
         v.vsum = sum(q * q for q in vals) if mode == 0 else sum(vals)
-        toks.append(ve(v.vsum))
+        toks += word(v.vsum)
     elif op == "VPUT":
-        target, lo, hi = f
+        target, lo, hi = f["target"], s32(f["lo"]), s32(f["hi"])
+        check(-(1 << 30) <= lo < 1 << 30 and -(1 << 30) <= hi < 1 << 30, "VPUT words")
         if target < 512:
             put(target >> 5, 2 * (target & 31), lo)
             put(target >> 5, 2 * (target & 31) + 1, hi)
         else:
             check(target < 516, f"VPUT target {target}")
             v.rope[target - 512] = (sx(lo, 16), sx(hi, 16))
+        toks += [ve(lo), ve(lo >> 16)] + word(hi)
     if len(toks) - n_vc > MAX_STREAM:
         raise ValueError(f"{op}: a {len(toks) - n_vc}-token stream (max {MAX_STREAM})")
     return toks + [S.tok("NT")]
