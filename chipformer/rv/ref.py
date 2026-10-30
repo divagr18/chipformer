@@ -58,6 +58,8 @@ digit and the carry / borrow out), then rd's value record.
 from dataclasses import dataclass, field
 
 from chipformer.rv import spec as S
+from chipformer.rv import vx as VXM
+from chipformer.rv.vx import OPS as VX_OPS
 
 UOPS = ["ILLEGAL", "LUI", "AUIPC", "MISA",
         "ADDI", "SLTI", "SLTIU", "XORI", "ORI", "ANDI", "SLLI", "SRLI", "SRAI",
@@ -68,7 +70,9 @@ UOPS = ["ILLEGAL", "LUI", "AUIPC", "MISA",
         "MUL", "MULH", "MULHSU", "MULHU", "DIV", "DIVU", "REM", "REMU",
         "SH1ADD", "SH2ADD", "SH3ADD"]
 CUSTOM = {"BMAC": 64, "BMSB": 65, "BLD": 66, "BGET": 67, "BPRD": 68,
-          "BSCAN": 69, "VDOT": 70, "WB": 71, "SMAQA": 72}  # uops 64..127: custom
+          "BSCAN": 69, "VDOT": 70, "WB": 71, "SMAQA": 72,
+          "VMAT": 73, "VMATR": 74, "VQ": 75, "VEW": 76, "VEXP": 77, "VGET": 78, "VRED": 79,
+          "VSET": 80}  # uops 64..127: custom
 CSR_STUBS = {0xC00: 0, 0xC01: 0, 0xC02: 0, 0xC80: 0, 0xC81: 0, 0xC82: 0, 0xF14: 0,
              0x301: S.MISA}  # cycle, time, instret (+h), mhartid, misa
 U = {n: i for i, n in enumerate(UOPS)} | CUSTOM
@@ -151,6 +155,8 @@ def decode(w: int) -> Inst:
         return Inst("WB", 0, rs1)
     if opc == 0x0B and f3 == 7 and f7 == 0:
         return Inst("SMAQA", rd, rs1, rs2)
+    if opc == 0x5B and f7 == 0:
+        return Inst(VX_OPS[f3], rd, rs1, rs2)
     if opc == 0x2B and f3 == 0:
         return Inst("BPRD", imm=w >> 20 & 0x7F, dd=rd & 7)
     if w == 0x00000073:
@@ -417,6 +423,7 @@ class Machine:
     bn: list = field(default_factory=lambda: [[0] * 128 for _ in range(8)])  # the digit file
     wrom: bytes = b""  # the weight memory, one cell (u = w + 8, low nibble) per byte
     wb: int = 0  # the weight base D
+    vx: VXM.VX = field(default_factory=VXM.VX)  # the vector unit (vx.py)
 
     @classmethod
     def from_program(cls, prog, entry: int | None = None) -> "Machine":
@@ -566,6 +573,8 @@ class Machine:
             self.wb = (a - (self.anchor + self.n) - 1) & ((1 << S.WP_BITS) - 1)
             self.n += 1
             return [S.tok("WB", self.wb)]
+        if op in VX_OPS:
+            return VXM.execute(self, ins)
         if op in CUSTOM:
             return self.digit_op(ins, a, b)
         if op in DIV_OPS:
